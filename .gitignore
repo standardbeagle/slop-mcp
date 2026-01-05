@@ -1,0 +1,15 @@
+# Local config (not shared via git)
+.slop-mcp.local.kdl
+
+# Binary (at root only)
+/slop-mcp
+
+# Test output
+*.test
+coverage.out
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo

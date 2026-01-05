@@ -1,0 +1,45 @@
+// slop-mcp configuration file
+// Place this file as .slop-mcp.kdl in your project directory
+// or as config.kdl in ~/.config/slop-mcp/ for user-wide config
+
+// Filesystem MCP - provides file system access
+mcp "filesystem" {
+    type "command"
+    command "npx"
+    args "-y" "@anthropic/mcp-server-filesystem" "/tmp"
+}
+
+// GitHub MCP - provides GitHub API access
+mcp "github" {
+    type "command"
+    command "npx"
+    args "-y" "@anthropic/mcp-server-github"
+    env {
+        GITHUB_PERSONAL_ACCESS_TOKEN "your-token-here"
+    }
+}
+
+// Brave Search MCP - provides web search
+mcp "brave" {
+    type "command"
+    command "npx"
+    args "-y" "@anthropic/mcp-server-brave-search"
+    env {
+        BRAVE_API_KEY "your-api-key-here"
+    }
+}
+
+// Custom SSE MCP server
+// mcp "custom-sse" {
+//     type "sse"
+//     url "http://localhost:3000/mcp"
+// }
+
+// Custom Streamable HTTP MCP server
+// mcp "custom-streamable" {
+//     type "streamable"
+//     url "http://localhost:8080/mcp"
+//     headers {
+//         Authorization "Bearer your-token"
+//     }
+// }
