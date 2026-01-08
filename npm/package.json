@@ -1,0 +1,40 @@
+{
+  "name": "@standardbeagle/slop-mcp",
+  "version": "0.0.0",
+  "description": "MCP server for orchestrating multiple MCP servers with progressive tool discovery",
+  "main": "index.js",
+  "bin": {
+    "slop-mcp": "bin.js"
+  },
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/standardbeagle/slop-mcp.git"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "ai",
+    "llm",
+    "tools",
+    "anthropic",
+    "claude"
+  ],
+  "author": "StandardBeagle",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/standardbeagle/slop-mcp/issues"
+  },
+  "homepage": "https://github.com/standardbeagle/slop-mcp#readme",
+  "engines": {
+    "node": ">=16"
+  },
+  "files": [
+    "bin.js",
+    "index.js",
+    "install.js",
+    "binaries/*"
+  ]
+}
