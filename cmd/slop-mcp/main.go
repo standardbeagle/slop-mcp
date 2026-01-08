@@ -46,6 +46,8 @@ func main() {
 			cmdMCPPaths(os.Args[3:])
 		case "dump":
 			cmdMCPDump(os.Args[3:])
+		case "metadata":
+			cmdMCPMetadata(os.Args[3:])
 		case "help", "-h", "--help":
 			printMCPUsage()
 		default:
@@ -83,6 +85,7 @@ Commands:
   mcp auth                     Manage OAuth authentication
   mcp paths                    Show config file paths
   mcp dump                     Show config file contents
+  mcp metadata                 Get full MCP metadata (tools, prompts, resources)
   version                      Show version
   help                         Show this help
 
@@ -131,6 +134,9 @@ Subcommands:
 
   dump [--local|--project|--user|--claude-desktop|--claude-code] [--json]
       Show config file contents
+
+  metadata [--port=<port>] [--output=<file>] [--mcp=<name>] [--json]
+      Get full MCP metadata from a running server
 
 Scope Options:
   --local      Local config (.slop-mcp.local.kdl) - gitignored

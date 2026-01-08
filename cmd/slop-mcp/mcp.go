@@ -1335,3 +1335,163 @@ Notes:
   - This command works without a running server
 `)
 }
+
+func cmdMCPMetadata(args []string) {
+	port := 8080
+	outputJSON := false
+	outputFile := ""
+	mcpName := ""
+
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--json":
+			outputJSON = true
+		case strings.HasPrefix(args[i], "--port="):
+			fmt.Sscanf(args[i], "--port=%d", &port)
+		case args[i] == "--port" && i+1 < len(args):
+			fmt.Sscanf(args[i+1], "%d", &port)
+			i++
+		case strings.HasPrefix(args[i], "--output="):
+			outputFile = strings.TrimPrefix(args[i], "--output=")
+		case args[i] == "--output" && i+1 < len(args):
+			outputFile = args[i+1]
+			i++
+		case strings.HasPrefix(args[i], "--mcp="):
+			mcpName = strings.TrimPrefix(args[i], "--mcp=")
+		case args[i] == "--mcp" && i+1 < len(args):
+			mcpName = args[i+1]
+			i++
+		case args[i] == "--help" || args[i] == "-h":
+			printMCPMetadataUsage()
+			return
+		}
+	}
+
+	// Query the running server via HTTP
+	url := fmt.Sprintf("http://localhost:%d/", port)
+
+	// Build MCP tool call request
+	arguments := map[string]any{}
+	if mcpName != "" {
+		arguments["mcp_name"] = mcpName
+	}
+
+	reqBody := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      "get_metadata",
+			"arguments": arguments,
+		},
+	}
+
+	reqJSON, err := json.Marshal(reqBody)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	client := &http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Post(url, "application/json", bytes.NewReader(reqJSON))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error connecting to server at %s: %v\n", url, err)
+		fmt.Fprintf(os.Stderr, "Make sure slop-mcp is running with: slop-mcp serve --port %d\n", port)
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading response: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Parse response
+	var rpcResp struct {
+		Result struct {
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"result"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+
+	if err := json.Unmarshal(body, &rpcResp); err != nil {
+		fmt.Fprintf(os.Stderr, "Error parsing response: %v\n", err)
+		os.Exit(1)
+	}
+
+	if rpcResp.Error != nil {
+		fmt.Fprintf(os.Stderr, "Server error: %s\n", rpcResp.Error.Message)
+		os.Exit(1)
+	}
+
+	// Extract the metadata JSON from the text content
+	if len(rpcResp.Result.Content) == 0 {
+		fmt.Fprintf(os.Stderr, "No metadata in response\n")
+		os.Exit(1)
+	}
+
+	var output struct {
+		Metadata []json.RawMessage `json:"metadata"`
+		Total    int               `json:"total"`
+	}
+	if err := json.Unmarshal([]byte(rpcResp.Result.Content[0].Text), &output); err != nil {
+		fmt.Fprintf(os.Stderr, "Error parsing metadata: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Format output
+	var formattedData []byte
+	if outputJSON {
+		formattedData, _ = json.MarshalIndent(output.Metadata, "", "  ")
+	} else {
+		formattedData, _ = json.MarshalIndent(output.Metadata, "", "  ")
+	}
+
+	// Write to file or stdout
+	if outputFile != "" {
+		if err := os.WriteFile(outputFile, formattedData, 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing to file: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Metadata written to %s (%d MCPs)\n", outputFile, output.Total)
+	} else {
+		if !outputJSON {
+			fmt.Printf("MCP Metadata (%d servers):\n\n", output.Total)
+		}
+		fmt.Println(string(formattedData))
+	}
+}
+
+func printMCPMetadataUsage() {
+	fmt.Print(`slop-mcp mcp metadata - Get full MCP metadata from running server
+
+Usage:
+  slop-mcp mcp metadata [options]
+
+Options:
+  --port=<port>      Server port (default: 8080)
+  --output=<file>    Write metadata to file
+  --mcp=<name>       Filter to a specific MCP
+  --json             Output as JSON (default when writing to file)
+  --help, -h         Show this help
+
+This command queries a running slop-mcp server to get full metadata
+for all connected MCPs, including:
+  - Tools with input schemas
+  - Prompts with arguments
+  - Resources
+  - Resource templates
+
+Examples:
+  slop-mcp mcp metadata                        # Show all metadata
+  slop-mcp mcp metadata --mcp=figma            # Show only Figma metadata
+  slop-mcp mcp metadata --output=mcps.json     # Save to file
+  slop-mcp mcp metadata --port=3000 --json     # Query different port
+`)
+}

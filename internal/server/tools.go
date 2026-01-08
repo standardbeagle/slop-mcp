@@ -35,4 +35,10 @@ func (s *Server) registerTools() {
 		Name:        "auth_mcp",
 		Description: "Authenticate with MCP servers using OAuth. Actions: login (initiate OAuth flow), logout (remove token), status (check auth status), list (show all authenticated MCPs)",
 	}, s.handleAuthMCP)
+
+	// 6. get_metadata - Get full metadata for all MCPs
+	mcp.AddTool(s.mcpServer, &mcp.Tool{
+		Name:        "get_metadata",
+		Description: "Get full metadata (tools, prompts, resources, resource templates) for all connected MCP servers. Optionally filter by MCP name and write output to a file.",
+	}, s.handleGetMetadata)
 }

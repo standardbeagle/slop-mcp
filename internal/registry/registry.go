@@ -25,6 +25,49 @@ type ToolInfo struct {
 	InputSchema map[string]any `json:"input_schema,omitempty"`
 }
 
+// PromptInfo represents a prompt from an MCP.
+type PromptInfo struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	Arguments   []ArgumentInfo `json:"arguments,omitempty"`
+}
+
+// ArgumentInfo represents a prompt argument.
+type ArgumentInfo struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Required    bool   `json:"required,omitempty"`
+}
+
+// ResourceInfo represents a resource from an MCP.
+type ResourceInfo struct {
+	URI         string `json:"uri"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	MIMEType    string `json:"mime_type,omitempty"`
+}
+
+// ResourceTemplateInfo represents a resource template from an MCP.
+type ResourceTemplateInfo struct {
+	URITemplate string `json:"uri_template"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	MIMEType    string `json:"mime_type,omitempty"`
+}
+
+// MCPMetadata contains all metadata for an MCP server.
+type MCPMetadata struct {
+	Name              string                 `json:"name"`
+	Type              string                 `json:"type"`
+	State             MCPState               `json:"state"`
+	Source            string                 `json:"source"`
+	Tools             []ToolInfo             `json:"tools,omitempty"`
+	Prompts           []PromptInfo           `json:"prompts,omitempty"`
+	Resources         []ResourceInfo         `json:"resources,omitempty"`
+	ResourceTemplates []ResourceTemplateInfo `json:"resource_templates,omitempty"`
+	Error             string                 `json:"error,omitempty"`
+}
+
 // MCPStatus represents the status of a registered MCP.
 type MCPStatus struct {
 	Name      string `json:"name"`
@@ -310,6 +353,100 @@ func (r *Registry) SearchTools(query, mcpName string) []ToolInfo {
 	defer r.mu.RUnlock()
 
 	return r.toolIndex.Search(query, mcpName)
+}
+
+// GetMetadata returns full metadata for all connected MCPs.
+func (r *Registry) GetMetadata(ctx context.Context) []MCPMetadata {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	result := make([]MCPMetadata, 0, len(r.states))
+
+	for name, state := range r.states {
+		metadata := MCPMetadata{
+			Name:   name,
+			Type:   state.config.Type,
+			State:  state.state,
+			Source: state.config.Source.String(),
+		}
+
+		// If connected, fetch full metadata
+		if conn, ok := r.connections[name]; ok && state.state == StateConnected {
+			// Fetch tools with full schema
+			if toolsResult, err := conn.session.ListTools(ctx, nil); err == nil {
+				metadata.Tools = make([]ToolInfo, 0, len(toolsResult.Tools))
+				for _, tool := range toolsResult.Tools {
+					var inputSchema map[string]any
+					if schema, ok := tool.InputSchema.(map[string]any); ok {
+						inputSchema = schema
+					}
+					metadata.Tools = append(metadata.Tools, ToolInfo{
+						Name:        tool.Name,
+						Description: tool.Description,
+						MCPName:     name,
+						InputSchema: inputSchema,
+					})
+				}
+			}
+
+			// Fetch prompts
+			if promptsResult, err := conn.session.ListPrompts(ctx, nil); err == nil {
+				metadata.Prompts = make([]PromptInfo, 0, len(promptsResult.Prompts))
+				for _, prompt := range promptsResult.Prompts {
+					promptInfo := PromptInfo{
+						Name:        prompt.Name,
+						Description: prompt.Description,
+					}
+					if prompt.Arguments != nil {
+						promptInfo.Arguments = make([]ArgumentInfo, 0, len(prompt.Arguments))
+						for _, arg := range prompt.Arguments {
+							promptInfo.Arguments = append(promptInfo.Arguments, ArgumentInfo{
+								Name:        arg.Name,
+								Description: arg.Description,
+								Required:    arg.Required,
+							})
+						}
+					}
+					metadata.Prompts = append(metadata.Prompts, promptInfo)
+				}
+			}
+
+			// Fetch resources
+			if resourcesResult, err := conn.session.ListResources(ctx, nil); err == nil {
+				metadata.Resources = make([]ResourceInfo, 0, len(resourcesResult.Resources))
+				for _, resource := range resourcesResult.Resources {
+					metadata.Resources = append(metadata.Resources, ResourceInfo{
+						URI:         resource.URI,
+						Name:        resource.Name,
+						Description: resource.Description,
+						MIMEType:    resource.MIMEType,
+					})
+				}
+			}
+
+			// Fetch resource templates
+			if templatesResult, err := conn.session.ListResourceTemplates(ctx, nil); err == nil {
+				metadata.ResourceTemplates = make([]ResourceTemplateInfo, 0, len(templatesResult.ResourceTemplates))
+				for _, template := range templatesResult.ResourceTemplates {
+					metadata.ResourceTemplates = append(metadata.ResourceTemplates, ResourceTemplateInfo{
+						URITemplate: template.URITemplate,
+						Name:        template.Name,
+						Description: template.Description,
+						MIMEType:    template.MIMEType,
+					})
+				}
+			}
+		}
+
+		// Add error message if in error state
+		if state.state == StateError && state.err != nil {
+			metadata.Error = state.err.Error()
+		}
+
+		result = append(result, metadata)
+	}
+
+	return result
 }
 
 // ExecuteTool executes a tool on a specific MCP.

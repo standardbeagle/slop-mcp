@@ -372,6 +372,57 @@ func (s *Server) handleAuthMCP(
 	}
 }
 
+// GetMetadataInput is the input for the get_metadata tool.
+type GetMetadataInput struct {
+	MCPName  string `json:"mcp_name,omitempty" jsonschema:"Filter to a specific MCP server (optional)"`
+	FilePath string `json:"file_path,omitempty" jsonschema:"Path to write metadata to (optional)"`
+}
+
+// GetMetadataOutput is the output for the get_metadata tool.
+type GetMetadataOutput struct {
+	Metadata []registry.MCPMetadata `json:"metadata"`
+	Total    int                    `json:"total"`
+	FilePath string                 `json:"file_path,omitempty"`
+}
+
+func (s *Server) handleGetMetadata(
+	ctx context.Context,
+	req *mcp.CallToolRequest,
+	input GetMetadataInput,
+) (*mcp.CallToolResult, GetMetadataOutput, error) {
+	allMetadata := s.registry.GetMetadata(ctx)
+
+	// Filter by MCP name if specified
+	metadata := allMetadata
+	if input.MCPName != "" {
+		metadata = make([]registry.MCPMetadata, 0)
+		for _, m := range allMetadata {
+			if m.Name == input.MCPName {
+				metadata = append(metadata, m)
+			}
+		}
+	}
+
+	output := GetMetadataOutput{
+		Metadata: metadata,
+		Total:    len(metadata),
+	}
+
+	// Write to file if path specified
+	if input.FilePath != "" {
+		data, err := json.MarshalIndent(metadata, "", "  ")
+		if err != nil {
+			return nil, output, fmt.Errorf("failed to marshal metadata: %w", err)
+		}
+		if err := os.WriteFile(input.FilePath, data, 0644); err != nil {
+			return nil, output, fmt.Errorf("failed to write metadata file: %w", err)
+		}
+		output.FilePath = input.FilePath
+	}
+
+	return nil, output, nil
+}
+
 // findMCPConfig looks up an MCP config by name from the loaded config.
 func (s *Server) findMCPConfig(name string) (*config.MCPConfig, error) {
 	if s.config == nil || s.config.MCPs == nil {
