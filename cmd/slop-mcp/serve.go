@@ -7,8 +7,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/anthropics/slop-mcp/internal/config"
-	"github.com/anthropics/slop-mcp/internal/server"
+	"github.com/standardbeagle/slop-mcp/internal/config"
+	"github.com/standardbeagle/slop-mcp/internal/server"
 )
 
 func cmdServe(args []string) {
@@ -47,7 +47,7 @@ func cmdServe(args []string) {
 	}
 
 	// Create server
-	srv, err := server.New(cfg)
+	srv, err := server.NewFromConfig(cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating server: %v\n", err)
 		os.Exit(1)

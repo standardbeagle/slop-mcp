@@ -16,6 +16,8 @@ func main() {
 	switch os.Args[1] {
 	case "serve":
 		cmdServe(os.Args[2:])
+	case "run":
+		cmdRun(os.Args[2:])
 	case "mcp":
 		if len(os.Args) < 3 {
 			printMCPUsage()
@@ -28,12 +30,18 @@ func main() {
 			cmdMCPAddJSON(os.Args[3:])
 		case "add-from-claude-desktop":
 			cmdMCPAddFromClaudeDesktop(os.Args[3:])
+		case "add-from-claude-code":
+			cmdMCPAddFromClaudeCode(os.Args[3:])
 		case "remove", "rm":
 			cmdMCPRemove(os.Args[3:])
 		case "get":
 			cmdMCPGet(os.Args[3:])
 		case "list", "ls":
 			cmdMCPList(os.Args[3:])
+		case "status":
+			cmdMCPStatus(os.Args[3:])
+		case "auth":
+			cmdMCPAuth(os.Args[3:])
 		case "paths":
 			cmdMCPPaths(os.Args[3:])
 		case "dump":
@@ -62,17 +70,21 @@ Usage:
   slop-mcp <command> [options]
 
 Commands:
-  serve                    Start the MCP server
-  mcp add                  Register an MCP server
-  mcp add-json             Register an MCP server from JSON config
+  serve                        Start the MCP server
+  run                          Execute a SLOP script
+  mcp add                      Register an MCP server
+  mcp add-json                 Register an MCP server from JSON config
   mcp add-from-claude-desktop  Import MCPs from Claude Desktop
-  mcp remove               Unregister an MCP server
-  mcp get                  Get details of an MCP server
-  mcp list                 List registered MCP servers
-  mcp paths                Show config file paths
-  mcp dump                 Show config file contents
-  version                  Show version
-  help                     Show this help
+  mcp add-from-claude-code     Migrate MCPs from Claude Code user settings
+  mcp remove                   Unregister an MCP server
+  mcp get                      Get details of an MCP server
+  mcp list                     List registered MCP servers
+  mcp status                   Show live MCP connection status
+  mcp auth                     Manage OAuth authentication
+  mcp paths                    Show config file paths
+  mcp dump                     Show config file contents
+  version                      Show version
+  help                         Show this help
 
 Run 'slop-mcp <command> --help' for more information on a command.
 `)
@@ -95,6 +107,10 @@ Subcommands:
   add-from-claude-desktop [names...] [--local|--project|--user]
       Import MCPs from Claude Desktop config
 
+  add-from-claude-code [names...] [--dry-run]
+      Migrate MCPs from Claude Code user settings to slop-mcp user config
+      Automatically excludes slop-mcp itself from migration
+
   remove <name> [--local|--project|--user]
       Unregister an MCP server
 
@@ -104,10 +120,16 @@ Subcommands:
   list [--local|--project|--user|--all] [--json]
       List registered MCP servers
 
+  status [--port=<port>] [--json]
+      Show live MCP connection status from a running server
+
+  auth <action> [name]
+      Manage OAuth authentication (login, logout, status, list)
+
   paths
       Show config file paths
 
-  dump [--local|--project|--user|--claude-desktop] [--json]
+  dump [--local|--project|--user|--claude-desktop|--claude-code] [--json]
       Show config file contents
 
 Scope Options:
@@ -136,11 +158,22 @@ Examples:
   # Import from Claude Desktop
   slop-mcp mcp add-from-claude-desktop
 
+  # Migrate MCPs from Claude Code
+  slop-mcp mcp add-from-claude-code --dry-run
+  slop-mcp mcp add-from-claude-code
+
   # Add from JSON
   slop-mcp mcp add-json fs '{"command":"npx","args":["-y","@anthropic/mcp-server-filesystem","/tmp"]}'
 
   # Show all paths
   slop-mcp mcp paths
+
+  # Check live connection status
+  slop-mcp mcp status --port=8080
+
+  # Authenticate with an MCP
+  slop-mcp mcp auth login figma
+  slop-mcp mcp auth list
 
   # Dump configs as JSON
   slop-mcp mcp dump --json

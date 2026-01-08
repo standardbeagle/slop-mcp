@@ -6,16 +6,17 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/anthropics/slop-mcp/internal/config"
-	"github.com/anthropics/slop-mcp/internal/registry"
-	"github.com/anthropics/slop/pkg/slop"
+	"github.com/standardbeagle/slop-mcp/internal/auth"
+	"github.com/standardbeagle/slop-mcp/internal/config"
+	"github.com/standardbeagle/slop-mcp/internal/registry"
+	"github.com/standardbeagle/slop/pkg/slop"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // SearchToolsInput is the input for the search_tools tool.
 type SearchToolsInput struct {
-	Query   string `json:"query,omitempty" jsonschema:"description=Search query for tool names and descriptions"`
-	MCPName string `json:"mcp_name,omitempty" jsonschema:"description=Filter to a specific MCP server"`
+	Query   string `json:"query,omitempty" jsonschema:"Search query for tool names and descriptions"`
+	MCPName string `json:"mcp_name,omitempty" jsonschema:"Filter to a specific MCP server"`
 }
 
 // SearchToolsOutput is the output for the search_tools tool.
@@ -39,9 +40,9 @@ func (s *Server) handleSearchTools(
 
 // ExecuteToolInput is the input for the execute_tool tool.
 type ExecuteToolInput struct {
-	MCPName    string         `json:"mcp_name" jsonschema:"required,description=Target MCP server name"`
-	ToolName   string         `json:"tool_name" jsonschema:"required,description=Tool to execute on the MCP server"`
-	Parameters map[string]any `json:"parameters,omitempty" jsonschema:"description=Tool parameters to pass through"`
+	MCPName    string         `json:"mcp_name" jsonschema:"Target MCP server name"`
+	ToolName   string         `json:"tool_name" jsonschema:"Tool to execute on the MCP server"`
+	Parameters map[string]any `json:"parameters,omitempty" jsonschema:"Tool parameters to pass through"`
 }
 
 func (s *Server) handleExecuteTool(
@@ -66,8 +67,8 @@ func (s *Server) handleExecuteTool(
 
 // RunSlopInput is the input for the run_slop tool.
 type RunSlopInput struct {
-	Script   string `json:"script,omitempty" jsonschema:"description=Inline SLOP script to execute"`
-	FilePath string `json:"file_path,omitempty" jsonschema:"description=Path to a .slop file to execute"`
+	Script   string `json:"script,omitempty" jsonschema:"Inline SLOP script to execute"`
+	FilePath string `json:"file_path,omitempty" jsonschema:"Path to a .slop file to execute"`
 }
 
 // RunSlopOutput is the output for the run_slop tool.
@@ -100,9 +101,14 @@ func (s *Server) handleRunSlop(
 
 	// Connect all MCP services to the slop runtime
 	for _, cfg := range s.registry.GetConfigs() {
+		// Normalize type for SLOP runtime (slop uses "command", not "stdio")
+		transportType := cfg.Type
+		if transportType == "stdio" {
+			transportType = "command"
+		}
 		slopCfg := slop.MCPConfig{
 			Name:    cfg.Name,
-			Type:    cfg.Type,
+			Type:    transportType,
 			Command: cfg.Command,
 			Args:    cfg.Args,
 			Env:     mapToSlice(cfg.Env),
@@ -134,20 +140,21 @@ func (s *Server) handleRunSlop(
 
 // ManageMCPsInput is the input for the manage_mcps tool.
 type ManageMCPsInput struct {
-	Action  string            `json:"action" jsonschema:"required,description=Action to perform: register, unregister, or list"`
-	Name    string            `json:"name,omitempty" jsonschema:"description=MCP server name (required for register/unregister)"`
-	Type    string            `json:"type,omitempty" jsonschema:"description=Transport type: command (default), sse, or streamable"`
-	Command string            `json:"command,omitempty" jsonschema:"description=Command executable for command transport"`
-	Args    []string          `json:"args,omitempty" jsonschema:"description=Command arguments"`
-	Env     map[string]string `json:"env,omitempty" jsonschema:"description=Environment variables"`
-	URL     string            `json:"url,omitempty" jsonschema:"description=Server URL for HTTP transports"`
-	Headers map[string]string `json:"headers,omitempty" jsonschema:"description=HTTP headers for HTTP transports"`
+	Action  string            `json:"action" jsonschema:"Action to perform: register, unregister, list, or status"`
+	Name    string            `json:"name,omitempty" jsonschema:"MCP server name (required for register/unregister)"`
+	Type    string            `json:"type,omitempty" jsonschema:"Transport type: command (default), sse, or streamable"`
+	Command string            `json:"command,omitempty" jsonschema:"Command executable for command transport"`
+	Args    []string          `json:"args,omitempty" jsonschema:"Command arguments"`
+	Env     map[string]string `json:"env,omitempty" jsonschema:"Environment variables"`
+	URL     string            `json:"url,omitempty" jsonschema:"Server URL for HTTP transports"`
+	Headers map[string]string `json:"headers,omitempty" jsonschema:"HTTP headers for HTTP transports"`
 }
 
 // ManageMCPsOutput is the output for the manage_mcps tool.
 type ManageMCPsOutput struct {
-	Message string               `json:"message,omitempty"`
-	MCPs    []registry.MCPStatus `json:"mcps,omitempty"`
+	Message string                   `json:"message,omitempty"`
+	MCPs    []registry.MCPStatus     `json:"mcps,omitempty"`
+	Status  []registry.MCPFullStatus `json:"status,omitempty"`
 }
 
 func (s *Server) handleManageMCPs(
@@ -203,9 +210,177 @@ func (s *Server) handleManageMCPs(
 			MCPs: s.registry.List(),
 		}, nil
 
+	case "status":
+		return nil, ManageMCPsOutput{
+			Status: s.registry.Status(),
+		}, nil
+
 	default:
-		return nil, ManageMCPsOutput{}, fmt.Errorf("invalid action: %s (must be register, unregister, or list)", input.Action)
+		return nil, ManageMCPsOutput{}, fmt.Errorf("invalid action: %s (must be register, unregister, list, or status)", input.Action)
 	}
+}
+
+// AuthMCPInput is the input for the auth_mcp tool.
+type AuthMCPInput struct {
+	Action string `json:"action" jsonschema:"Action to perform: login, logout, status, or list"`
+	Name   string `json:"name,omitempty" jsonschema:"MCP server name (required for login/logout/status)"`
+}
+
+// AuthMCPOutput is the output for the auth_mcp tool.
+type AuthMCPOutput struct {
+	Message string           `json:"message,omitempty"`
+	Status  *AuthStatusInfo  `json:"status,omitempty"`
+	Tokens  []AuthStatusInfo `json:"tokens,omitempty"`
+}
+
+// AuthStatusInfo contains authentication status information.
+type AuthStatusInfo struct {
+	ServerName  string `json:"server_name"`
+	ServerURL   string `json:"server_url,omitempty"`
+	IsAuth      bool   `json:"is_authenticated"`
+	ExpiresAt   string `json:"expires_at,omitempty"`
+	IsExpired   bool   `json:"is_expired,omitempty"`
+	HasRefresh  bool   `json:"has_refresh_token,omitempty"`
+}
+
+func (s *Server) handleAuthMCP(
+	ctx context.Context,
+	req *mcp.CallToolRequest,
+	input AuthMCPInput,
+) (*mcp.CallToolResult, AuthMCPOutput, error) {
+	store := auth.NewTokenStore()
+
+	switch input.Action {
+	case "login":
+		if input.Name == "" {
+			return nil, AuthMCPOutput{}, fmt.Errorf("name is required for login action")
+		}
+
+		// Get MCP config to find the URL
+		var serverURL string
+		configs := s.registry.GetConfigs()
+		for _, cfg := range configs {
+			if cfg.Name == input.Name {
+				serverURL = cfg.URL
+				break
+			}
+		}
+
+		if serverURL == "" {
+			// Check if it's configured but not connected
+			mcpCfg, err := s.findMCPConfig(input.Name)
+			if err != nil {
+				return nil, AuthMCPOutput{}, fmt.Errorf("MCP '%s' not found and no URL configured", input.Name)
+			}
+			serverURL = mcpCfg.URL
+		}
+
+		if serverURL == "" {
+			return nil, AuthMCPOutput{}, fmt.Errorf("MCP '%s' does not have a URL configured; OAuth requires HTTP transport", input.Name)
+		}
+
+		flow := &auth.OAuthFlow{
+			ServerName: input.Name,
+			ServerURL:  serverURL,
+			Store:      store,
+		}
+
+		result, err := flow.DiscoverAndAuth(ctx)
+		if err != nil {
+			return nil, AuthMCPOutput{}, fmt.Errorf("OAuth flow failed: %w", err)
+		}
+
+		return nil, AuthMCPOutput{
+			Message: fmt.Sprintf("Successfully authenticated with %s", input.Name),
+			Status: &AuthStatusInfo{
+				ServerName: result.Token.ServerName,
+				ServerURL:  result.Token.ServerURL,
+				IsAuth:     true,
+				ExpiresAt:  result.Token.ExpiresAt.Format("2006-01-02T15:04:05Z"),
+				HasRefresh: result.Token.RefreshToken != "",
+			},
+		}, nil
+
+	case "logout":
+		if input.Name == "" {
+			return nil, AuthMCPOutput{}, fmt.Errorf("name is required for logout action")
+		}
+
+		if err := store.DeleteToken(input.Name); err != nil {
+			return nil, AuthMCPOutput{}, fmt.Errorf("failed to remove token: %w", err)
+		}
+
+		return nil, AuthMCPOutput{
+			Message: fmt.Sprintf("Logged out from %s", input.Name),
+		}, nil
+
+	case "status":
+		if input.Name == "" {
+			return nil, AuthMCPOutput{}, fmt.Errorf("name is required for status action")
+		}
+
+		token, err := store.GetToken(input.Name)
+		if err != nil {
+			return nil, AuthMCPOutput{}, fmt.Errorf("failed to get token: %w", err)
+		}
+
+		if token == nil {
+			return nil, AuthMCPOutput{
+				Status: &AuthStatusInfo{
+					ServerName: input.Name,
+					IsAuth:     false,
+				},
+			}, nil
+		}
+
+		return nil, AuthMCPOutput{
+			Status: &AuthStatusInfo{
+				ServerName: token.ServerName,
+				ServerURL:  token.ServerURL,
+				IsAuth:     true,
+				ExpiresAt:  token.ExpiresAt.Format("2006-01-02T15:04:05Z"),
+				IsExpired:  token.IsExpired(),
+				HasRefresh: token.RefreshToken != "",
+			},
+		}, nil
+
+	case "list":
+		tokens, err := store.ListTokens()
+		if err != nil {
+			return nil, AuthMCPOutput{}, fmt.Errorf("failed to list tokens: %w", err)
+		}
+
+		statuses := make([]AuthStatusInfo, 0, len(tokens))
+		for _, t := range tokens {
+			statuses = append(statuses, AuthStatusInfo{
+				ServerName: t.ServerName,
+				ServerURL:  t.ServerURL,
+				IsAuth:     true,
+				ExpiresAt:  t.ExpiresAt.Format("2006-01-02T15:04:05Z"),
+				IsExpired:  t.IsExpired(),
+				HasRefresh: t.RefreshToken != "",
+			})
+		}
+
+		return nil, AuthMCPOutput{
+			Message: fmt.Sprintf("Found %d authenticated MCPs", len(statuses)),
+			Tokens:  statuses,
+		}, nil
+
+	default:
+		return nil, AuthMCPOutput{}, fmt.Errorf("invalid action: %s (must be login, logout, status, or list)", input.Action)
+	}
+}
+
+// findMCPConfig looks up an MCP config by name from the loaded config.
+func (s *Server) findMCPConfig(name string) (*config.MCPConfig, error) {
+	if s.config == nil || s.config.MCPs == nil {
+		return nil, fmt.Errorf("no config loaded")
+	}
+	if cfg, ok := s.config.MCPs[name]; ok {
+		return &cfg, nil
+	}
+	return nil, fmt.Errorf("MCP '%s' not found in config", name)
 }
 
 // mapToSlice converts a map to a slice of "key=value" strings.

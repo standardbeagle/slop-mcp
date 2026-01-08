@@ -94,6 +94,175 @@ func ClaudeDesktopConfigPath() string {
 	}
 }
 
+// ClaudeCodeConfigPath returns the path to Claude Code's main config file.
+func ClaudeCodeConfigPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".claude.json")
+}
+
+// ClaudeCodePluginsPath returns the path to Claude Code's plugins directory.
+func ClaudeCodePluginsPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".claude", "plugins")
+}
+
+// ClaudeCodeSettings represents the structure of ~/.claude.json.
+type ClaudeCodeSettings struct {
+	MCPServers map[string]JSONMCPConfig `json:"mcpServers"`
+}
+
+// ClaudeCodeInstalledPlugins represents installed_plugins.json structure.
+type ClaudeCodeInstalledPlugins struct {
+	Version int                                    `json:"version"`
+	Plugins map[string][]ClaudeCodePluginInstance `json:"plugins"`
+}
+
+// ClaudeCodePluginInstance represents a single plugin installation.
+type ClaudeCodePluginInstance struct {
+	Scope       string `json:"scope"`
+	InstallPath string `json:"installPath"`
+	Version     string `json:"version"`
+}
+
+// LoadClaudeCodeConfig loads MCP servers from Claude Code's user config and plugins.
+func LoadClaudeCodeConfig() (*Config, error) {
+	cfg := NewConfig()
+
+	// Load from ~/.claude.json mcpServers
+	mainPath := ClaudeCodeConfigPath()
+	if mainPath != "" {
+		if err := loadClaudeCodeMainConfig(mainPath, cfg); err != nil {
+			return nil, err
+		}
+	}
+
+	// Load from user-scoped plugin .mcp.json files
+	pluginsPath := ClaudeCodePluginsPath()
+	if pluginsPath != "" {
+		if err := loadClaudeCodePluginMCPs(pluginsPath, cfg); err != nil {
+			// Non-fatal - just skip plugins if we can't read them
+		}
+	}
+
+	return cfg, nil
+}
+
+func loadClaudeCodeMainConfig(path string, cfg *Config) error {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	var settings ClaudeCodeSettings
+	if err := json.Unmarshal(data, &settings); err != nil {
+		return err
+	}
+
+	for name, mcp := range settings.MCPServers {
+		mcpType := mcp.Type
+		if mcpType == "" && mcp.Command != "" {
+			mcpType = "stdio"
+		}
+		if mcpType == "" && mcp.URL != "" {
+			mcpType = "http"
+		}
+		cfg.MCPs[name] = MCPConfig{
+			Name:    name,
+			Type:    mcpType,
+			Command: mcp.Command,
+			Args:    mcp.Args,
+			Env:     mcp.Env,
+			URL:     mcp.URL,
+			Headers: mcp.Headers,
+		}
+	}
+
+	return nil
+}
+
+func loadClaudeCodePluginMCPs(pluginsPath string, cfg *Config) error {
+	installedPath := filepath.Join(pluginsPath, "installed_plugins.json")
+	data, err := os.ReadFile(installedPath)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	var installed ClaudeCodeInstalledPlugins
+	if err := json.Unmarshal(data, &installed); err != nil {
+		return err
+	}
+
+	// Track which install paths we've already processed (plugins can have multiple instances)
+	processed := make(map[string]bool)
+
+	for _, instances := range installed.Plugins {
+		for _, inst := range instances {
+			// Only load user-scoped plugins
+			if inst.Scope != "user" {
+				continue
+			}
+
+			// Skip if we've already processed this path
+			if processed[inst.InstallPath] {
+				continue
+			}
+			processed[inst.InstallPath] = true
+
+			// Load .mcp.json from this plugin
+			mcpPath := filepath.Join(inst.InstallPath, ".mcp.json")
+			mcpData, err := os.ReadFile(mcpPath)
+			if err != nil {
+				continue // Skip plugins without .mcp.json
+			}
+
+			var pluginMCP struct {
+				MCPServers map[string]JSONMCPConfig `json:"mcpServers"`
+			}
+			if err := json.Unmarshal(mcpData, &pluginMCP); err != nil {
+				continue
+			}
+
+			for name, mcp := range pluginMCP.MCPServers {
+				// Don't overwrite MCPs from main config
+				if _, exists := cfg.MCPs[name]; exists {
+					continue
+				}
+
+				mcpType := mcp.Type
+				if mcpType == "" && mcp.Command != "" {
+					mcpType = "stdio"
+				}
+				if mcpType == "" && mcp.URL != "" {
+					mcpType = "http"
+				}
+				cfg.MCPs[name] = MCPConfig{
+					Name:    name,
+					Type:    mcpType,
+					Command: mcp.Command,
+					Args:    mcp.Args,
+					Env:     mcp.Env,
+					URL:     mcp.URL,
+					Headers: mcp.Headers,
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
 // LoadClaudeDesktopConfig loads MCP servers from Claude Desktop config.
 func LoadClaudeDesktopConfig() (*Config, error) {
 	path := ClaudeDesktopConfigPath()
@@ -192,10 +361,12 @@ func GetMCP(path, name string) (*MCPConfig, error) {
 // ConfigPaths returns all relevant config file paths.
 func ConfigPaths(projectDir string) map[string]string {
 	return map[string]string{
-		"user":           UserConfigPath(),
-		"project":        ProjectConfigPath(projectDir),
-		"local":          LocalConfigPath(projectDir),
-		"claude_desktop": ClaudeDesktopConfigPath(),
+		"user":                UserConfigPath(),
+		"project":             ProjectConfigPath(projectDir),
+		"local":               LocalConfigPath(projectDir),
+		"claude_desktop":      ClaudeDesktopConfigPath(),
+		"claude_code":         ClaudeCodeConfigPath(),
+		"claude_code_plugins": ClaudeCodePluginsPath(),
 	}
 }
 

@@ -3,13 +3,19 @@ package registry
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 
-	"github.com/anthropics/slop-mcp/internal/config"
+	"github.com/standardbeagle/slop-mcp/internal/auth"
+	"github.com/standardbeagle/slop-mcp/internal/config"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+// ConnectionTimeout is the default timeout for connecting to an MCP server.
+const ConnectionTimeout = 30 * time.Second
 
 // ToolInfo represents a tool with its source MCP.
 type ToolInfo struct {
@@ -28,6 +34,35 @@ type MCPStatus struct {
 	Source    string `json:"source"`
 }
 
+// MCPState represents the connection state of an MCP.
+type MCPState string
+
+const (
+	StateConfigured   MCPState = "configured"
+	StateConnecting   MCPState = "connecting"
+	StateConnected    MCPState = "connected"
+	StateDisconnected MCPState = "disconnected"
+	StateError        MCPState = "error"
+	StateNeedsAuth    MCPState = "needs_auth"
+)
+
+// MCPFullStatus includes state and error information for all MCPs.
+type MCPFullStatus struct {
+	Name      string   `json:"name"`
+	Type      string   `json:"type"`
+	State     MCPState `json:"state"`
+	ToolCount int      `json:"tool_count,omitempty"`
+	Source    string   `json:"source"`
+	Error     string   `json:"error,omitempty"`
+}
+
+// mcpState tracks the state of a configured MCP.
+type mcpState struct {
+	config config.MCPConfig
+	state  MCPState
+	err    error
+}
+
 // mcpConnection holds an MCP client session.
 type mcpConnection struct {
 	session   *mcp.ClientSession
@@ -38,6 +73,7 @@ type mcpConnection struct {
 // Registry manages multiple MCP connections.
 type Registry struct {
 	connections map[string]*mcpConnection
+	states      map[string]*mcpState // tracks all configured MCPs and their states
 	toolIndex   *ToolIndex
 	mu          sync.RWMutex
 }
@@ -46,14 +82,75 @@ type Registry struct {
 func New() *Registry {
 	return &Registry{
 		connections: make(map[string]*mcpConnection),
+		states:      make(map[string]*mcpState),
 		toolIndex:   NewToolIndex(),
 	}
+}
+
+// SetConfigured registers an MCP as configured but not yet connected.
+func (r *Registry) SetConfigured(cfg config.MCPConfig) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// Only set if not already tracked (don't overwrite existing state)
+	if _, exists := r.states[cfg.Name]; !exists {
+		r.states[cfg.Name] = &mcpState{
+			config: cfg,
+			state:  StateConfigured,
+		}
+	}
+}
+
+// Status returns the full status of all configured MCPs.
+func (r *Registry) Status() []MCPFullStatus {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	result := make([]MCPFullStatus, 0, len(r.states))
+	for name, state := range r.states {
+		status := MCPFullStatus{
+			Name:   name,
+			Type:   state.config.Type,
+			State:  state.state,
+			Source: state.config.Source.String(),
+		}
+
+		// Add tool count if connected
+		if state.state == StateConnected {
+			status.ToolCount = r.toolIndex.CountForMCP(name)
+		}
+
+		// Add error message if in error state
+		if state.state == StateError && state.err != nil {
+			status.Error = state.err.Error()
+		}
+
+		result = append(result, status)
+	}
+
+	return result
 }
 
 // Connect connects to an MCP server and registers it.
 func (r *Registry) Connect(ctx context.Context, cfg config.MCPConfig) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	// Track state: set to connecting
+	r.states[cfg.Name] = &mcpState{
+		config: cfg,
+		state:  StateConnecting,
+	}
+
+	// Helper to set error state
+	setError := func(err error, state MCPState) error {
+		r.states[cfg.Name] = &mcpState{
+			config: cfg,
+			state:  state,
+			err:    err,
+		}
+		return err
+	}
 
 	// Create MCP client
 	client := mcp.NewClient(&mcp.Implementation{
@@ -64,7 +161,7 @@ func (r *Registry) Connect(ctx context.Context, cfg config.MCPConfig) error {
 	// Create transport based on type
 	var transport mcp.Transport
 	switch cfg.Type {
-	case "command", "":
+	case "command", "stdio", "":
 		cmd := exec.Command(cfg.Command, cfg.Args...)
 		if len(cfg.Env) > 0 {
 			for k, v := range cfg.Env {
@@ -76,23 +173,54 @@ func (r *Registry) Connect(ctx context.Context, cfg config.MCPConfig) error {
 		}
 
 	case "sse":
-		transport = &mcp.SSEClientTransport{
+		sseTransport := &mcp.SSEClientTransport{
 			Endpoint: cfg.URL,
 		}
+		// Check for stored auth token
+		if token := r.getStoredToken(cfg.Name); token != nil && !token.IsExpired() {
+			sseTransport.HTTPClient = &http.Client{
+				Transport: &authTransport{
+					base:  http.DefaultTransport,
+					token: token.AccessToken,
+				},
+			}
+		}
+		transport = sseTransport
 
-	case "streamable":
-		transport = &mcp.StreamableClientTransport{
+	case "http", "streamable":
+		streamTransport := &mcp.StreamableClientTransport{
 			Endpoint: cfg.URL,
 		}
+		// Check for stored auth token
+		if token := r.getStoredToken(cfg.Name); token != nil && !token.IsExpired() {
+			streamTransport.HTTPClient = &http.Client{
+				Transport: &authTransport{
+					base:  http.DefaultTransport,
+					token: token.AccessToken,
+				},
+			}
+		}
+		transport = streamTransport
 
 	default:
-		return fmt.Errorf("unknown MCP transport type: %s", cfg.Type)
+		err := fmt.Errorf("unknown MCP transport type: %s", cfg.Type)
+		return setError(err, StateError)
 	}
 
+	// Use a timeout for connection to avoid hanging on slow/unresponsive MCPs
+	connectCtx, cancel := context.WithTimeout(ctx, ConnectionTimeout)
+	defer cancel()
+
 	// Connect
-	session, err := client.Connect(ctx, transport, nil)
+	session, err := client.Connect(connectCtx, transport, nil)
 	if err != nil {
-		return fmt.Errorf("failed to connect to MCP %s: %w", cfg.Name, err)
+		// Check if error indicates authentication required
+		errStr := err.Error()
+		if strings.Contains(errStr, "401") || strings.Contains(errStr, "unauthorized") ||
+			strings.Contains(errStr, "Unauthorized") || strings.Contains(errStr, "authentication") {
+			return setError(fmt.Errorf("authentication required: %w", err), StateNeedsAuth)
+		}
+		return setError(fmt.Errorf("failed to connect to MCP %s: %w", cfg.Name, err), StateError)
 	}
 
 	r.connections[cfg.Name] = &mcpConnection{
@@ -101,8 +229,16 @@ func (r *Registry) Connect(ctx context.Context, cfg config.MCPConfig) error {
 		config:    cfg,
 	}
 
-	// Index tools from this MCP
-	if err := r.indexTools(ctx, cfg.Name, session); err != nil {
+	// Update state to connected
+	r.states[cfg.Name] = &mcpState{
+		config: cfg,
+		state:  StateConnected,
+	}
+
+	// Index tools from this MCP with a fresh timeout
+	indexCtx, indexCancel := context.WithTimeout(ctx, ConnectionTimeout)
+	defer indexCancel()
+	if err := r.indexTools(indexCtx, cfg.Name, session); err != nil {
 		fmt.Printf("Warning: failed to index tools for %s: %v\n", cfg.Name, err)
 	}
 
@@ -119,8 +255,19 @@ func (r *Registry) Disconnect(name string) error {
 		return fmt.Errorf("MCP not found: %s", name)
 	}
 
+	// Close the session - ignore termination signals since they're expected
+	// when killing a subprocess-based MCP
 	if err := conn.session.Close(); err != nil {
-		return err
+		// Log but don't fail - the MCP is still being disconnected
+		fmt.Printf("Warning: error closing %s: %v\n", name, err)
+	}
+
+	// Update state to disconnected (preserve config for potential reconnect)
+	if state, exists := r.states[name]; exists {
+		r.states[name] = &mcpState{
+			config: state.config,
+			state:  StateDisconnected,
+		}
 	}
 
 	delete(r.connections, name)
@@ -363,4 +510,27 @@ func (r *Registry) ConnectFromConfig(ctx context.Context, cfg *config.Config) er
 		}
 	}
 	return nil
+}
+
+// getStoredToken retrieves a stored OAuth token for an MCP server.
+func (r *Registry) getStoredToken(serverName string) *auth.MCPToken {
+	store := auth.NewTokenStore()
+	token, err := store.GetToken(serverName)
+	if err != nil {
+		return nil
+	}
+	return token
+}
+
+// authTransport is an http.RoundTripper that adds Authorization headers.
+type authTransport struct {
+	base  http.RoundTripper
+	token string
+}
+
+func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	// Clone request to avoid modifying original
+	r := req.Clone(req.Context())
+	r.Header.Set("Authorization", "Bearer "+t.token)
+	return t.base.RoundTrip(r)
 }

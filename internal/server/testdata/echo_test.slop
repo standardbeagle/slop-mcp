@@ -1,0 +1,4 @@
+# Simple echo test script
+message = "Hello from SLOP file!"
+result = everything.echo(message: message)
+emit(result)

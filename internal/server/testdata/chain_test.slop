@@ -1,0 +1,14 @@
+# Chain multiple MCP calls
+# add -> echo -> add
+
+# First: add two numbers
+first = everything.add(a: 10, b: 20)
+
+# Echo the intermediate result
+msg = "First result: " + str(first)
+intermediate = everything.echo(message: msg)
+
+# Then: add more
+final = everything.add(a: 30, b: 70)
+
+emit(first: first, intermediate: intermediate, final: final)

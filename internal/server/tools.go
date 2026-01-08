@@ -29,4 +29,10 @@ func (s *Server) registerTools() {
 		Name:        "manage_mcps",
 		Description: "Manage MCP server connections: register new servers, unregister existing ones, or list all registered servers",
 	}, s.handleManageMCPs)
+
+	// 5. auth_mcp - Authenticate with MCP servers using OAuth
+	mcp.AddTool(s.mcpServer, &mcp.Tool{
+		Name:        "auth_mcp",
+		Description: "Authenticate with MCP servers using OAuth. Actions: login (initiate OAuth flow), logout (remove token), status (check auth status), list (show all authenticated MCPs)",
+	}, s.handleAuthMCP)
 }

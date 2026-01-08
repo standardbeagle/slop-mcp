@@ -1,12 +1,19 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"strings"
+	"time"
 
-	"github.com/anthropics/slop-mcp/internal/config"
+	"github.com/standardbeagle/slop-mcp/internal/auth"
+	"github.com/standardbeagle/slop-mcp/internal/config"
+	"github.com/standardbeagle/slop-mcp/internal/registry"
 )
 
 func cmdMCPAdd(args []string) {
@@ -383,6 +390,155 @@ Examples:
 `, config.ClaudeDesktopConfigPath())
 }
 
+func cmdMCPAddFromClaudeCode(args []string) {
+	var specificNames []string
+	dryRun := false
+
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--dry-run":
+			dryRun = true
+		case "--help", "-h":
+			printMCPAddFromClaudeCodeUsage()
+			return
+		default:
+			specificNames = append(specificNames, args[i])
+		}
+	}
+
+	// Load Claude Code config
+	claudeCodeCfg, err := config.LoadClaudeCodeConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading Claude Code config: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(claudeCodeCfg.MCPs) == 0 {
+		fmt.Println("No MCPs found in Claude Code user settings")
+		fmt.Printf("Checked: %s\n", config.ClaudeCodeConfigPath())
+		return
+	}
+
+	// Determine user config path (always migrate to user scope)
+	cfgPath := config.UserConfigPath()
+	if cfgPath == "" {
+		fmt.Fprintln(os.Stderr, "Error: could not determine user config path")
+		os.Exit(1)
+	}
+
+	// Filter MCPs if specific names provided, and always exclude slop-mcp
+	toAdd := make(map[string]config.MCPConfig)
+	if len(specificNames) > 0 {
+		for _, name := range specificNames {
+			if isSlotMCP(name) {
+				fmt.Printf("Skipping '%s' (slop-mcp itself)\n", name)
+				continue
+			}
+			if mcp, ok := claudeCodeCfg.MCPs[name]; ok {
+				toAdd[name] = mcp
+			} else {
+				fmt.Fprintf(os.Stderr, "Warning: MCP '%s' not found in Claude Code config\n", name)
+			}
+		}
+	} else {
+		for name, mcp := range claudeCodeCfg.MCPs {
+			if isSlotMCP(name) {
+				fmt.Printf("Skipping '%s' (slop-mcp itself)\n", name)
+				continue
+			}
+			toAdd[name] = mcp
+		}
+	}
+
+	if len(toAdd) == 0 {
+		fmt.Println("No MCPs to migrate")
+		return
+	}
+
+	if dryRun {
+		fmt.Println("Dry run - would migrate the following MCPs to user config:")
+		fmt.Printf("Target: %s\n\n", cfgPath)
+		for name, mcp := range toAdd {
+			fmt.Printf("  %s:\n", name)
+			fmt.Printf("    type: %s\n", mcp.Type)
+			if mcp.Command != "" {
+				fmt.Printf("    command: %s\n", mcp.Command)
+				if len(mcp.Args) > 0 {
+					fmt.Printf("    args: %v\n", mcp.Args)
+				}
+			}
+			if mcp.URL != "" {
+				fmt.Printf("    url: %s\n", mcp.URL)
+			}
+			if len(mcp.Env) > 0 {
+				fmt.Printf("    env: (redacted, %d variables)\n", len(mcp.Env))
+			}
+			fmt.Println()
+		}
+		return
+	}
+
+	// Add each MCP
+	for name, mcp := range toAdd {
+		mcp.Name = name
+		if err := config.AddMCPConfigToFile(cfgPath, mcp); err != nil {
+			fmt.Fprintf(os.Stderr, "Error adding %s: %v\n", name, err)
+			continue
+		}
+		fmt.Printf("Migrated MCP '%s' from Claude Code to user config\n", name)
+	}
+
+	fmt.Printf("\nMigrated %d MCPs to %s\n", len(toAdd), cfgPath)
+}
+
+// isSlotMCP checks if the MCP name refers to slop-mcp itself.
+func isSlotMCP(name string) bool {
+	name = strings.ToLower(name)
+	return name == "slop-mcp" || name == "slop_mcp" || name == "slopmcp"
+}
+
+func printMCPAddFromClaudeCodeUsage() {
+	fmt.Printf(`slop-mcp mcp add-from-claude-code - Migrate MCPs from Claude Code user settings
+
+Usage:
+  slop-mcp mcp add-from-claude-code [names...] [--dry-run]
+
+This command migrates MCP servers from Claude Code's user-level settings
+to slop-mcp's user config. The slop-mcp server itself is automatically
+excluded from migration.
+
+Arguments:
+  [names...]   Specific MCP names to migrate (migrates all if omitted)
+
+Options:
+  --dry-run    Show what would be migrated without making changes
+  --help, -h   Show this help
+
+Claude Code config locations:
+  Main config: %s
+  Plugins dir: %s
+
+Target slop-mcp config:
+  %s
+
+Examples:
+  # Preview what would be migrated
+  slop-mcp mcp add-from-claude-code --dry-run
+
+  # Migrate all MCPs from Claude Code
+  slop-mcp mcp add-from-claude-code
+
+  # Migrate specific MCPs
+  slop-mcp mcp add-from-claude-code filesystem github
+
+Note:
+  This command reads MCPs from both ~/.claude.json and user-scoped plugin
+  .mcp.json files. It always migrates to the user-level slop-mcp config,
+  making the MCPs available across all projects. The original Claude Code
+  configuration is not modified.
+`, config.ClaudeCodeConfigPath(), config.ClaudeCodePluginsPath(), config.UserConfigPath())
+}
+
 func cmdMCPRemove(args []string) {
 	if len(args) < 1 {
 		fmt.Fprintln(os.Stderr, "Usage: slop-mcp mcp remove <name> [--local|--project|--user]")
@@ -701,18 +857,24 @@ func cmdMCPPaths(args []string) {
 	paths := config.ConfigPaths(cwd)
 
 	fmt.Println("Config file paths:")
-	fmt.Printf("  Local:          %s\n", paths["local"])
-	fmt.Printf("  Project:        %s\n", paths["project"])
-	fmt.Printf("  User:           %s\n", paths["user"])
-	fmt.Printf("  Claude Desktop: %s\n", paths["claude_desktop"])
+	fmt.Printf("  Local:               %s\n", paths["local"])
+	fmt.Printf("  Project:             %s\n", paths["project"])
+	fmt.Printf("  User:                %s\n", paths["user"])
+	fmt.Printf("  Claude Desktop:      %s\n", paths["claude_desktop"])
+	fmt.Printf("  Claude Code:         %s\n", paths["claude_code"])
+	fmt.Printf("  Claude Code Plugins: %s\n", paths["claude_code_plugins"])
 
-	fmt.Println("\nFile status:")
+	fmt.Println("\nFile/directory status:")
 	for name, path := range paths {
 		exists := "not found"
-		if _, err := os.Stat(path); err == nil {
-			exists = "exists"
+		if info, err := os.Stat(path); err == nil {
+			if info.IsDir() {
+				exists = "exists (dir)"
+			} else {
+				exists = "exists"
+			}
 		}
-		fmt.Printf("  %-14s  %s\n", name+":", exists)
+		fmt.Printf("  %-20s  %s\n", name+":", exists)
 	}
 }
 
@@ -745,6 +907,8 @@ func cmdMCPDump(args []string) {
 			scope = "user"
 		case "--claude-desktop":
 			scope = "claude_desktop"
+		case "--claude-code":
+			scope = "claude_code"
 		case "--json":
 			outputJSON = true
 		case "--help", "-h":
@@ -773,10 +937,17 @@ func cmdMCPDump(args []string) {
 
 		if outputJSON {
 			// Try to parse and re-output as JSON
-			if name == "claude_desktop" {
-				var jsonCfg config.JSONConfig
-				if err := json.Unmarshal(data, &jsonCfg); err == nil {
+			if name == "claude_desktop" || name == "claude_code" {
+				var jsonCfg config.ClaudeCodeSettings
+				if err := json.Unmarshal(data, &jsonCfg); err == nil && jsonCfg.MCPServers != nil {
 					pretty, _ := json.MarshalIndent(jsonCfg.MCPServers, "", "  ")
+					fmt.Println(string(pretty))
+					return
+				}
+				// Also try Claude Desktop format
+				var desktopCfg config.JSONConfig
+				if err := json.Unmarshal(data, &desktopCfg); err == nil && desktopCfg.MCPServers != nil {
+					pretty, _ := json.MarshalIndent(desktopCfg.MCPServers, "", "  ")
 					fmt.Println(string(pretty))
 					return
 				}
@@ -799,7 +970,7 @@ func cmdMCPDump(args []string) {
 		dumpFile(scope, paths[scope])
 	} else {
 		// Dump all
-		for _, name := range []string{"local", "project", "user", "claude_desktop"} {
+		for _, name := range []string{"local", "project", "user", "claude_desktop", "claude_code"} {
 			dumpFile(name, paths[name])
 			fmt.Println()
 		}
@@ -810,13 +981,14 @@ func printMCPDumpUsage() {
 	fmt.Print(`slop-mcp mcp dump - Show config file contents
 
 Usage:
-  slop-mcp mcp dump [--local|--project|--user|--claude-desktop] [--json]
+  slop-mcp mcp dump [--local|--project|--user|--claude-desktop|--claude-code] [--json]
 
 Options:
   --local           Dump local config only
   --project         Dump project config only
   --user            Dump user config only
   --claude-desktop  Dump Claude Desktop config only
+  --claude-code     Dump Claude Code config only
   --json            Output as JSON
   --help, -h        Show this help
 
@@ -824,6 +996,342 @@ Examples:
   slop-mcp mcp dump                    # Dump all configs
   slop-mcp mcp dump --project          # Dump project config only
   slop-mcp mcp dump --claude-desktop   # Dump Claude Desktop config
+  slop-mcp mcp dump --claude-code      # Dump Claude Code config
   slop-mcp mcp dump --json             # Dump all as JSON
+`)
+}
+
+func cmdMCPStatus(args []string) {
+	port := 8080
+	outputJSON := false
+
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--json":
+			outputJSON = true
+		case strings.HasPrefix(args[i], "--port="):
+			fmt.Sscanf(args[i], "--port=%d", &port)
+		case args[i] == "--port" && i+1 < len(args):
+			fmt.Sscanf(args[i+1], "%d", &port)
+			i++
+		case args[i] == "--help" || args[i] == "-h":
+			printMCPStatusUsage()
+			return
+		}
+	}
+
+	// Query the running server via HTTP
+	url := fmt.Sprintf("http://localhost:%d/", port)
+
+	// Build MCP tool call request
+	reqBody := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "manage_mcps",
+			"arguments": map[string]any{
+				"action": "status",
+			},
+		},
+	}
+
+	reqJSON, err := json.Marshal(reqBody)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Post(url, "application/json", bytes.NewReader(reqJSON))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error connecting to server at %s: %v\n", url, err)
+		fmt.Fprintf(os.Stderr, "Make sure slop-mcp is running with: slop-mcp serve --port %d\n", port)
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading response: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Parse response
+	var rpcResp struct {
+		Result struct {
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"result"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+
+	if err := json.Unmarshal(body, &rpcResp); err != nil {
+		fmt.Fprintf(os.Stderr, "Error parsing response: %v\n", err)
+		os.Exit(1)
+	}
+
+	if rpcResp.Error != nil {
+		fmt.Fprintf(os.Stderr, "Server error: %s\n", rpcResp.Error.Message)
+		os.Exit(1)
+	}
+
+	// Extract the status JSON from the text content
+	if len(rpcResp.Result.Content) == 0 {
+		fmt.Fprintf(os.Stderr, "No status data in response\n")
+		os.Exit(1)
+	}
+
+	var output struct {
+		Status []registry.MCPFullStatus `json:"status"`
+	}
+	if err := json.Unmarshal([]byte(rpcResp.Result.Content[0].Text), &output); err != nil {
+		fmt.Fprintf(os.Stderr, "Error parsing status: %v\n", err)
+		os.Exit(1)
+	}
+
+	if outputJSON {
+		pretty, _ := json.MarshalIndent(output.Status, "", "  ")
+		fmt.Println(string(pretty))
+		return
+	}
+
+	// Print formatted status
+	fmt.Printf("MCP Status (via localhost:%d):\n\n", port)
+	if len(output.Status) == 0 {
+		fmt.Println("  No MCPs configured")
+		return
+	}
+
+	for _, s := range output.Status {
+		fmt.Printf("  %s:\n", s.Name)
+		fmt.Printf("    state: %s\n", s.State)
+		fmt.Printf("    type: %s\n", s.Type)
+		if s.ToolCount > 0 {
+			fmt.Printf("    tools: %d\n", s.ToolCount)
+		}
+		if s.Error != "" {
+			fmt.Printf("    error: %s\n", s.Error)
+		}
+		fmt.Println()
+	}
+}
+
+func printMCPStatusUsage() {
+	fmt.Print(`slop-mcp mcp status - Show live MCP connection status
+
+Usage:
+  slop-mcp mcp status [--port=<port>] [--json]
+
+Options:
+  --port=<port>    Server port (default: 8080)
+  --json           Output as JSON
+  --help, -h       Show this help
+
+This command queries a running slop-mcp server to show the connection
+status of all configured MCPs.
+
+MCP States:
+  configured    - MCP is in config but not yet connected
+  connecting    - Connection is in progress
+  connected     - Successfully connected
+  disconnected  - Was connected but now disconnected
+  error         - Connection failed
+  needs_auth    - Requires OAuth authentication
+
+Examples:
+  slop-mcp mcp status                  # Query server on port 8080
+  slop-mcp mcp status --port=3000      # Query server on port 3000
+  slop-mcp mcp status --json           # Output as JSON
+`)
+}
+
+func cmdMCPAuth(args []string) {
+	if len(args) < 1 {
+		printMCPAuthUsage()
+		os.Exit(1)
+	}
+
+	action := args[0]
+	if action == "--help" || action == "-h" || action == "help" {
+		printMCPAuthUsage()
+		return
+	}
+
+	var name string
+	if len(args) > 1 {
+		name = args[1]
+	}
+
+	store := auth.NewTokenStore()
+
+	switch action {
+	case "login":
+		if name == "" {
+			fmt.Fprintln(os.Stderr, "Error: MCP name is required for login")
+			printMCPAuthUsage()
+			os.Exit(1)
+		}
+
+		// Find MCP config to get URL
+		cfg, err := findMCPConfigFromFiles(name)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+
+		if cfg.URL == "" {
+			fmt.Fprintf(os.Stderr, "Error: MCP '%s' does not have a URL configured; OAuth requires HTTP transport\n", name)
+			os.Exit(1)
+		}
+
+		flow := &auth.OAuthFlow{
+			ServerName: name,
+			ServerURL:  cfg.URL,
+			Store:      store,
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+
+		fmt.Printf("Starting OAuth flow for %s...\n", name)
+		result, err := flow.DiscoverAndAuth(ctx)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: OAuth flow failed: %v\n", err)
+			os.Exit(1)
+		}
+
+		fmt.Printf("Successfully authenticated with %s\n", name)
+		fmt.Printf("  Server URL: %s\n", result.Token.ServerURL)
+		if !result.Token.ExpiresAt.IsZero() {
+			fmt.Printf("  Expires at: %s\n", result.Token.ExpiresAt.Format(time.RFC3339))
+		}
+
+	case "logout":
+		if name == "" {
+			fmt.Fprintln(os.Stderr, "Error: MCP name is required for logout")
+			printMCPAuthUsage()
+			os.Exit(1)
+		}
+
+		if err := store.DeleteToken(name); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Logged out from %s\n", name)
+
+	case "status":
+		if name == "" {
+			fmt.Fprintln(os.Stderr, "Error: MCP name is required for status")
+			printMCPAuthUsage()
+			os.Exit(1)
+		}
+
+		token, err := store.GetToken(name)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+
+		if token == nil {
+			fmt.Printf("%s: not authenticated\n", name)
+			return
+		}
+
+		fmt.Printf("%s:\n", name)
+		fmt.Printf("  Authenticated: yes\n")
+		fmt.Printf("  Server URL: %s\n", token.ServerURL)
+		if !token.ExpiresAt.IsZero() {
+			fmt.Printf("  Expires at: %s\n", token.ExpiresAt.Format(time.RFC3339))
+			if token.IsExpired() {
+				fmt.Printf("  Status: EXPIRED\n")
+			} else {
+				fmt.Printf("  Status: valid\n")
+			}
+		}
+		if token.RefreshToken != "" {
+			fmt.Printf("  Has refresh token: yes\n")
+		}
+
+	case "list":
+		tokens, err := store.ListTokens()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+
+		if len(tokens) == 0 {
+			fmt.Println("No authenticated MCPs")
+			return
+		}
+
+		fmt.Println("Authenticated MCPs:")
+		for _, t := range tokens {
+			status := "valid"
+			if t.IsExpired() {
+				status = "EXPIRED"
+			}
+			fmt.Printf("  %s: %s (%s)\n", t.ServerName, t.ServerURL, status)
+		}
+
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown action: %s\n", action)
+		printMCPAuthUsage()
+		os.Exit(1)
+	}
+}
+
+func findMCPConfigFromFiles(name string) (*config.MCPConfig, error) {
+	cwd, _ := os.Getwd()
+
+	// Check all config sources
+	sources := []struct {
+		loader func() (*config.Config, error)
+		name   string
+	}{
+		{func() (*config.Config, error) { return config.LoadLocalConfig(cwd) }, "local"},
+		{func() (*config.Config, error) { return config.LoadProjectConfig(cwd) }, "project"},
+		{config.LoadUserConfig, "user"},
+	}
+
+	for _, src := range sources {
+		cfg, err := src.loader()
+		if err != nil {
+			continue
+		}
+		if mcpCfg, ok := cfg.MCPs[name]; ok {
+			return &mcpCfg, nil
+		}
+	}
+
+	return nil, fmt.Errorf("MCP '%s' not found in any config file", name)
+}
+
+func printMCPAuthUsage() {
+	fmt.Print(`slop-mcp mcp auth - Manage OAuth authentication for MCPs
+
+Usage:
+  slop-mcp mcp auth <action> [name]
+
+Actions:
+  login <name>     Initiate OAuth flow for an MCP
+  logout <name>    Remove stored token for an MCP
+  status <name>    Check authentication status for an MCP
+  list             List all authenticated MCPs
+
+Examples:
+  slop-mcp mcp auth login figma     # Authenticate with Figma MCP
+  slop-mcp mcp auth status figma    # Check Figma auth status
+  slop-mcp mcp auth logout figma    # Remove Figma token
+  slop-mcp mcp auth list            # List all authenticated MCPs
+
+Notes:
+  - OAuth requires the MCP to have an HTTP URL configured
+  - Tokens are stored in ~/.config/slop-mcp/auth.json
+  - This command works without a running server
 `)
 }

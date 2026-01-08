@@ -1,8 +1,10 @@
 # Local config (not shared via git)
 .slop-mcp.local.kdl
 
-# Binary (at root only)
+# Build artifacts
 /slop-mcp
+/build/
+**/mock-mcp/mock-mcp
 
 # Test output
 *.test

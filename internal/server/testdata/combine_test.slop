@@ -1,0 +1,14 @@
+# Combine outputs from multiple independent tool calls
+
+# Make several independent calls
+result_a = everything.echo(message: "first message")
+result_b = everything.echo(message: "second message")
+result_c = everything.echo(message: "third message")
+
+# Combine into a list
+combined = [result_a, result_b, result_c]
+
+# Also call add to mix tool types
+sum_result = everything.add(a: 10, b: 20)
+
+emit(combined: combined, sum: sum_result, count: len(combined))
