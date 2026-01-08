@@ -43,7 +43,8 @@ jobs:
             EXT=".exe"
           fi
           mkdir -p dist
-          go build -ldflags="-s -w -X main.Version=${{ github.ref_name }}" \
+          go build -tags mcp_go_client_oauth \
+            -ldflags="-s -w -X main.Version=${{ github.ref_name }}" \
             -o dist/slop-mcp-${{ matrix.goos }}-${{ matrix.goarch }}${EXT} \
             ./cmd/slop-mcp
 
