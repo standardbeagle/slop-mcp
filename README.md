@@ -1,6 +1,20 @@
 # slop-mcp
 
-A Model Context Protocol (MCP) server that orchestrates multiple MCP servers, providing progressive tool discovery and efficient context management.
+**Install many MCPs without killing your context.**
+
+slop-mcp is an MCP orchestrator that lets you connect dozens of MCP servers while exposing only 5 meta-tools to your agent. No more context window bloat from loading hundreds of tool definitions upfront.
+
+```
+Without slop-mcp:  50 MCPs × 20 tools = 1000 tool definitions in context
+With slop-mcp:     50 MCPs × 20 tools = 5 tool definitions in context
+```
+
+## Documentation
+
+- **[Quick Start Guide](https://standardbeagle.github.io/slop-mcp/docs/getting-started/quick-start)** - Get running in 5 minutes
+- **[Full Documentation](https://standardbeagle.github.io/slop-mcp/)** - Complete guides and reference
+- **[KDL Configuration](https://standardbeagle.github.io/slop-mcp/docs/reference/kdl-config)** - Configuration reference
+- **[CLI Reference](https://standardbeagle.github.io/slop-mcp/docs/reference/cli)** - Command-line options
 
 ## The Problem
 
