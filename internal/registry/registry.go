@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -199,7 +200,7 @@ func (r *Registry) Connect(ctx context.Context, cfg config.MCPConfig) error {
 	// Create MCP client
 	client := mcp.NewClient(&mcp.Implementation{
 		Name:    "slop-mcp",
-		Version: "0.1.0",
+		Version: "0.3.0",
 	}, nil)
 
 	// Create transport based on type
@@ -208,6 +209,8 @@ func (r *Registry) Connect(ctx context.Context, cfg config.MCPConfig) error {
 	case "command", "stdio", "":
 		cmd := exec.Command(cfg.Command, cfg.Args...)
 		if len(cfg.Env) > 0 {
+			// Start with current environment, then add custom vars
+			cmd.Env = os.Environ()
 			for k, v := range cfg.Env {
 				cmd.Env = append(cmd.Env, k+"="+v)
 			}
@@ -220,14 +223,9 @@ func (r *Registry) Connect(ctx context.Context, cfg config.MCPConfig) error {
 		sseTransport := &mcp.SSEClientTransport{
 			Endpoint: cfg.URL,
 		}
-		// Check for stored auth token
-		if token := r.getStoredToken(cfg.Name); token != nil && !token.IsExpired() {
-			sseTransport.HTTPClient = &http.Client{
-				Transport: &authTransport{
-					base:  http.DefaultTransport,
-					token: token.AccessToken,
-				},
-			}
+		// Apply custom headers and/or OAuth token
+		if httpClient := r.buildHTTPClient(cfg); httpClient != nil {
+			sseTransport.HTTPClient = httpClient
 		}
 		transport = sseTransport
 
@@ -235,14 +233,9 @@ func (r *Registry) Connect(ctx context.Context, cfg config.MCPConfig) error {
 		streamTransport := &mcp.StreamableClientTransport{
 			Endpoint: cfg.URL,
 		}
-		// Check for stored auth token
-		if token := r.getStoredToken(cfg.Name); token != nil && !token.IsExpired() {
-			streamTransport.HTTPClient = &http.Client{
-				Transport: &authTransport{
-					base:  http.DefaultTransport,
-					token: token.AccessToken,
-				},
-			}
+		// Apply custom headers and/or OAuth token
+		if httpClient := r.buildHTTPClient(cfg); httpClient != nil {
+			streamTransport.HTTPClient = httpClient
 		}
 		transport = streamTransport
 
@@ -698,15 +691,44 @@ func (r *Registry) getStoredToken(serverName string) *auth.MCPToken {
 	return token
 }
 
-// authTransport is an http.RoundTripper that adds Authorization headers.
-type authTransport struct {
-	base  http.RoundTripper
-	token string
+// headersTransport is an http.RoundTripper that adds custom headers to requests.
+type headersTransport struct {
+	base    http.RoundTripper
+	headers map[string]string
 }
 
-func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+func (t *headersTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Clone request to avoid modifying original
 	r := req.Clone(req.Context())
-	r.Header.Set("Authorization", "Bearer "+t.token)
+	for k, v := range t.headers {
+		r.Header.Set(k, v)
+	}
 	return t.base.RoundTrip(r)
+}
+
+// buildHTTPClient creates an HTTP client with custom headers and/or OAuth token.
+func (r *Registry) buildHTTPClient(cfg config.MCPConfig) *http.Client {
+	headers := make(map[string]string)
+
+	// Add headers from config
+	for k, v := range cfg.Headers {
+		headers[k] = v
+	}
+
+	// Add OAuth token if available (overrides config Authorization header)
+	if token := r.getStoredToken(cfg.Name); token != nil && !token.IsExpired() {
+		headers["Authorization"] = "Bearer " + token.AccessToken
+	}
+
+	// If no custom headers, return nil to use default client
+	if len(headers) == 0 {
+		return nil
+	}
+
+	return &http.Client{
+		Transport: &headersTransport{
+			base:    http.DefaultTransport,
+			headers: headers,
+		},
+	}
 }

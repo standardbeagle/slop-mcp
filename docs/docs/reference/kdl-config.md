@@ -47,7 +47,7 @@ mcp "my-mcp" {
 | `transport` | string | No | "stdio" (default) |
 | `command` | string | Yes | Executable command |
 | `args` | strings | No | Command arguments |
-| `env` | block | No | Environment variables |
+| `env` | block | No | Environment variables (merged with system env) |
 
 Example:
 
