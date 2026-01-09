@@ -3,24 +3,45 @@ import Link from '@docusaurus/Link';
 import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
 import Layout from '@theme/Layout';
 import Heading from '@theme/Heading';
+import { useEffect, useState } from 'react';
 
 import styles from './index.module.css';
 
 function HomepageHeader() {
-  const {siteConfig} = useDocusaurusContext();
   return (
-    <header className={clsx('hero hero--primary', styles.heroBanner)}>
-      <div className="container">
-        <Heading as="h1" className="hero__title">
-          {siteConfig.title}
-        </Heading>
-        <p className="hero__subtitle">{siteConfig.tagline}</p>
-        <div className={styles.buttons}>
-          <Link
-            className="button button--secondary button--lg"
-            to="/docs/intro">
-            Get Started in 5 Minutes
+    <header className={styles.hero}>
+      <div className={styles.heroBackground}>
+        <div className={styles.orb1}></div>
+        <div className={styles.orb2}></div>
+        <div className={styles.orb3}></div>
+        <div className={styles.gridOverlay}></div>
+      </div>
+      <div className={styles.heroContent}>
+        <div className={styles.badge}>
+          <span className={styles.badgeDot}></span>
+          MCP Orchestration Layer
+        </div>
+        <h1 className={styles.heroTitle}>
+          <span className={styles.heroTitleLine}>Install 17 MCPs.</span>
+          <span className={styles.heroTitleAccent}>Claude won't even notice.</span>
+        </h1>
+        <p className={styles.heroSubtitle}>
+          Connect unlimited MCP servers to Claude with zero context overhead.
+          On-demand tool loading. Skills with no schema bloat. One plugin to orchestrate them all.
+        </p>
+        <div className={styles.heroCTA}>
+          <Link className={styles.primaryButton} to="/docs/intro">
+            Get Started
+            <span className={styles.buttonArrow}>→</span>
           </Link>
+          <Link className={styles.secondaryButton} to="/docs/examples/math-calculations">
+            See Examples
+          </Link>
+        </div>
+        <div className={styles.installHint}>
+          <code>pip install slop-mcp</code>
+          <span className={styles.separator}>or</span>
+          <code>npx slop-mcp</code>
         </div>
       </div>
     </header>
@@ -28,21 +49,108 @@ function HomepageHeader() {
 }
 
 function StatsSection() {
+  const stats = [
+    { number: '17+', label: 'MCPs simultaneously', sublabel: 'with room for more' },
+    { number: '0', label: 'Context tokens wasted', sublabel: 'lazy loading FTW' },
+    { number: '98%', label: 'Context savings', sublabel: 'vs traditional setup' },
+  ];
+
   return (
     <section className={styles.stats}>
-      <div className="container">
-        <div className={styles.statsGrid}>
-          <div className={styles.statItem}>
-            <div className={styles.statNumber}>17+</div>
-            <div className={styles.statLabel}>MCPs at once</div>
+      <div className={styles.statsContainer}>
+        {stats.map((stat, idx) => (
+          <div key={idx} className={styles.statCard}>
+            <div className={styles.statNumber}>{stat.number}</div>
+            <div className={styles.statLabel}>{stat.label}</div>
+            <div className={styles.statSublabel}>{stat.sublabel}</div>
           </div>
-          <div className={styles.statItem}>
-            <div className={styles.statNumber}>0</div>
-            <div className={styles.statLabel}>Context tokens wasted</div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function TerminalDemo() {
+  return (
+    <section className={styles.terminalSection}>
+      <div className={styles.terminalContainer}>
+        <div className={styles.terminalHeader}>
+          <span className={styles.terminalTitle}>How it works</span>
+        </div>
+        <div className={styles.terminalGrid}>
+          <div className={styles.terminalCard}>
+            <div className={styles.terminalWindow}>
+              <div className={styles.terminalTitleBar}>
+                <div className={styles.trafficLights}>
+                  <span className={styles.trafficRed}></span>
+                  <span className={styles.trafficYellow}></span>
+                  <span className={styles.trafficGreen}></span>
+                </div>
+                <span className={styles.terminalName}>terminal — slop-mcp</span>
+              </div>
+              <div className={styles.terminalBody}>
+                <div className={styles.terminalLine}>
+                  <span className={styles.prompt}>$</span>
+                  <span className={styles.command}>slop-mcp mcp add figma -t streamable https://mcp.figma.com</span>
+                </div>
+                <div className={styles.terminalLine}>
+                  <span className={styles.outputSuccess}>✓ Added MCP: figma (streamable)</span>
+                </div>
+                <div className={styles.terminalLine}>&nbsp;</div>
+                <div className={styles.terminalLine}>
+                  <span className={styles.prompt}>$</span>
+                  <span className={styles.command}>slop-mcp mcp auth login figma</span>
+                </div>
+                <div className={styles.terminalLine}>
+                  <span className={styles.outputDim}>Opening browser for OAuth...</span>
+                </div>
+                <div className={styles.terminalLine}>
+                  <span className={styles.outputSuccess}>✓ Authenticated! Connection re-established.</span>
+                </div>
+              </div>
+            </div>
+            <div className={styles.terminalCaption}>
+              <span className={styles.captionNumber}>01</span>
+              Add MCPs with one command. OAuth just works.
+            </div>
           </div>
-          <div className={styles.statItem}>
-            <div className={styles.statNumber}>1</div>
-            <div className={styles.statLabel}>Plugin to rule them all</div>
+
+          <div className={styles.terminalCard}>
+            <div className={styles.terminalWindow}>
+              <div className={styles.terminalTitleBar}>
+                <div className={styles.trafficLights}>
+                  <span className={styles.trafficRed}></span>
+                  <span className={styles.trafficYellow}></span>
+                  <span className={styles.trafficGreen}></span>
+                </div>
+                <span className={styles.terminalName}>claude code</span>
+              </div>
+              <div className={styles.terminalBody}>
+                <div className={styles.terminalLine}>
+                  <span className={styles.outputDim}>{'>'}</span>
+                  <span className={styles.command}> search_tools query="design file"</span>
+                </div>
+                <div className={styles.terminalLine}>&nbsp;</div>
+                <div className={styles.terminalLine}>
+                  <span className={styles.output}>Found 2 tools:</span>
+                </div>
+                <div className={styles.terminalLine}>
+                  <span className={styles.outputAccent}>  figma:</span>
+                  <span className={styles.output}>get_file, export_assets</span>
+                </div>
+                <div className={styles.terminalLine}>&nbsp;</div>
+                <div className={styles.terminalLine}>
+                  <span className={styles.outputDim}># Only 2 schemas loaded</span>
+                </div>
+                <div className={styles.terminalLine}>
+                  <span className={styles.outputDim}># Not 200+ from all your MCPs</span>
+                </div>
+              </div>
+            </div>
+            <div className={styles.terminalCaption}>
+              <span className={styles.captionNumber}>02</span>
+              Search loads only what you need. Context stays clean.
+            </div>
           </div>
         </div>
       </div>
@@ -50,130 +158,57 @@ function StatsSection() {
   );
 }
 
-const FeatureList = [
+const features = [
   {
-    title: 'Scale Without Limits',
-    emoji: '🚀',
-    description: (
-      <>
-        Install 17 MCPs, or 50, or 100. SLOP MCP loads tool metadata on-demand,
-        not upfront. Your context window stays clean while your capabilities explode.
-      </>
-    ),
+    icon: '∞',
+    title: 'Unlimited Scale',
+    description: 'Connect 17 MCPs or 170. Your context overhead stays constant at ~400 tokens.',
   },
   {
-    title: 'Skills = Zero Context Overhead',
-    emoji: '⚡',
-    description: (
-      <>
-        Create skills that call MCPs directly. No tool schemas flooding your context.
-        Just invoke <code>/my-skill</code> and let SLOP handle the orchestration.
-      </>
-    ),
+    icon: '⚡',
+    title: 'Lazy Loading',
+    description: 'Tool schemas load on-demand when you search. Not upfront. Not ever, if you don\'t need them.',
   },
   {
-    title: 'OAuth That Just Works',
-    emoji: '🔐',
-    description: (
-      <>
-        Login to MCPs like Figma, Linear, or Dart with a single command.
-        Auto-reconnect after auth means your tools are ready instantly.
-      </>
-    ),
+    icon: '→',
+    title: 'Skills',
+    description: 'Create slash commands that invoke MCPs directly. Zero schema overhead. Just /do-the-thing.',
   },
   {
-    title: 'One Config, All MCPs',
-    emoji: '📦',
-    description: (
-      <>
-        Define your MCPs in KDL config files. Local, project, or user scope.
-        SLOP aggregates them all into a unified interface.
-      </>
-    ),
+    icon: '⟳',
+    title: 'Auto-Reconnect',
+    description: 'OAuth flows reconnect automatically. Auth once, use forever. No manual re-registration.',
   },
   {
-    title: 'Search, Don\'t Scroll',
-    emoji: '🔍',
-    description: (
-      <>
-        With <code>search_tools</code>, find the exact tool you need across all
-        your MCPs. Fuzzy matching included. Only matching tools hit your context.
-      </>
-    ),
+    icon: '◈',
+    title: 'Unified Interface',
+    description: 'One execute_tool pattern for every MCP. Chain database → math → slack in one workflow.',
   },
   {
-    title: 'Marketplace Ready',
-    emoji: '🛒',
-    description: (
-      <>
-        Use the SLOP MCP plugin from the standardbeagle-tools marketplace.
-        Pre-configured skills, instant setup, community patterns.
-      </>
-    ),
+    icon: '◫',
+    title: 'KDL Config',
+    description: 'Clean, readable config files. Project, user, or local scope. Version control friendly.',
   },
 ];
 
-function Feature({emoji, title, description}) {
-  return (
-    <div className={clsx('col col--4')}>
-      <div className={styles.featureCard}>
-        <div className={styles.featureEmoji}>{emoji}</div>
-        <Heading as="h3">{title}</Heading>
-        <p>{description}</p>
-      </div>
-    </div>
-  );
-}
-
-function HomepageFeatures() {
+function FeaturesSection() {
   return (
     <section className={styles.features}>
-      <div className="container">
-        <div className="row">
-          {FeatureList.map((props, idx) => (
-            <Feature key={idx} {...props} />
-          ))}
+      <div className={styles.featuresContainer}>
+        <div className={styles.featuresHeader}>
+          <h2 className={styles.featuresTitle}>Built for power users</h2>
+          <p className={styles.featuresSubtitle}>
+            Every decision optimized for minimal context, maximum capability.
+          </p>
         </div>
-      </div>
-    </section>
-  );
-}
-
-function CodeExample() {
-  return (
-    <section className={styles.codeSection}>
-      <div className="container">
-        <div className="row">
-          <div className="col col--6">
-            <Heading as="h2">Add MCPs in Seconds</Heading>
-            <div className={styles.terminal}>
-              <div><span className={styles.prompt}>$</span> slop-mcp mcp add math-mcp npx @anthropic/math-mcp</div>
-              <div className={styles.output}>Added MCP: math-mcp (stdio)</div>
-              <div>&nbsp;</div>
-              <div><span className={styles.prompt}>$</span> slop-mcp mcp add figma -t streamable https://mcp.figma.com</div>
-              <div className={styles.output}>Added MCP: figma (streamable)</div>
-              <div>&nbsp;</div>
-              <div><span className={styles.prompt}>$</span> slop-mcp mcp auth login figma</div>
-              <div className={styles.output}>Opening browser for OAuth...</div>
-              <div className={styles.output}>Authenticated! Connection re-established.</div>
+        <div className={styles.featuresGrid}>
+          {features.map((feature, idx) => (
+            <div key={idx} className={styles.featureCard}>
+              <div className={styles.featureIcon}>{feature.icon}</div>
+              <h3 className={styles.featureTitle}>{feature.title}</h3>
+              <p className={styles.featureDescription}>{feature.description}</p>
             </div>
-          </div>
-          <div className="col col--6">
-            <Heading as="h2">Search Across All MCPs</Heading>
-            <div className={styles.terminal}>
-              <div><span className={styles.prompt}>$</span> # In Claude Code, search tools:</div>
-              <div>&nbsp;</div>
-              <div className={styles.output}>search_tools query="calculate"</div>
-              <div>&nbsp;</div>
-              <div className={styles.output}>Found 3 tools:</div>
-              <div className={styles.output}>  - math-mcp: calculate</div>
-              <div className={styles.output}>  - math-mcp: evaluate_expression</div>
-              <div className={styles.output}>  - stats-mcp: calculate_mean</div>
-              <div>&nbsp;</div>
-              <div className={styles.output}># Only these 3 schemas hit your context</div>
-              <div className={styles.output}># Not all 200+ tools from 17 MCPs!</div>
-            </div>
-          </div>
+          ))}
         </div>
       </div>
     </section>
@@ -183,25 +218,32 @@ function CodeExample() {
 function CTASection() {
   return (
     <section className={styles.cta}>
-      <div className="container">
-        <Heading as="h2">Ready to Supercharge Your AI Workflow?</Heading>
-        <p>Install via pip, npm, or download the binary directly.</p>
-        <div className={styles.installOptions}>
-          <code>pip install slop-mcp</code>
-          <code>npx slop-mcp</code>
-          <code>brew install standardbeagle/tap/slop-mcp</code>
+      <div className={styles.ctaContainer}>
+        <div className={styles.ctaContent}>
+          <h2 className={styles.ctaTitle}>
+            Stop burning context.<br/>Start orchestrating.
+          </h2>
+          <p className={styles.ctaSubtitle}>
+            Available now via pip, npm, or direct download.
+          </p>
+          <div className={styles.ctaButtons}>
+            <Link className={styles.ctaPrimary} to="/docs/getting-started/installation">
+              Read the Docs
+            </Link>
+            <a
+              className={styles.ctaSecondary}
+              href="https://github.com/standardbeagle/slop-mcp"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              View on GitHub
+            </a>
+          </div>
         </div>
-        <div className={styles.buttons}>
-          <Link
-            className="button button--primary button--lg"
-            to="/docs/getting-started/installation">
-            Installation Guide
-          </Link>
-          <Link
-            className="button button--secondary button--lg"
-            to="/docs/examples/math-calculations">
-            See Examples
-          </Link>
+        <div className={styles.ctaVisual}>
+          <div className={styles.ctaCode}>
+            <code>pip install slop-mcp</code>
+          </div>
         </div>
       </div>
     </section>
@@ -212,13 +254,13 @@ export default function Home() {
   const {siteConfig} = useDocusaurusContext();
   return (
     <Layout
-      title={`${siteConfig.title} - MCP Orchestration for Claude`}
-      description="Install 17 MCPs and Claude won't even notice. SLOP MCP provides context-efficient MCP orchestration with on-demand tool loading and skills.">
+      title="MCP Orchestration for Claude"
+      description="Install 17 MCPs and Claude won't even notice. Context-efficient MCP orchestration with on-demand tool loading and skills.">
       <HomepageHeader />
       <main>
         <StatsSection />
-        <HomepageFeatures />
-        <CodeExample />
+        <TerminalDemo />
+        <FeaturesSection />
         <CTASection />
       </main>
     </Layout>

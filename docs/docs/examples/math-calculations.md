@@ -2,256 +2,173 @@
 sidebar_position: 1
 ---
 
-# Math Calculations with math-mcp
+# Combining MCPs with execute_tool
 
-This example shows how to use SLOP MCP with [andylbrummer/math-mcp](https://github.com/andylbrummer/math-mcp) for mathematical computations.
+This example shows the core SLOP pattern: using `execute_tool` to orchestrate multiple MCPs in a single workflow.
 
-## Setup
+## The execute_tool Pattern
 
-First, add the math-mcp to your configuration:
+Every MCP tool is invoked the same way:
+
+```
+execute_tool mcp_name="<mcp>" tool_name="<tool>" parameters={...}
+```
+
+This uniform interface is what makes multi-MCP orchestration possible.
+
+## Setup: A Multi-MCP Environment
+
+Let's set up a realistic scenario with math, data, and notification MCPs:
 
 ```bash
 slop-mcp mcp add math-mcp npx @andylbrummer/math-mcp
+slop-mcp mcp add postgres npx @anthropic/postgres-mcp
+slop-mcp mcp add slack -t streamable https://mcp.slack.com/mcp
 ```
 
-Verify it's connected:
+## Example: Sales Commission Calculator
 
-```bash
-slop-mcp mcp list
-# math-mcp (stdio) - connected, 8 tools
-```
-
-## Available Tools
-
-Search for math tools:
+**Goal**: Query sales data, calculate commissions, notify the team.
 
 ```
-> search_tools mcp_name="math-mcp"
+User: Calculate Q4 commissions for the sales team and post to Slack
 
-Found 8 tools:
-- calculate: Evaluate mathematical expressions
-- solve_equation: Solve algebraic equations
-- derivative: Calculate derivatives
-- integral: Calculate integrals
-- matrix_multiply: Multiply matrices
-- statistics: Calculate statistical measures
-- convert_units: Convert between units
-- financial: Financial calculations (NPV, IRR, etc.)
-```
+Claude: I'll orchestrate this across three MCPs.
 
-## Basic Calculations
+Step 1: Query sales data from Postgres
 
-### Simple Arithmetic
+> execute_tool mcp_name="postgres" tool_name="query"
+  parameters={
+    "sql": "SELECT rep_name, SUM(revenue) as total FROM sales WHERE quarter='Q4' GROUP BY rep_name"
+  }
 
-```
-User: What's 15% of $847.50?
+Result: [
+  {"rep_name": "Alice", "total": 125000},
+  {"rep_name": "Bob", "total": 98000},
+  {"rep_name": "Carol", "total": 156000}
+]
 
-Claude: Let me calculate that.
+Step 2: Calculate 8% commission for each rep
 
 > execute_tool mcp_name="math-mcp" tool_name="calculate"
-  parameters={"expression": "847.50 * 0.15"}
+  parameters={"expression": "125000 * 0.08"}
+Result: 10000
 
-Result: 127.125
+> execute_tool mcp_name="math-mcp" tool_name="calculate"
+  parameters={"expression": "98000 * 0.08"}
+Result: 7840
 
-15% of $847.50 is $127.13
-```
+> execute_tool mcp_name="math-mcp" tool_name="calculate"
+  parameters={"expression": "156000 * 0.08"}
+Result: 12480
 
-### Complex Expressions
+Step 3: Post summary to Slack
 
-```
-User: Calculate the compound interest on $10,000 at 5% APR
-      compounded monthly for 3 years
-
-Claude: > execute_tool mcp_name="math-mcp" tool_name="calculate"
+> execute_tool mcp_name="slack" tool_name="post_message"
   parameters={
-    "expression": "10000 * (1 + 0.05/12)^(12*3)"
+    "channel": "#sales",
+    "text": "Q4 Commissions:\n• Alice: $10,000\n• Bob: $7,840\n• Carol: $12,480\nTotal: $30,320"
   }
 
-Result: 11614.72
-
-After 3 years, you'd have $11,614.72
-(That's $1,614.72 in interest)
+Done! Commissions calculated and posted to #sales.
 ```
 
-## Solving Equations
+## Example: Invoice with Tax Calculation
+
+**Goal**: Fetch line items, calculate totals with tax, send via email.
 
 ```
-User: Solve for x: 2x² + 5x - 3 = 0
+User: Generate and send invoice #1234
 
-Claude: > execute_tool mcp_name="math-mcp" tool_name="solve_equation"
+Claude:
+
+> execute_tool mcp_name="postgres" tool_name="query"
   parameters={
-    "equation": "2*x^2 + 5*x - 3 = 0",
-    "variable": "x"
+    "sql": "SELECT item, qty, price FROM invoice_lines WHERE invoice_id=1234"
   }
 
-Result: x = 0.5 or x = -3
+Result: [
+  {"item": "Widget A", "qty": 10, "price": 25.00},
+  {"item": "Widget B", "qty": 5, "price": 45.00}
+]
 
-The solutions are x = 0.5 and x = -3
-```
+> execute_tool mcp_name="math-mcp" tool_name="calculate"
+  parameters={"expression": "(10 * 25) + (5 * 45)"}
+Result: 475
 
-## Calculus
+> execute_tool mcp_name="math-mcp" tool_name="calculate"
+  parameters={"expression": "475 * 1.08"}
+Result: 513
 
-### Derivatives
-
-```
-User: What's the derivative of x³ + 2x² - 5x + 1?
-
-Claude: > execute_tool mcp_name="math-mcp" tool_name="derivative"
+> execute_tool mcp_name="email" tool_name="send"
   parameters={
-    "expression": "x^3 + 2*x^2 - 5*x + 1",
-    "variable": "x"
+    "to": "customer@example.com",
+    "subject": "Invoice #1234",
+    "body": "Subtotal: $475.00\nTax (8%): $38.00\nTotal: $513.00"
   }
 
-Result: 3x² + 4x - 5
-
-The derivative is 3x² + 4x - 5
+Invoice sent!
 ```
 
-### Integrals
+## Example: Budget Monitoring
+
+**Goal**: Check spending, compare to budget, alert if over.
 
 ```
-User: Integrate sin(x) * cos(x) dx
+User: Check if marketing is over budget this month
 
-Claude: > execute_tool mcp_name="math-mcp" tool_name="integral"
+Claude:
+
+> execute_tool mcp_name="postgres" tool_name="query"
   parameters={
-    "expression": "sin(x) * cos(x)",
-    "variable": "x"
+    "sql": "SELECT SUM(amount) as spent FROM expenses WHERE dept='marketing' AND month=CURRENT_MONTH"
+  }
+Result: {"spent": 47500}
+
+> execute_tool mcp_name="postgres" tool_name="query"
+  parameters={
+    "sql": "SELECT budget FROM budgets WHERE dept='marketing'"
+  }
+Result: {"budget": 45000}
+
+> execute_tool mcp_name="math-mcp" tool_name="calculate"
+  parameters={"expression": "((47500 - 45000) / 45000) * 100"}
+Result: 5.56
+
+Marketing is 5.6% over budget ($47,500 vs $45,000 budget).
+
+> execute_tool mcp_name="slack" tool_name="post_message"
+  parameters={
+    "channel": "#finance-alerts",
+    "text": "⚠️ Marketing is 5.6% over budget this month"
   }
 
-Result: (sin(x))² / 2 + C
-
-The integral is ½sin²(x) + C
+Alert posted to #finance-alerts.
 ```
 
-## Statistics
+## The Power of Uniform Access
 
-```
-User: Calculate mean, median, and standard deviation of:
-      [23, 45, 67, 89, 12, 34, 56, 78, 90, 11]
+Notice the pattern in every example:
 
-Claude: > execute_tool mcp_name="math-mcp" tool_name="statistics"
-  parameters={
-    "data": [23, 45, 67, 89, 12, 34, 56, 78, 90, 11],
-    "measures": ["mean", "median", "std_dev"]
-  }
+1. **Same interface** - `execute_tool` works identically for every MCP
+2. **Chain results** - Output from one MCP feeds into another
+3. **Mix freely** - Database + math + notifications in one workflow
+4. **Minimal context** - Only the tools you use get loaded
 
-Result: {
-  "mean": 50.5,
-  "median": 50.5,
-  "std_dev": 29.14
-}
-
-Statistics for your data:
-- Mean: 50.5
-- Median: 50.5
-- Standard Deviation: 29.14
-```
-
-## Financial Calculations
-
-### Net Present Value
-
-```
-User: Calculate NPV of cash flows [-1000, 300, 400, 500, 600]
-      at 10% discount rate
-
-Claude: > execute_tool mcp_name="math-mcp" tool_name="financial"
-  parameters={
-    "operation": "npv",
-    "cash_flows": [-1000, 300, 400, 500, 600],
-    "rate": 0.10
-  }
-
-Result: 362.74
-
-The NPV is $362.74 (positive = good investment!)
-```
-
-### Loan Payment
-
-```
-User: Monthly payment for $250,000 mortgage at 6.5% for 30 years?
-
-Claude: > execute_tool mcp_name="math-mcp" tool_name="financial"
-  parameters={
-    "operation": "pmt",
-    "principal": 250000,
-    "rate": 0.065,
-    "periods": 360
-  }
-
-Result: 1580.17
-
-Monthly payment: $1,580.17
-Total paid over 30 years: $568,861.20
-Total interest: $318,861.20
-```
-
-## Unit Conversions
-
-```
-User: Convert 100 kilometers per hour to miles per hour
-
-Claude: > execute_tool mcp_name="math-mcp" tool_name="convert_units"
-  parameters={
-    "value": 100,
-    "from": "km/h",
-    "to": "mph"
-  }
-
-Result: 62.14
-
-100 km/h = 62.14 mph
-```
-
-## Creating a Calculation Skill
-
-For frequently used calculations, create a skill:
-
-```kdl
-// skills/tip-calculator.kdl
-skill "tip" {
-    description "Calculate tip and split bill"
-    mcp "math-mcp"
-    tool "calculate"
-
-    params {
-        amount {
-            description "Bill amount"
-            required true
-        }
-        percent {
-            description "Tip percentage"
-            default 20
-        }
-        split {
-            description "Number of people"
-            default 1
-        }
-    }
-
-    expression "$amount * (1 + $percent/100) / $split"
-}
-```
-
-Now use it:
-
-```
-/tip amount=85.50 percent=18 split=3
-
-Result: Each person pays $33.66 (including 18% tip)
-```
+This is what SLOP enables: **treating all your MCPs as one unified toolkit**.
 
 ## Context Efficiency
 
-Notice that throughout these examples, only the specific tool being used was loaded into context - not all 8 math tools. This is SLOP MCP's lazy loading in action:
+In the commission example above:
 
-```
-Traditional MCP: ~600 tokens (all 8 tool schemas)
-SLOP MCP: ~75 tokens (just the tool you searched for)
-```
+| Approach | Context Used |
+|----------|-------------|
+| Traditional (3 MCPs, ~50 tools) | ~3,750 tokens |
+| SLOP (only tools actually used) | ~300 tokens |
+
+**92% context savings** - and you still had access to all 50 tools.
 
 ## Next Steps
 
-- [MCP Templates](/docs/examples/mcp-templates) - Extract computation patterns
-- [Multi-MCP Orchestration](/docs/examples/multi-mcp-orchestration) - Combine math with other MCPs
+- [MCP Templates](/docs/examples/mcp-templates) - Create reusable multi-MCP patterns
+- [Multi-MCP Orchestration](/docs/examples/multi-mcp-orchestration) - Scale to 17+ MCPs
