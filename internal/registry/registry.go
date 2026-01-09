@@ -75,6 +75,7 @@ type MCPStatus struct {
 	Connected bool   `json:"connected"`
 	ToolCount int    `json:"tool_count"`
 	Source    string `json:"source"`
+	Error     string `json:"error,omitempty"`
 }
 
 // MCPState represents the connection state of an MCP.
@@ -319,20 +320,58 @@ func (r *Registry) Disconnect(name string) error {
 	return nil
 }
 
-// List returns all registered MCPs.
+// Reconnect disconnects and reconnects an MCP server.
+// This is useful after OAuth authentication to establish a connection with new credentials.
+func (r *Registry) Reconnect(ctx context.Context, name string) error {
+	// Get the config from state (under read lock first)
+	r.mu.RLock()
+	state, exists := r.states[name]
+	if !exists {
+		r.mu.RUnlock()
+		return fmt.Errorf("MCP not configured: %s", name)
+	}
+	cfg := state.config
+	r.mu.RUnlock()
+
+	// Disconnect if currently connected (ignore errors - might not be connected)
+	_ = r.Disconnect(name)
+
+	// Reconnect with the stored config (will pick up new auth token)
+	return r.Connect(ctx, cfg)
+}
+
+// List returns all configured MCPs (including disconnected ones).
 func (r *Registry) List() []MCPStatus {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	result := make([]MCPStatus, 0, len(r.connections))
-	for name, conn := range r.connections {
+	result := make([]MCPStatus, 0, len(r.states))
+	for name, state := range r.states {
 		status := MCPStatus{
 			Name:      name,
-			Type:      conn.config.Type,
-			Connected: true,
-			ToolCount: r.toolIndex.CountForMCP(name),
-			Source:    conn.config.Source.String(),
+			Type:      state.config.Type,
+			Connected: state.state == StateConnected,
+			Source:    state.config.Source.String(),
 		}
+
+		// Add tool count if connected
+		if status.Connected {
+			status.ToolCount = r.toolIndex.CountForMCP(name)
+		}
+
+		// Add error message if in error state
+		if state.err != nil {
+			status.Error = state.err.Error()
+		} else if state.state == StateNeedsAuth {
+			status.Error = "authentication required"
+		} else if state.state == StateDisconnected {
+			status.Error = "disconnected"
+		} else if state.state == StateConfigured {
+			status.Error = "not connected (configured but never attempted)"
+		} else if state.state == StateConnecting {
+			status.Error = "connecting..."
+		}
+
 		result = append(result, status)
 	}
 

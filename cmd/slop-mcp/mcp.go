@@ -35,12 +35,42 @@ func cmdMCPAdd(args []string) {
 	var positional []string
 	for i := 0; i < len(args); i++ {
 		switch {
-		case args[i] == "--local":
+		case args[i] == "--local" || args[i] == "-l":
 			scope = config.ScopeLocal
-		case args[i] == "--project":
+		case args[i] == "--project" || args[i] == "-p":
 			scope = config.ScopeProject
-		case args[i] == "--user":
+		case args[i] == "--user" || args[i] == "-u":
 			scope = config.ScopeUser
+		case args[i] == "--scope" || args[i] == "-s":
+			if i+1 >= len(args) {
+				fmt.Fprintln(os.Stderr, "Error: --scope requires a value (local, project, or user)")
+				os.Exit(1)
+			}
+			i++
+			switch args[i] {
+			case "local":
+				scope = config.ScopeLocal
+			case "project":
+				scope = config.ScopeProject
+			case "user":
+				scope = config.ScopeUser
+			default:
+				fmt.Fprintf(os.Stderr, "Error: invalid scope '%s' (must be local, project, or user)\n", args[i])
+				os.Exit(1)
+			}
+		case strings.HasPrefix(args[i], "--scope="):
+			scopeVal := strings.TrimPrefix(args[i], "--scope=")
+			switch scopeVal {
+			case "local":
+				scope = config.ScopeLocal
+			case "project":
+				scope = config.ScopeProject
+			case "user":
+				scope = config.ScopeUser
+			default:
+				fmt.Fprintf(os.Stderr, "Error: invalid scope '%s' (must be local, project, or user)\n", scopeVal)
+				os.Exit(1)
+			}
 		case args[i] == "--transport" || args[i] == "-t":
 			if i+1 >= len(args) {
 				fmt.Fprintln(os.Stderr, "Error: --transport requires a value")
@@ -176,9 +206,10 @@ Arguments:
   [args...]    Arguments to pass to the command
 
 Options:
-  --local       Add to local config (.slop-mcp.local.kdl, gitignored)
-  --project     Add to project config (.slop-mcp.kdl) [default]
-  --user        Add to user config (~/.config/slop-mcp/config.kdl)
+  -l, --local       Add to local config (.slop-mcp.local.kdl, gitignored)
+  -p, --project     Add to project config (.slop-mcp.kdl) [default]
+  -u, --user        Add to user config (~/.config/slop-mcp/config.kdl)
+  -s, --scope=<scope>  Set scope: local, project, or user
 
   --transport=<type>, -t <type>
                 Transport type: stdio (default), sse, http, streamable
@@ -220,14 +251,44 @@ func cmdMCPAddJSON(args []string) {
 
 	var positional []string
 	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--local":
+		switch {
+		case args[i] == "--local" || args[i] == "-l":
 			scope = config.ScopeLocal
-		case "--project":
+		case args[i] == "--project" || args[i] == "-p":
 			scope = config.ScopeProject
-		case "--user":
+		case args[i] == "--user" || args[i] == "-u":
 			scope = config.ScopeUser
-		case "--help", "-h":
+		case args[i] == "--scope" || args[i] == "-s":
+			if i+1 >= len(args) {
+				fmt.Fprintln(os.Stderr, "Error: --scope requires a value (local, project, or user)")
+				os.Exit(1)
+			}
+			i++
+			switch args[i] {
+			case "local":
+				scope = config.ScopeLocal
+			case "project":
+				scope = config.ScopeProject
+			case "user":
+				scope = config.ScopeUser
+			default:
+				fmt.Fprintf(os.Stderr, "Error: invalid scope '%s' (must be local, project, or user)\n", args[i])
+				os.Exit(1)
+			}
+		case strings.HasPrefix(args[i], "--scope="):
+			scopeVal := strings.TrimPrefix(args[i], "--scope=")
+			switch scopeVal {
+			case "local":
+				scope = config.ScopeLocal
+			case "project":
+				scope = config.ScopeProject
+			case "user":
+				scope = config.ScopeUser
+			default:
+				fmt.Fprintf(os.Stderr, "Error: invalid scope '%s' (must be local, project, or user)\n", scopeVal)
+				os.Exit(1)
+			}
+		case args[i] == "--help" || args[i] == "-h":
 			printMCPAddJSONUsage()
 			return
 		default:
@@ -295,14 +356,44 @@ func cmdMCPAddFromClaudeDesktop(args []string) {
 	var specificNames []string
 
 	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--local":
+		switch {
+		case args[i] == "--local" || args[i] == "-l":
 			scope = config.ScopeLocal
-		case "--project":
+		case args[i] == "--project" || args[i] == "-p":
 			scope = config.ScopeProject
-		case "--user":
+		case args[i] == "--user" || args[i] == "-u":
 			scope = config.ScopeUser
-		case "--help", "-h":
+		case args[i] == "--scope" || args[i] == "-s":
+			if i+1 >= len(args) {
+				fmt.Fprintln(os.Stderr, "Error: --scope requires a value (local, project, or user)")
+				os.Exit(1)
+			}
+			i++
+			switch args[i] {
+			case "local":
+				scope = config.ScopeLocal
+			case "project":
+				scope = config.ScopeProject
+			case "user":
+				scope = config.ScopeUser
+			default:
+				fmt.Fprintf(os.Stderr, "Error: invalid scope '%s' (must be local, project, or user)\n", args[i])
+				os.Exit(1)
+			}
+		case strings.HasPrefix(args[i], "--scope="):
+			scopeVal := strings.TrimPrefix(args[i], "--scope=")
+			switch scopeVal {
+			case "local":
+				scope = config.ScopeLocal
+			case "project":
+				scope = config.ScopeProject
+			case "user":
+				scope = config.ScopeUser
+			default:
+				fmt.Fprintf(os.Stderr, "Error: invalid scope '%s' (must be local, project, or user)\n", scopeVal)
+				os.Exit(1)
+			}
+		case args[i] == "--help" || args[i] == "-h":
 			printMCPAddFromClaudeDesktopUsage()
 			return
 		default:
@@ -549,14 +640,44 @@ func cmdMCPRemove(args []string) {
 	scope := config.ScopeProject
 
 	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--local":
+		switch {
+		case args[i] == "--local" || args[i] == "-l":
 			scope = config.ScopeLocal
-		case "--project":
+		case args[i] == "--project" || args[i] == "-p":
 			scope = config.ScopeProject
-		case "--user":
+		case args[i] == "--user" || args[i] == "-u":
 			scope = config.ScopeUser
-		case "--help", "-h":
+		case args[i] == "--scope" || args[i] == "-s":
+			if i+1 >= len(args) {
+				fmt.Fprintln(os.Stderr, "Error: --scope requires a value (local, project, or user)")
+				os.Exit(1)
+			}
+			i++
+			switch args[i] {
+			case "local":
+				scope = config.ScopeLocal
+			case "project":
+				scope = config.ScopeProject
+			case "user":
+				scope = config.ScopeUser
+			default:
+				fmt.Fprintf(os.Stderr, "Error: invalid scope '%s' (must be local, project, or user)\n", args[i])
+				os.Exit(1)
+			}
+		case strings.HasPrefix(args[i], "--scope="):
+			scopeVal := strings.TrimPrefix(args[i], "--scope=")
+			switch scopeVal {
+			case "local":
+				scope = config.ScopeLocal
+			case "project":
+				scope = config.ScopeProject
+			case "user":
+				scope = config.ScopeUser
+			default:
+				fmt.Fprintf(os.Stderr, "Error: invalid scope '%s' (must be local, project, or user)\n", scopeVal)
+				os.Exit(1)
+			}
+		case args[i] == "--help" || args[i] == "-h":
 			printMCPRemoveUsage()
 			return
 		default:

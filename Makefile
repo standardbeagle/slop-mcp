@@ -20,6 +20,8 @@ GOMOD := $(GOCMD) mod
 # Build flags
 LDFLAGS := -s -w
 BUILD_FLAGS := -ldflags "$(LDFLAGS)"
+# OAuth support required for MCPs like Figma, Dart
+BUILD_TAGS := -tags mcp_go_client_oauth
 
 # Default target
 all: build
@@ -28,13 +30,7 @@ all: build
 build:
 	@echo "Building $(BINARY)..."
 	@mkdir -p $(BUILD_DIR)
-	$(GOBUILD) $(BUILD_FLAGS) -o $(BUILD_DIR)/$(BINARY) ./cmd/slop-mcp
-
-# Build with OAuth support (enables login to MCPs like Figma, Dart)
-build-oauth:
-	@echo "Building $(BINARY) with OAuth support..."
-	@mkdir -p $(BUILD_DIR)
-	$(GOBUILD) $(BUILD_FLAGS) -tags mcp_go_client_oauth -o $(BUILD_DIR)/$(BINARY) ./cmd/slop-mcp
+	$(GOBUILD) $(BUILD_FLAGS) $(BUILD_TAGS) -o $(BUILD_DIR)/$(BINARY) ./cmd/slop-mcp
 
 # Build the mock MCP server for testing
 build-mock:
@@ -85,17 +81,11 @@ clean:
 	@rm -rf $(BUILD_DIR)
 	@rm -f $(MOCK_MCP_DIR)/mock-mcp
 
-# Install to ~/.local/bin using install command
+# Install to ~/.local/bin
 install: build
 	@echo "Installing $(BINARY) to $(INSTALL_DIR)..."
 	install -D -m 755 $(BUILD_DIR)/$(BINARY) $(INSTALL_DIR)/$(BINARY)
 	@echo "Installed $(BINARY) to $(INSTALL_DIR)/$(BINARY)"
-
-# Install with OAuth support
-install-oauth: build-oauth
-	@echo "Installing $(BINARY) (with OAuth) to $(INSTALL_DIR)..."
-	install -D -m 755 $(BUILD_DIR)/$(BINARY) $(INSTALL_DIR)/$(BINARY)
-	@echo "Installed $(BINARY) with OAuth support to $(INSTALL_DIR)/$(BINARY)"
 
 # Uninstall from ~/.local/bin
 uninstall:
@@ -107,7 +97,6 @@ uninstall:
 help:
 	@echo "Available targets:"
 	@echo "  build            - Build the binary"
-	@echo "  build-oauth      - Build with OAuth support (for Figma, Dart, etc.)"
 	@echo "  build-mock       - Build the mock MCP server for testing"
 	@echo "  test             - Run unit tests (short mode)"
 	@echo "  test-mock        - Run integration tests with mock MCP (fast)"
@@ -118,6 +107,5 @@ help:
 	@echo "  tidy             - Tidy go.mod dependencies"
 	@echo "  clean            - Remove build artifacts"
 	@echo "  install          - Build and install to ~/.local/bin"
-	@echo "  install-oauth    - Build with OAuth and install to ~/.local/bin"
 	@echo "  uninstall        - Remove from ~/.local/bin"
 	@echo "  help             - Show this help"

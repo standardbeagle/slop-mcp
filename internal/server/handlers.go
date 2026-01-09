@@ -258,21 +258,25 @@ func (s *Server) handleAuthMCP(
 
 		// Get MCP config to find the URL
 		var serverURL string
+		var mcpCfg *config.MCPConfig
 		configs := s.registry.GetConfigs()
 		for _, cfg := range configs {
 			if cfg.Name == input.Name {
 				serverURL = cfg.URL
+				cfgCopy := cfg
+				mcpCfg = &cfgCopy
 				break
 			}
 		}
 
 		if serverURL == "" {
 			// Check if it's configured but not connected
-			mcpCfg, err := s.findMCPConfig(input.Name)
+			foundCfg, err := s.findMCPConfig(input.Name)
 			if err != nil {
 				return nil, AuthMCPOutput{}, fmt.Errorf("MCP '%s' not found and no URL configured", input.Name)
 			}
-			serverURL = mcpCfg.URL
+			serverURL = foundCfg.URL
+			mcpCfg = foundCfg
 		}
 
 		if serverURL == "" {
@@ -290,8 +294,25 @@ func (s *Server) handleAuthMCP(
 			return nil, AuthMCPOutput{}, fmt.Errorf("OAuth flow failed: %w", err)
 		}
 
+		// Reconnect the MCP to use the new credentials
+		reconnectMsg := ""
+		if err := s.registry.Reconnect(ctx, input.Name); err != nil {
+			// If reconnect fails because MCP isn't in registry, try connecting with the config
+			if mcpCfg != nil {
+				if connectErr := s.registry.Connect(ctx, *mcpCfg); connectErr != nil {
+					reconnectMsg = fmt.Sprintf(" (connection failed: %v)", connectErr)
+				} else {
+					reconnectMsg = " - connection established with new credentials"
+				}
+			} else {
+				reconnectMsg = fmt.Sprintf(" (reconnect failed: %v)", err)
+			}
+		} else {
+			reconnectMsg = " - connection re-established with new credentials"
+		}
+
 		return nil, AuthMCPOutput{
-			Message: fmt.Sprintf("Successfully authenticated with %s", input.Name),
+			Message: fmt.Sprintf("Successfully authenticated with %s%s", input.Name, reconnectMsg),
 			Status: &AuthStatusInfo{
 				ServerName: result.Token.ServerName,
 				ServerURL:  result.Token.ServerURL,
