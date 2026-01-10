@@ -223,8 +223,8 @@ func (r *Registry) Connect(ctx context.Context, cfg config.MCPConfig) error {
 		sseTransport := &mcp.SSEClientTransport{
 			Endpoint: cfg.URL,
 		}
-		// Apply custom headers and/or OAuth token
-		if httpClient := r.buildHTTPClient(cfg); httpClient != nil {
+		// Apply custom headers and/or OAuth token (refreshes expired tokens automatically)
+		if httpClient := r.buildHTTPClient(ctx, cfg); httpClient != nil {
 			sseTransport.HTTPClient = httpClient
 		}
 		transport = sseTransport
@@ -233,8 +233,8 @@ func (r *Registry) Connect(ctx context.Context, cfg config.MCPConfig) error {
 		streamTransport := &mcp.StreamableClientTransport{
 			Endpoint: cfg.URL,
 		}
-		// Apply custom headers and/or OAuth token
-		if httpClient := r.buildHTTPClient(cfg); httpClient != nil {
+		// Apply custom headers and/or OAuth token (refreshes expired tokens automatically)
+		if httpClient := r.buildHTTPClient(ctx, cfg); httpClient != nil {
 			streamTransport.HTTPClient = httpClient
 		}
 		transport = streamTransport
@@ -691,6 +691,45 @@ func (r *Registry) getStoredToken(serverName string) *auth.MCPToken {
 	return token
 }
 
+// getValidToken retrieves a stored token and refreshes it if expired.
+// Returns the valid token or nil if unavailable/refresh failed.
+func (r *Registry) getValidToken(ctx context.Context, serverName string) *auth.MCPToken {
+	store := auth.NewTokenStore()
+	token, err := store.GetToken(serverName)
+	if err != nil || token == nil {
+		return nil
+	}
+
+	// Token is valid, use it
+	if !token.IsExpired() {
+		return token
+	}
+
+	// Token expired - try to refresh
+	if token.RefreshToken == "" || token.TokenEndpoint == "" {
+		// Can't refresh without refresh token or endpoint
+		return nil
+	}
+
+	// Attempt refresh with a timeout
+	refreshCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	newToken, err := auth.RefreshToken(refreshCtx, token, token.TokenEndpoint)
+	if err != nil {
+		// Refresh failed - token is unusable
+		return nil
+	}
+
+	// Save the refreshed token
+	if err := store.SetToken(newToken); err != nil {
+		// Failed to save but token is still valid for this request
+		return newToken
+	}
+
+	return newToken
+}
+
 // headersTransport is an http.RoundTripper that adds custom headers to requests.
 type headersTransport struct {
 	base    http.RoundTripper
@@ -707,7 +746,8 @@ func (t *headersTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 }
 
 // buildHTTPClient creates an HTTP client with custom headers and/or OAuth token.
-func (r *Registry) buildHTTPClient(cfg config.MCPConfig) *http.Client {
+// If the stored token is expired, it will attempt to refresh it using the refresh token.
+func (r *Registry) buildHTTPClient(ctx context.Context, cfg config.MCPConfig) *http.Client {
 	headers := make(map[string]string)
 
 	// Add headers from config
@@ -716,7 +756,8 @@ func (r *Registry) buildHTTPClient(cfg config.MCPConfig) *http.Client {
 	}
 
 	// Add OAuth token if available (overrides config Authorization header)
-	if token := r.getStoredToken(cfg.Name); token != nil && !token.IsExpired() {
+	// This will automatically refresh expired tokens if possible
+	if token := r.getValidToken(ctx, cfg.Name); token != nil {
 		headers["Authorization"] = "Bearer " + token.AccessToken
 	}
 

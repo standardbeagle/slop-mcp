@@ -33,15 +33,16 @@ type TokenStore struct {
 
 // MCPToken represents stored OAuth tokens for an MCP server.
 type MCPToken struct {
-	ServerName   string    `json:"server_name"`
-	ServerURL    string    `json:"server_url"`
-	ClientID     string    `json:"client_id"`
-	ClientSecret string    `json:"client_secret,omitempty"`
-	AccessToken  string    `json:"access_token"`
-	RefreshToken string    `json:"refresh_token,omitempty"`
-	TokenType    string    `json:"token_type"`
-	ExpiresAt    time.Time `json:"expires_at,omitempty"`
-	Scope        string    `json:"scope,omitempty"`
+	ServerName    string    `json:"server_name"`
+	ServerURL     string    `json:"server_url"`
+	ClientID      string    `json:"client_id"`
+	ClientSecret  string    `json:"client_secret,omitempty"`
+	AccessToken   string    `json:"access_token"`
+	RefreshToken  string    `json:"refresh_token,omitempty"`
+	TokenType     string    `json:"token_type"`
+	ExpiresAt     time.Time `json:"expires_at,omitempty"`
+	Scope         string    `json:"scope,omitempty"`
+	TokenEndpoint string    `json:"token_endpoint,omitempty"` // For refresh token flow
 }
 
 // TokenFile is the structure of the auth token file.
@@ -249,14 +250,15 @@ func (f *OAuthFlow) DiscoverAndAuth(ctx context.Context) (*AuthResult, error) {
 		}
 
 		mcpToken := &MCPToken{
-			ServerName:   f.ServerName,
-			ServerURL:    f.ServerURL,
-			ClientID:     clientID,
-			ClientSecret: clientSecret,
-			AccessToken:  token.AccessToken,
-			RefreshToken: token.RefreshToken,
-			TokenType:    token.TokenType,
-			ExpiresAt:    token.Expiry,
+			ServerName:    f.ServerName,
+			ServerURL:     f.ServerURL,
+			ClientID:      clientID,
+			ClientSecret:  clientSecret,
+			AccessToken:   token.AccessToken,
+			RefreshToken:  token.RefreshToken,
+			TokenType:     token.TokenType,
+			ExpiresAt:     token.Expiry,
+			TokenEndpoint: asm.TokenEndpoint, // Store for refresh token flow
 		}
 
 		// Save token
@@ -490,13 +492,14 @@ func RefreshToken(ctx context.Context, token *MCPToken, tokenEndpoint string) (*
 	}
 
 	newToken := &MCPToken{
-		ServerName:   token.ServerName,
-		ServerURL:    token.ServerURL,
-		ClientID:     token.ClientID,
-		ClientSecret: token.ClientSecret,
-		AccessToken:  tokenResp.AccessToken,
-		TokenType:    tokenResp.TokenType,
-		ExpiresAt:    time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second),
+		ServerName:    token.ServerName,
+		ServerURL:     token.ServerURL,
+		ClientID:      token.ClientID,
+		ClientSecret:  token.ClientSecret,
+		AccessToken:   tokenResp.AccessToken,
+		TokenType:     tokenResp.TokenType,
+		ExpiresAt:     time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second),
+		TokenEndpoint: token.TokenEndpoint, // Preserve token endpoint
 	}
 	if tokenResp.RefreshToken != "" {
 		newToken.RefreshToken = tokenResp.RefreshToken

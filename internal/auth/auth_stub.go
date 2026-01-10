@@ -22,15 +22,16 @@ type TokenStore struct {
 
 // MCPToken represents stored OAuth tokens for an MCP server.
 type MCPToken struct {
-	ServerName   string    `json:"server_name"`
-	ServerURL    string    `json:"server_url"`
-	ClientID     string    `json:"client_id"`
-	ClientSecret string    `json:"client_secret,omitempty"`
-	AccessToken  string    `json:"access_token"`
-	RefreshToken string    `json:"refresh_token,omitempty"`
-	TokenType    string    `json:"token_type"`
-	ExpiresAt    time.Time `json:"expires_at,omitempty"`
-	Scope        string    `json:"scope,omitempty"`
+	ServerName    string    `json:"server_name"`
+	ServerURL     string    `json:"server_url"`
+	ClientID      string    `json:"client_id"`
+	ClientSecret  string    `json:"client_secret,omitempty"`
+	AccessToken   string    `json:"access_token"`
+	RefreshToken  string    `json:"refresh_token,omitempty"`
+	TokenType     string    `json:"token_type"`
+	ExpiresAt     time.Time `json:"expires_at,omitempty"`
+	Scope         string    `json:"scope,omitempty"`
+	TokenEndpoint string    `json:"token_endpoint,omitempty"` // For refresh token flow
 }
 
 // TokenFile is the structure of the auth token file.
