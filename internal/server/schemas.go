@@ -147,6 +147,10 @@ var manageMCPsInputSchema = json.RawMessage(`{
 			"type": "object",
 			"description": "HTTP headers for HTTP transports",
 			"additionalProperties": {"type": "string"}
+		},
+		"scope": {
+			"type": "string",
+			"description": "Where to save: memory (default, runtime only), user (~/.config/slop-mcp/config.kdl), or project (.slop-mcp.kdl)"
 		}
 	},
 	"required": ["action"],

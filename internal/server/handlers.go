@@ -148,6 +148,7 @@ type ManageMCPsInput struct {
 	Env     map[string]string `json:"env,omitempty" jsonschema:"Environment variables"`
 	URL     string            `json:"url,omitempty" jsonschema:"Server URL for HTTP transports"`
 	Headers map[string]string `json:"headers,omitempty" jsonschema:"HTTP headers for HTTP transports"`
+	Scope   string            `json:"scope,omitempty" jsonschema:"Where to save: memory (default, runtime only), user (~/.config/slop-mcp/config.kdl), or project (.slop-mcp.kdl)"`
 }
 
 // ManageMCPsOutput is the output for the manage_mcps tool.
@@ -173,6 +174,24 @@ func (s *Server) handleManageMCPs(
 			transportType = "command"
 		}
 
+		// Determine source based on scope
+		scope := input.Scope
+		if scope == "" {
+			scope = "memory"
+		}
+
+		var source config.Source
+		switch scope {
+		case "memory":
+			source = config.SourceRuntime
+		case "user":
+			source = config.SourceUser
+		case "project":
+			source = config.SourceProject
+		default:
+			return nil, ManageMCPsOutput{}, fmt.Errorf("invalid scope: %s (must be memory, user, or project)", scope)
+		}
+
 		cfg := config.MCPConfig{
 			Name:    input.Name,
 			Type:    transportType,
@@ -181,15 +200,40 @@ func (s *Server) handleManageMCPs(
 			Env:     input.Env,
 			URL:     input.URL,
 			Headers: input.Headers,
-			Source:  config.SourceRuntime,
+			Source:  source,
 		}
 
+		// Persist to file if not memory scope
+		if scope != "memory" {
+			var configPath string
+			if scope == "user" {
+				configPath = config.UserConfigPath()
+			} else {
+				// Use current working directory for project scope
+				cwd, err := os.Getwd()
+				if err != nil {
+					return nil, ManageMCPsOutput{}, fmt.Errorf("failed to get working directory: %w", err)
+				}
+				configPath = config.ProjectConfigPath(cwd)
+			}
+
+			if err := config.AddMCPConfigToFile(configPath, cfg); err != nil {
+				return nil, ManageMCPsOutput{}, fmt.Errorf("failed to save MCP to %s: %w", configPath, err)
+			}
+		}
+
+		// Also connect at runtime
 		if err := s.registry.Connect(ctx, cfg); err != nil {
 			return nil, ManageMCPsOutput{}, fmt.Errorf("failed to register MCP: %w", err)
 		}
 
+		msg := fmt.Sprintf("Successfully registered MCP: %s", input.Name)
+		if scope != "memory" {
+			msg += fmt.Sprintf(" (saved to %s scope)", scope)
+		}
+
 		return nil, ManageMCPsOutput{
-			Message: fmt.Sprintf("Successfully registered MCP: %s", input.Name),
+			Message: msg,
 		}, nil
 
 	case "unregister":
