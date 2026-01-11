@@ -5,6 +5,17 @@ import (
 	"sync"
 )
 
+// normalize converts a string to lowercase and normalizes separators
+// (underscores, hyphens, spaces) to enable fuzzy matching.
+// e.g., "code_insight", "code-insight", "code insight" all become "codeinsight"
+func normalize(s string) string {
+	s = strings.ToLower(s)
+	s = strings.ReplaceAll(s, "_", "")
+	s = strings.ReplaceAll(s, "-", "")
+	s = strings.ReplaceAll(s, " ", "")
+	return s
+}
+
 // ToolIndex indexes tools for efficient searching.
 type ToolIndex struct {
 	// mcpName -> list of tools
@@ -34,12 +45,16 @@ func (idx *ToolIndex) Remove(mcpName string) {
 }
 
 // Search searches tools by query and optionally filters by MCP name.
+// Search is case-insensitive and supports fuzzy matching by normalizing
+// separators (underscores, hyphens, spaces). For example, "code insight"
+// will match "code_insight", "code-insight", and "CodeInsight".
 func (idx *ToolIndex) Search(query, mcpName string) []ToolInfo {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 
 	var results []ToolInfo
 	queryLower := strings.ToLower(query)
+	queryNorm := normalize(query)
 
 	for mcp, tools := range idx.byMCP {
 		// Filter by MCP name if specified
@@ -54,9 +69,17 @@ func (idx *ToolIndex) Search(query, mcpName string) []ToolInfo {
 				continue
 			}
 
-			// Match against name or description
-			if strings.Contains(strings.ToLower(tool.Name), queryLower) ||
-				strings.Contains(strings.ToLower(tool.Description), queryLower) {
+			// Match against name or description using both exact and fuzzy matching
+			nameLower := strings.ToLower(tool.Name)
+			descLower := strings.ToLower(tool.Description)
+			nameNorm := normalize(tool.Name)
+			descNorm := normalize(tool.Description)
+
+			// Exact case-insensitive match or fuzzy normalized match
+			if strings.Contains(nameLower, queryLower) ||
+				strings.Contains(descLower, queryLower) ||
+				strings.Contains(nameNorm, queryNorm) ||
+				strings.Contains(descNorm, queryNorm) {
 				results = append(results, tool)
 			}
 		}
