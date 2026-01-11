@@ -5,7 +5,7 @@ import (
 	"os"
 )
 
-const version = "0.3.0"
+var Version = "dev"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -55,7 +55,7 @@ func main() {
 			os.Exit(1)
 		}
 	case "version", "-v", "--version":
-		fmt.Printf("slop-mcp version %s\n", version)
+		fmt.Printf("slop-mcp version %s\n", Version)
 	case "help", "-h", "--help":
 		printUsage()
 	default:
