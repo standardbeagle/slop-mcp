@@ -6,7 +6,7 @@ slop-mcp is an MCP orchestrator that lets you connect dozens of MCP servers whil
 
 ```
 Without slop-mcp:  50 MCPs × 20 tools = 1000 tool definitions in context
-With slop-mcp:     50 MCPs × 20 tools = 5 tool definitions in context
+With slop-mcp:     50 MCPs × 20 tools = 6 tool definitions in context
 ```
 
 ## Documentation
@@ -32,17 +32,18 @@ slop-mcp takes a different but complementary approach: instead of code execution
 
 ### Progressive Tool Discovery
 
-Rather than loading all tool definitions upfront, slop-mcp exposes just 5 meta-tools:
+Rather than loading all tool definitions upfront, slop-mcp exposes just 6 meta-tools:
 
 | Tool | Purpose |
 |------|---------|
 | `search_tools` | Find tools across all connected MCPs by name or description |
 | `execute_tool` | Execute a specific tool on a specific MCP |
+| `get_metadata` | Get full metadata (tools, prompts, resources) for connected MCPs |
 | `run_slop` | Execute SLOP scripts with access to all MCPs |
 | `manage_mcps` | Register/unregister MCPs at runtime |
 | `auth_mcp` | Handle OAuth authentication for MCPs that require it |
 
-This means an agent connecting to slop-mcp sees **5 tool definitions** regardless of how many MCPs are connected or how many tools they expose. The agent discovers tools on-demand via `search_tools` and executes them via `execute_tool`.
+This means an agent connecting to slop-mcp sees **6 tool definitions** regardless of how many MCPs are connected or how many tools they expose. The agent discovers tools on-demand via `search_tools` and executes them via `execute_tool`.
 
 ### Lazy Connection & Async Startup
 
@@ -81,10 +82,10 @@ Tools are indexed locally when MCPs connect:
 ┌─────────────────────────────────────────────────────┐
 │              slop-mcp Server                        │
 │  ┌───────────────────────────────────────────────┐  │
-│  │  5 Meta-Tools (constant context cost)         │  │
+│  │  6 Meta-Tools (constant context cost)         │  │
 │  │  • search_tools    • execute_tool             │  │
-│  │  • run_slop        • manage_mcps              │  │
-│  │  • auth_mcp                                   │  │
+│  │  • get_metadata    • run_slop                 │  │
+│  │  • manage_mcps     • auth_mcp                 │  │
 │  └───────────────────────────────────────────────┘  │
 │                          │                          │
 │         ┌────────────────┼────────────────┐         │
@@ -199,7 +200,7 @@ Add to your Claude Desktop config:
 | Aspect | Code Execution (Article) | slop-mcp |
 |--------|-------------------------|----------|
 | Tool Discovery | Filesystem exploration | `search_tools` with fuzzy matching |
-| Context Cost | Minimal (code interpreter) | Constant (5 meta-tools) |
+| Context Cost | Minimal (code interpreter) | Constant (6 meta-tools) |
 | Data Processing | In-sandbox code | SLOP scripts via `run_slop` |
 | Infrastructure | Secure sandbox required | Standard MCP servers |
 | Flexibility | Full code execution | Structured tool orchestration |

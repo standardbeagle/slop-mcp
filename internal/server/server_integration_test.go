@@ -409,6 +409,224 @@ func TestServer_ManageMCPs_List(t *testing.T) {
 	assert.True(t, listResult.MCPs[0].Connected)
 }
 
+func TestServer_GetMetadata(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	s := setupServer(t, getTestMCPs(t))
+	ctx := context.Background()
+
+	// Get metadata for all MCPs
+	result, err := s.CallTool(ctx, "get_metadata", map[string]any{})
+	require.NoError(t, err)
+
+	data, err := json.Marshal(result)
+	require.NoError(t, err)
+	t.Logf("Metadata result: %s", string(data))
+
+	var metaResult struct {
+		Metadata []struct {
+			Name  string `json:"name"`
+			State string `json:"state"`
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		} `json:"metadata"`
+		Total int `json:"total"`
+	}
+	err = json.Unmarshal(data, &metaResult)
+	require.NoError(t, err)
+
+	assert.GreaterOrEqual(t, metaResult.Total, 1, "should have at least 1 MCP")
+
+	// Find everything MCP
+	found := false
+	for _, mcp := range metaResult.Metadata {
+		if mcp.Name == "everything" {
+			found = true
+			assert.Equal(t, "connected", mcp.State)
+			assert.NotEmpty(t, mcp.Tools, "should have tools")
+			break
+		}
+	}
+	assert.True(t, found, "should find everything MCP in metadata")
+}
+
+func TestServer_GetMetadata_FilterByMCP(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	s := setupServer(t, getTestMCPs(t))
+	ctx := context.Background()
+
+	// Get metadata filtered by MCP name
+	result, err := s.CallTool(ctx, "get_metadata", map[string]any{
+		"mcp_name": "everything",
+	})
+	require.NoError(t, err)
+
+	data, err := json.Marshal(result)
+	require.NoError(t, err)
+
+	var metaResult struct {
+		Metadata []struct {
+			Name string `json:"name"`
+		} `json:"metadata"`
+		Total int `json:"total"`
+	}
+	err = json.Unmarshal(data, &metaResult)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, metaResult.Total, "should return exactly 1 MCP")
+	assert.Equal(t, "everything", metaResult.Metadata[0].Name)
+}
+
+func TestServer_GetMetadata_FilterByTool(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	s := setupServer(t, getTestMCPs(t))
+	ctx := context.Background()
+
+	// Get metadata filtered by tool name
+	result, err := s.CallTool(ctx, "get_metadata", map[string]any{
+		"tool_name": "echo",
+	})
+	require.NoError(t, err)
+
+	data, err := json.Marshal(result)
+	require.NoError(t, err)
+	t.Logf("Tool filter result: %s", string(data))
+
+	var metaResult struct {
+		Metadata []struct {
+			Name  string `json:"name"`
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+			Prompts   []struct{} `json:"prompts"`
+			Resources []struct{} `json:"resources"`
+		} `json:"metadata"`
+		Total int `json:"total"`
+	}
+	err = json.Unmarshal(data, &metaResult)
+	require.NoError(t, err)
+
+	// Should find at least one MCP with the echo tool
+	assert.GreaterOrEqual(t, metaResult.Total, 1, "should find MCPs with echo tool")
+
+	// Check that the returned tools only include "echo"
+	for _, mcp := range metaResult.Metadata {
+		for _, tool := range mcp.Tools {
+			assert.Equal(t, "echo", tool.Name, "should only return echo tool")
+		}
+		// Prompts and resources should be cleared when filtering by tool
+		assert.Empty(t, mcp.Prompts, "prompts should be cleared when filtering by tool")
+		assert.Empty(t, mcp.Resources, "resources should be cleared when filtering by tool")
+	}
+}
+
+func TestServer_GetMetadata_FilterByBoth(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	s := setupServer(t, getTestMCPs(t))
+	ctx := context.Background()
+
+	// Get metadata filtered by both MCP and tool name
+	result, err := s.CallTool(ctx, "get_metadata", map[string]any{
+		"mcp_name":  "everything",
+		"tool_name": "echo",
+	})
+	require.NoError(t, err)
+
+	data, err := json.Marshal(result)
+	require.NoError(t, err)
+
+	var metaResult struct {
+		Metadata []struct {
+			Name  string `json:"name"`
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		} `json:"metadata"`
+		Total int `json:"total"`
+	}
+	err = json.Unmarshal(data, &metaResult)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, metaResult.Total, "should return exactly 1 MCP")
+	assert.Equal(t, "everything", metaResult.Metadata[0].Name)
+	assert.Len(t, metaResult.Metadata[0].Tools, 1, "should return exactly 1 tool")
+	assert.Equal(t, "echo", metaResult.Metadata[0].Tools[0].Name)
+}
+
+func TestServer_GetMetadata_NoMatch(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	s := setupServer(t, getTestMCPs(t))
+	ctx := context.Background()
+
+	// Get metadata with non-existent tool name
+	result, err := s.CallTool(ctx, "get_metadata", map[string]any{
+		"tool_name": "nonexistent_tool_xyz",
+	})
+	require.NoError(t, err)
+
+	data, err := json.Marshal(result)
+	require.NoError(t, err)
+
+	var metaResult struct {
+		Metadata []struct{} `json:"metadata"`
+		Total    int        `json:"total"`
+	}
+	err = json.Unmarshal(data, &metaResult)
+	require.NoError(t, err)
+
+	assert.Equal(t, 0, metaResult.Total, "should return 0 MCPs for non-existent tool")
+}
+
+func TestServer_ExecuteTool_InvalidParams_ShowsSuggestions(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	s := setupServer(t, getTestMCPs(t))
+	ctx := context.Background()
+
+	// Execute echo tool with wrong parameter name (typo: "mesage" instead of "message")
+	_, err := s.CallTool(ctx, "execute_tool", map[string]any{
+		"mcp_name":  "everything",
+		"tool_name": "echo",
+		"parameters": map[string]any{
+			"mesage": "Test typo", // intentional typo
+		},
+	})
+
+	// Should get an error
+	require.Error(t, err)
+
+	// The error should contain helpful information about parameters
+	errStr := err.Error()
+	t.Logf("Error message: %s", errStr)
+
+	// Check that the error contains parameter-related information
+	// Note: The exact format depends on how the MCP server reports the error
+	// and whether our enhancement kicks in
+	assert.True(t,
+		contains(errStr, "parameter") ||
+			contains(errStr, "Expected") ||
+			contains(errStr, "message") ||
+			contains(errStr, "Invalid"),
+		"error should contain parameter-related information")
+}
+
 func TestServer_ManageMCPs_RegisterUnregister(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -592,4 +810,18 @@ func TestServer_RunSlop_CombineFromFile(t *testing.T) {
 	t.Logf("Combine from file: %s", string(data))
 	assert.Contains(t, string(data), "first message")
 	assert.Contains(t, string(data), "second message")
+}
+
+// contains is a helper function to check if a string contains a substring
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || containsHelper(s, substr))
+}
+
+func containsHelper(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }

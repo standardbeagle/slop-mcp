@@ -130,3 +130,22 @@ func (idx *ToolIndex) GetAll() []ToolInfo {
 	}
 	return all
 }
+
+// GetTool returns the ToolInfo for a specific tool on an MCP.
+// Returns nil if not found.
+func (idx *ToolIndex) GetTool(mcpName, toolName string) *ToolInfo {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+
+	tools, ok := idx.byMCP[mcpName]
+	if !ok {
+		return nil
+	}
+
+	for _, tool := range tools {
+		if tool.Name == toolName {
+			return &tool
+		}
+	}
+	return nil
+}

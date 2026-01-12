@@ -440,6 +440,7 @@ func (s *Server) handleAuthMCP(
 // GetMetadataInput is the input for the get_metadata tool.
 type GetMetadataInput struct {
 	MCPName  string `json:"mcp_name,omitempty" jsonschema:"Filter to a specific MCP server (optional)"`
+	ToolName string `json:"tool_name,omitempty" jsonschema:"Filter to a specific tool by name (optional)"`
 	FilePath string `json:"file_path,omitempty" jsonschema:"Path to write metadata to (optional)"`
 }
 
@@ -466,6 +467,29 @@ func (s *Server) handleGetMetadata(
 				metadata = append(metadata, m)
 			}
 		}
+	}
+
+	// Filter by tool name if specified
+	if input.ToolName != "" {
+		filteredMetadata := make([]registry.MCPMetadata, 0)
+		for _, m := range metadata {
+			filteredTools := make([]registry.ToolInfo, 0)
+			for _, tool := range m.Tools {
+				if tool.Name == input.ToolName {
+					filteredTools = append(filteredTools, tool)
+				}
+			}
+			// Only include MCP if it has matching tools
+			if len(filteredTools) > 0 {
+				m.Tools = filteredTools
+				// Clear other metadata types when filtering by tool
+				m.Prompts = nil
+				m.Resources = nil
+				m.ResourceTemplates = nil
+				filteredMetadata = append(filteredMetadata, m)
+			}
+		}
+		metadata = filteredMetadata
 	}
 
 	output := GetMetadataOutput{

@@ -186,3 +186,280 @@ func TestToolIndex_Search_MCPFiltering(t *testing.T) {
 		t.Errorf("Expected 2 results without filter, got %d", len(results))
 	}
 }
+
+func TestToolIndex_GetTool(t *testing.T) {
+	idx := NewToolIndex()
+
+	idx.Add("test-mcp", []ToolInfo{
+		{
+			Name:        "search",
+			Description: "Search tool",
+			MCPName:     "test-mcp",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"query": map[string]any{
+						"type":        "string",
+						"description": "Search query",
+					},
+				},
+			},
+		},
+	})
+
+	// Found
+	tool := idx.GetTool("test-mcp", "search")
+	if tool == nil {
+		t.Fatal("Expected to find tool 'search'")
+	}
+	if tool.Name != "search" {
+		t.Errorf("Expected name 'search', got %q", tool.Name)
+	}
+	if tool.InputSchema == nil {
+		t.Error("Expected InputSchema to be set")
+	}
+
+	// Not found - wrong MCP
+	tool = idx.GetTool("other-mcp", "search")
+	if tool != nil {
+		t.Error("Expected nil for wrong MCP")
+	}
+
+	// Not found - wrong tool
+	tool = idx.GetTool("test-mcp", "nonexistent")
+	if tool != nil {
+		t.Error("Expected nil for nonexistent tool")
+	}
+}
+
+func TestNormalizeParam(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"mcp_name", "mcpname"},
+		{"mcp-name", "mcpname"},
+		{"mcpName", "mcpname"},
+		{"MCP_NAME", "mcpname"},
+		{"tool name", "toolname"},
+		{"", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			result := normalizeParam(tt.input)
+			if result != tt.expected {
+				t.Errorf("normalizeParam(%q) = %q, want %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestSimilarity(t *testing.T) {
+	tests := []struct {
+		a        string
+		b        string
+		minScore int // minimum expected score
+	}{
+		// Identical strings
+		{"test", "test", 100},
+		// Substring matches
+		{"name", "mcpname", 50},
+		{"mcp", "mcpname", 40},
+		// Similar strings
+		{"query", "qery", 70},
+		// Completely different
+		{"abc", "xyz", 0},
+		// Empty strings
+		{"", "test", 0},
+		{"test", "", 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.a+"_"+tt.b, func(t *testing.T) {
+			result := similarity(tt.a, tt.b)
+			if result < tt.minScore {
+				t.Errorf("similarity(%q, %q) = %d, want >= %d", tt.a, tt.b, result, tt.minScore)
+			}
+		})
+	}
+}
+
+func TestFindSimilarParams(t *testing.T) {
+	expectedParams := []ParamInfo{
+		{Name: "mcp_name", Type: "string", Required: true},
+		{Name: "tool_name", Type: "string", Required: true},
+		{Name: "parameters", Type: "object", Required: false},
+		{Name: "query", Type: "string", Required: false},
+	}
+
+	tests := []struct {
+		name     string
+		provided []string
+		expected map[string]string
+	}{
+		{
+			name:     "typo in parameter name",
+			provided: []string{"mcp_nam", "tool_name"},
+			expected: map[string]string{"mcp_nam": "mcp_name"},
+		},
+		{
+			name:     "normalized match no suggestion",
+			provided: []string{"mcpname", "tool_name"}, // mcpname normalizes to mcp_name
+			expected: map[string]string{},
+		},
+		{
+			name:     "exact match no suggestion",
+			provided: []string{"mcp_name", "tool_name"},
+			expected: map[string]string{},
+		},
+		{
+			name:     "completely wrong param",
+			provided: []string{"xyz123"},
+			expected: map[string]string{},
+		},
+		{
+			name:     "similar to query",
+			provided: []string{"qery"},
+			expected: map[string]string{"qery": "query"},
+		},
+		{
+			name:     "suggest for partial typo",
+			provided: []string{"paramters"}, // missing 'e'
+			expected: map[string]string{"paramters": "parameters"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := findSimilarParams(tt.provided, expectedParams)
+
+			if len(result) != len(tt.expected) {
+				t.Errorf("findSimilarParams() returned %d suggestions, want %d", len(result), len(tt.expected))
+				t.Logf("Got: %v", result)
+				return
+			}
+
+			for provided, expectedSuggestion := range tt.expected {
+				if result[provided] != expectedSuggestion {
+					t.Errorf("findSimilarParams()[%q] = %q, want %q", provided, result[provided], expectedSuggestion)
+				}
+			}
+		})
+	}
+}
+
+func TestExtractParamsFromSchema(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"mcp_name": map[string]any{
+				"type":        "string",
+				"description": "Target MCP server name",
+			},
+			"tool_name": map[string]any{
+				"type":        "string",
+				"description": "Tool to execute",
+			},
+			"parameters": map[string]any{
+				"type":        "object",
+				"description": "Tool parameters",
+			},
+		},
+		"required": []any{"mcp_name", "tool_name"},
+	}
+
+	params := extractParamsFromSchema(schema)
+
+	if len(params) != 3 {
+		t.Fatalf("Expected 3 params, got %d", len(params))
+	}
+
+	// Build map for easier testing
+	paramMap := make(map[string]ParamInfo)
+	for _, p := range params {
+		paramMap[p.Name] = p
+	}
+
+	// Check mcp_name
+	if p, ok := paramMap["mcp_name"]; !ok {
+		t.Error("Expected mcp_name parameter")
+	} else {
+		if !p.Required {
+			t.Error("mcp_name should be required")
+		}
+		if p.Type != "string" {
+			t.Errorf("mcp_name type = %q, want 'string'", p.Type)
+		}
+		if p.Description != "Target MCP server name" {
+			t.Errorf("mcp_name description = %q", p.Description)
+		}
+	}
+
+	// Check parameters (optional)
+	if p, ok := paramMap["parameters"]; !ok {
+		t.Error("Expected parameters parameter")
+	} else {
+		if p.Required {
+			t.Error("parameters should not be required")
+		}
+	}
+
+	// Test with nil schema
+	params = extractParamsFromSchema(nil)
+	if params != nil {
+		t.Error("Expected nil for nil schema")
+	}
+
+	// Test with empty schema
+	params = extractParamsFromSchema(map[string]any{})
+	if params != nil {
+		t.Error("Expected nil for empty schema")
+	}
+}
+
+func TestInvalidParameterError(t *testing.T) {
+	err := &InvalidParameterError{
+		MCPName:        "test-mcp",
+		ToolName:       "search",
+		OriginalError:  "unknown parameter 'qery'",
+		ProvidedParams: []string{"qery", "limit"},
+		ExpectedParams: []ParamInfo{
+			{Name: "query", Type: "string", Description: "Search query", Required: true},
+			{Name: "limit", Type: "integer", Description: "Max results", Required: false},
+		},
+		SimilarParams: map[string]string{"qery": "query"},
+	}
+
+	errStr := err.Error()
+
+	// Check error contains key information
+	if !contains(errStr, "test-mcp") {
+		t.Error("Error should contain MCP name")
+	}
+	if !contains(errStr, "search") {
+		t.Error("Error should contain tool name")
+	}
+	if !contains(errStr, "unknown parameter 'qery'") {
+		t.Error("Error should contain original error")
+	}
+	if !contains(errStr, "'qery' -> 'query'") {
+		t.Error("Error should contain parameter suggestion")
+	}
+	if !contains(errStr, "query") && !contains(errStr, "(required)") {
+		t.Error("Error should list expected parameters with required flag")
+	}
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsHelper(s, substr))
+}
+
+func containsHelper(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}

@@ -200,7 +200,7 @@ func (r *Registry) Connect(ctx context.Context, cfg config.MCPConfig) error {
 	// Create MCP client
 	client := mcp.NewClient(&mcp.Implementation{
 		Name:    "slop-mcp",
-		Version: "0.3.0",
+		Version: "0.5.0",
 	}, nil)
 
 	// Create transport based on type
@@ -520,11 +520,79 @@ func (r *Registry) ExecuteTool(ctx context.Context, mcpName, toolName string, pa
 		if errMsg == "" {
 			errMsg = "tool returned error"
 		}
+
+		// Check if this looks like a parameter error and enhance the message
+		if isParameterError(errMsg) {
+			return nil, r.createParameterError(mcpName, toolName, errMsg, params)
+		}
+
 		return nil, fmt.Errorf("tool error: %s", errMsg)
 	}
 
 	// Convert result to Go types
 	return contentToAny(result), nil
+}
+
+// isParameterError checks if an error message indicates invalid parameters.
+func isParameterError(errMsg string) bool {
+	errLower := strings.ToLower(errMsg)
+	paramIndicators := []string{
+		"parameter",
+		"argument",
+		"property",
+		"required",
+		"missing",
+		"invalid",
+		"unknown",
+		"unexpected",
+		"schema",
+		"validation",
+		"type",
+	}
+
+	for _, indicator := range paramIndicators {
+		if strings.Contains(errLower, indicator) {
+			return true
+		}
+	}
+	return false
+}
+
+// createParameterError creates an enhanced error with parameter suggestions.
+func (r *Registry) createParameterError(mcpName, toolName, originalError string, params map[string]any) error {
+	// Get the tool info to access its schema
+	toolInfo := r.toolIndex.GetTool(mcpName, toolName)
+
+	// Collect provided parameter names
+	providedParams := make([]string, 0, len(params))
+	for k := range params {
+		providedParams = append(providedParams, k)
+	}
+
+	// If we don't have schema info, return a basic error with provided params
+	if toolInfo == nil || toolInfo.InputSchema == nil {
+		return &InvalidParameterError{
+			MCPName:        mcpName,
+			ToolName:       toolName,
+			OriginalError:  originalError,
+			ProvidedParams: providedParams,
+		}
+	}
+
+	// Extract expected parameters from schema
+	expectedParams := extractParamsFromSchema(toolInfo.InputSchema)
+
+	// Find similar parameters (suggestions)
+	similarParams := findSimilarParams(providedParams, expectedParams)
+
+	return &InvalidParameterError{
+		MCPName:        mcpName,
+		ToolName:       toolName,
+		OriginalError:  originalError,
+		ProvidedParams: providedParams,
+		ExpectedParams: expectedParams,
+		SimilarParams:  similarParams,
+	}
 }
 
 // Close closes all MCP connections.
@@ -571,10 +639,15 @@ func (r *Registry) indexTools(ctx context.Context, mcpName string, session *mcp.
 
 	tools := make([]ToolInfo, 0, len(result.Tools))
 	for _, tool := range result.Tools {
+		var inputSchema map[string]any
+		if schema, ok := tool.InputSchema.(map[string]any); ok {
+			inputSchema = schema
+		}
 		tools = append(tools, ToolInfo{
 			Name:        tool.Name,
 			Description: tool.Description,
 			MCPName:     mcpName,
+			InputSchema: inputSchema,
 		})
 	}
 	r.toolIndex.Add(mcpName, tools)
@@ -671,6 +744,215 @@ func (e *ToolNotFoundError) Error() string {
 	return sb.String()
 }
 
+// InvalidParameterError is returned when invalid parameters are passed to a tool.
+type InvalidParameterError struct {
+	MCPName           string
+	ToolName          string
+	OriginalError     string
+	ProvidedParams    []string
+	ExpectedParams    []ParamInfo
+	SimilarParams     map[string]string // provided -> suggested
+}
+
+// ParamInfo describes a parameter in a tool's schema.
+type ParamInfo struct {
+	Name        string
+	Type        string
+	Description string
+	Required    bool
+}
+
+func (e *InvalidParameterError) Error() string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Invalid parameters for tool '%s' on MCP '%s'\n", e.ToolName, e.MCPName))
+	sb.WriteString(fmt.Sprintf("Error: %s\n\n", e.OriginalError))
+
+	// Show suggestions for similar parameters
+	if len(e.SimilarParams) > 0 {
+		sb.WriteString("Did you mean:\n")
+		for provided, suggested := range e.SimilarParams {
+			sb.WriteString(fmt.Sprintf("  '%s' -> '%s'\n", provided, suggested))
+		}
+		sb.WriteString("\n")
+	}
+
+	// Show expected parameters
+	if len(e.ExpectedParams) > 0 {
+		sb.WriteString("Expected parameters:\n")
+		for _, param := range e.ExpectedParams {
+			reqStr := ""
+			if param.Required {
+				reqStr = " (required)"
+			}
+			typeStr := ""
+			if param.Type != "" {
+				typeStr = fmt.Sprintf(" [%s]", param.Type)
+			}
+			descStr := ""
+			if param.Description != "" {
+				descStr = fmt.Sprintf(" - %s", param.Description)
+			}
+			sb.WriteString(fmt.Sprintf("  - %s%s%s%s\n", param.Name, typeStr, reqStr, descStr))
+		}
+	}
+
+	return sb.String()
+}
+
+// findSimilarParams finds expected parameters that are similar to provided ones.
+// Uses fuzzy matching with normalized comparison (ignoring case, underscores, hyphens).
+func findSimilarParams(provided []string, expected []ParamInfo) map[string]string {
+	result := make(map[string]string)
+
+	// Build a set of normalized expected param names for quick lookup
+	expectedNormSet := make(map[string]bool)
+	for _, e := range expected {
+		expectedNormSet[normalizeParam(e.Name)] = true
+	}
+
+	for _, p := range provided {
+		pNorm := normalizeParam(p)
+
+		// Skip if this provided param matches any expected param exactly (normalized)
+		if expectedNormSet[pNorm] {
+			continue
+		}
+
+		bestMatch := ""
+		bestScore := 0
+
+		for _, e := range expected {
+			eNorm := normalizeParam(e.Name)
+
+			// Calculate similarity score
+			score := similarity(pNorm, eNorm)
+			if score > bestScore && score >= 50 { // 50% threshold for suggestions
+				bestScore = score
+				bestMatch = e.Name
+			}
+		}
+
+		if bestMatch != "" {
+			result[p] = bestMatch
+		}
+	}
+
+	return result
+}
+
+// normalizeParam normalizes a parameter name for comparison.
+func normalizeParam(s string) string {
+	s = strings.ToLower(s)
+	s = strings.ReplaceAll(s, "_", "")
+	s = strings.ReplaceAll(s, "-", "")
+	s = strings.ReplaceAll(s, " ", "")
+	return s
+}
+
+// similarity returns a percentage similarity between two normalized strings.
+// Uses longest common subsequence for comparison.
+func similarity(a, b string) int {
+	if len(a) == 0 || len(b) == 0 {
+		return 0
+	}
+
+	// Check for substring match first
+	if strings.Contains(a, b) || strings.Contains(b, a) {
+		shorter := len(a)
+		if len(b) < shorter {
+			shorter = len(b)
+		}
+		longer := len(a)
+		if len(b) > longer {
+			longer = len(b)
+		}
+		return shorter * 100 / longer
+	}
+
+	// Use longest common subsequence
+	lcs := longestCommonSubsequence(a, b)
+	maxLen := len(a)
+	if len(b) > maxLen {
+		maxLen = len(b)
+	}
+	return lcs * 100 / maxLen
+}
+
+// longestCommonSubsequence returns the length of the LCS of two strings.
+func longestCommonSubsequence(a, b string) int {
+	m, n := len(a), len(b)
+	dp := make([][]int, m+1)
+	for i := range dp {
+		dp[i] = make([]int, n+1)
+	}
+
+	for i := 1; i <= m; i++ {
+		for j := 1; j <= n; j++ {
+			if a[i-1] == b[j-1] {
+				dp[i][j] = dp[i-1][j-1] + 1
+			} else {
+				if dp[i-1][j] > dp[i][j-1] {
+					dp[i][j] = dp[i-1][j]
+				} else {
+					dp[i][j] = dp[i][j-1]
+				}
+			}
+		}
+	}
+
+	return dp[m][n]
+}
+
+// extractParamsFromSchema extracts parameter info from a JSON schema.
+func extractParamsFromSchema(schema map[string]any) []ParamInfo {
+	if schema == nil {
+		return nil
+	}
+
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	var required []string
+	if reqList, ok := schema["required"].([]any); ok {
+		for _, r := range reqList {
+			if s, ok := r.(string); ok {
+				required = append(required, s)
+			}
+		}
+	}
+
+	reqSet := make(map[string]bool)
+	for _, r := range required {
+		reqSet[r] = true
+	}
+
+	params := make([]ParamInfo, 0, len(props))
+	for name, propAny := range props {
+		prop, ok := propAny.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		param := ParamInfo{
+			Name:     name,
+			Required: reqSet[name],
+		}
+
+		if t, ok := prop["type"].(string); ok {
+			param.Type = t
+		}
+		if d, ok := prop["description"].(string); ok {
+			param.Description = d
+		}
+
+		params = append(params, param)
+	}
+
+	return params
+}
+
 // ConnectFromConfig connects all MCPs from a config.
 func (r *Registry) ConnectFromConfig(ctx context.Context, cfg *config.Config) error {
 	for _, mcpCfg := range cfg.MCPs {
@@ -679,16 +961,6 @@ func (r *Registry) ConnectFromConfig(ctx context.Context, cfg *config.Config) er
 		}
 	}
 	return nil
-}
-
-// getStoredToken retrieves a stored OAuth token for an MCP server.
-func (r *Registry) getStoredToken(serverName string) *auth.MCPToken {
-	store := auth.NewTokenStore()
-	token, err := store.GetToken(serverName)
-	if err != nil {
-		return nil
-	}
-	return token
 }
 
 // getValidToken retrieves a stored token and refreshes it if expired.

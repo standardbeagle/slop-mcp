@@ -257,6 +257,10 @@ var getMetadataInputSchema = json.RawMessage(`{
 			"type": "string",
 			"description": "Filter to a specific MCP server (optional)"
 		},
+		"tool_name": {
+			"type": "string",
+			"description": "Filter to a specific tool by name (optional)"
+		},
 		"file_path": {
 			"type": "string",
 			"description": "Path to write metadata to (optional)"
