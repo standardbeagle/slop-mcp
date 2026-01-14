@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/standardbeagle/slop-mcp/internal/auth"
+	"github.com/standardbeagle/slop-mcp/internal/cli"
 	"github.com/standardbeagle/slop-mcp/internal/config"
 	"github.com/standardbeagle/slop-mcp/internal/registry"
 	"github.com/standardbeagle/slop/pkg/slop"
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // SearchToolsInput is the input for the search_tools tool.
@@ -32,10 +34,34 @@ func (s *Server) handleSearchTools(
 ) (*mcp.CallToolResult, SearchToolsOutput, error) {
 	tools := s.registry.SearchTools(input.Query, input.MCPName)
 
+	// Include CLI tools if not filtering by specific MCP (or filtering by "cli")
+	if input.MCPName == "" || input.MCPName == "cli" {
+		cliInfos := s.cliRegistry.GetToolInfos()
+		for _, cliTool := range cliInfos {
+			// Apply query filter if specified
+			if input.Query != "" && !matchesQuery(cliTool.Name, cliTool.Description, input.Query) {
+				continue
+			}
+			tools = append(tools, registry.ToolInfo{
+				Name:        cliTool.Name,
+				Description: cliTool.Description,
+				MCPName:     cliTool.MCPName,
+				InputSchema: cliTool.InputSchema,
+			})
+		}
+	}
+
 	return nil, SearchToolsOutput{
 		Tools: tools,
 		Total: len(tools),
 	}, nil
+}
+
+// matchesQuery checks if a tool name or description matches the search query.
+func matchesQuery(name, description, query string) bool {
+	query = strings.ToLower(query)
+	return strings.Contains(strings.ToLower(name), query) ||
+		strings.Contains(strings.ToLower(description), query)
 }
 
 // ExecuteToolInput is the input for the execute_tool tool.
@@ -55,6 +81,22 @@ func (s *Server) handleExecuteTool(
 	}
 	if input.ToolName == "" {
 		return nil, nil, fmt.Errorf("tool_name is required")
+	}
+
+	// Handle CLI tools (mcp_name is "cli" or tool_name has cli_ prefix)
+	if input.MCPName == "cli" || cli.IsCLITool(input.ToolName) {
+		toolName := input.ToolName
+		if cli.IsCLITool(toolName) {
+			toolName = cli.StripCLIPrefix(toolName)
+		}
+
+		result, err := s.cliRegistry.Execute(ctx, toolName, input.Parameters)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		// Return structured result
+		return nil, result, nil
 	}
 
 	result, err := s.registry.ExecuteTool(ctx, input.MCPName, input.ToolName, input.Parameters)
@@ -442,6 +484,7 @@ type GetMetadataInput struct {
 	MCPName  string `json:"mcp_name,omitempty" jsonschema:"Filter to a specific MCP server (optional)"`
 	ToolName string `json:"tool_name,omitempty" jsonschema:"Filter to a specific tool by name (optional)"`
 	FilePath string `json:"file_path,omitempty" jsonschema:"Path to write metadata to (optional)"`
+	Verbose  bool   `json:"verbose,omitempty" jsonschema:"Include full input schemas (default: only when querying specific tool)"`
 }
 
 // GetMetadataOutput is the output for the get_metadata tool.
@@ -490,6 +533,28 @@ func (s *Server) handleGetMetadata(
 			}
 		}
 		metadata = filteredMetadata
+	}
+
+	// Determine if we should include full schemas:
+	// - Always include if verbose=true
+	// - Include if querying a specific tool (mcp_name + tool_name both specified)
+	// - Otherwise strip input_schema to reduce output size
+	includeSchemas := input.Verbose || (input.MCPName != "" && input.ToolName != "")
+
+	if !includeSchemas {
+		// Strip input schemas from tools to reduce output size
+		for i := range metadata {
+			strippedTools := make([]registry.ToolInfo, len(metadata[i].Tools))
+			for j, tool := range metadata[i].Tools {
+				strippedTools[j] = registry.ToolInfo{
+					Name:        tool.Name,
+					Description: tool.Description,
+					MCPName:     tool.MCPName,
+					// InputSchema intentionally omitted
+				}
+			}
+			metadata[i].Tools = strippedTools
+		}
 	}
 
 	output := GetMetadataOutput{

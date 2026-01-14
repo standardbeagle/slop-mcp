@@ -264,6 +264,10 @@ var getMetadataInputSchema = json.RawMessage(`{
 		"file_path": {
 			"type": "string",
 			"description": "Path to write metadata to (optional)"
+		},
+		"verbose": {
+			"type": "boolean",
+			"description": "Include full input schemas for all tools (default: false, schemas only included when querying specific mcp_name + tool_name)"
 		}
 	},
 	"additionalProperties": false

@@ -70,7 +70,7 @@ func (s *Server) registerTools() {
 	s.mcpServer.AddTool(
 		&mcp.Tool{
 			Name:         "get_metadata",
-			Description:  "Get full metadata (tools, prompts, resources, resource templates) for all connected MCP servers. Optionally filter by MCP name and write output to a file.",
+			Description:  "Get metadata for connected MCP servers. Returns tool names and descriptions by default (compact). Use verbose=true for full schemas, or specify both mcp_name and tool_name to get schema for a specific tool.",
 			InputSchema:  getMetadataInputSchema,
 			OutputSchema: getMetadataOutputSchema,
 		},

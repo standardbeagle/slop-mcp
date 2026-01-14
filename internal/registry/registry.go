@@ -6,13 +6,14 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/standardbeagle/slop-mcp/internal/auth"
 	"github.com/standardbeagle/slop-mcp/internal/config"
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // ConnectionTimeout is the default timeout for connecting to an MCP server.
@@ -501,10 +502,12 @@ func (r *Registry) ExecuteTool(ctx context.Context, mcpName, toolName string, pa
 	})
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "unknown") {
+			availableTools := r.toolIndex.ListForMCP(mcpName)
 			return nil, &ToolNotFoundError{
 				MCPName:        mcpName,
 				ToolName:       toolName,
-				AvailableTools: r.toolIndex.ListForMCP(mcpName),
+				AvailableTools: availableTools,
+				SimilarTools:   findSimilarTools(toolName, availableTools),
 			}
 		}
 		return nil, err
@@ -582,16 +585,47 @@ func (r *Registry) createParameterError(mcpName, toolName, originalError string,
 	// Extract expected parameters from schema
 	expectedParams := extractParamsFromSchema(toolInfo.InputSchema)
 
-	// Find similar parameters (suggestions)
-	similarParams := findSimilarParams(providedParams, expectedParams)
+	// Build a set of expected param names (normalized for matching)
+	expectedNormSet := make(map[string]bool)
+	expectedNameSet := make(map[string]bool)
+	for _, e := range expectedParams {
+		expectedNormSet[normalizeParam(e.Name)] = true
+		expectedNameSet[e.Name] = true
+	}
+
+	// Find unknown parameters (provided but not in schema)
+	var unknownParams []string
+	for _, p := range providedParams {
+		pNorm := normalizeParam(p)
+		if !expectedNormSet[pNorm] {
+			unknownParams = append(unknownParams, p)
+		}
+	}
+
+	// Find missing required parameters
+	providedNormSet := make(map[string]bool)
+	for _, p := range providedParams {
+		providedNormSet[normalizeParam(p)] = true
+	}
+	var missingRequired []string
+	for _, e := range expectedParams {
+		if e.Required && !providedNormSet[normalizeParam(e.Name)] {
+			missingRequired = append(missingRequired, e.Name)
+		}
+	}
+
+	// Find similar parameters (suggestions for ALL unknown params)
+	similarParams := findSimilarParams(unknownParams, expectedParams)
 
 	return &InvalidParameterError{
-		MCPName:        mcpName,
-		ToolName:       toolName,
-		OriginalError:  originalError,
-		ProvidedParams: providedParams,
-		ExpectedParams: expectedParams,
-		SimilarParams:  similarParams,
+		MCPName:         mcpName,
+		ToolName:        toolName,
+		OriginalError:   originalError,
+		ProvidedParams:  providedParams,
+		ExpectedParams:  expectedParams,
+		SimilarParams:   similarParams,
+		MissingRequired: missingRequired,
+		UnknownParams:   unknownParams,
 	}
 }
 
@@ -727,12 +761,23 @@ type ToolNotFoundError struct {
 	MCPName        string
 	ToolName       string
 	AvailableTools []string
+	SimilarTools   []string // tools with similar names
 }
 
 func (e *ToolNotFoundError) Error() string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Tool '%s' not found on MCP '%s'\n\n", e.ToolName, e.MCPName))
 
+	// Show similar tools first (most helpful)
+	if len(e.SimilarTools) > 0 {
+		sb.WriteString("Did you mean:\n")
+		for _, name := range e.SimilarTools {
+			sb.WriteString(fmt.Sprintf("  - %s\n", name))
+		}
+		sb.WriteString("\n")
+	}
+
+	// Show all available tools
 	if len(e.AvailableTools) > 0 {
 		sb.WriteString("Available tools:\n")
 		for _, name := range e.AvailableTools {
@@ -740,8 +785,41 @@ func (e *ToolNotFoundError) Error() string {
 		}
 	}
 
-	sb.WriteString("\nUse search_tools to find available tools")
+	sb.WriteString("\nUse search_tools to find tools across all MCPs")
 	return sb.String()
+}
+
+// findSimilarTools finds tools with names similar to the query.
+func findSimilarTools(query string, available []string) []string {
+	queryNorm := normalizeParam(query)
+	type scored struct {
+		name  string
+		score int
+	}
+	var matches []scored
+
+	for _, name := range available {
+		nameNorm := normalizeParam(name)
+		score := similarity(queryNorm, nameNorm)
+		if score >= 40 { // 40% threshold for tool suggestions
+			matches = append(matches, scored{name: name, score: score})
+		}
+	}
+
+	// Sort by score descending
+	sort.Slice(matches, func(i, j int) bool {
+		return matches[i].score > matches[j].score
+	})
+
+	// Return top 5 matches
+	result := make([]string, 0, 5)
+	for i, m := range matches {
+		if i >= 5 {
+			break
+		}
+		result = append(result, m.name)
+	}
+	return result
 }
 
 // InvalidParameterError is returned when invalid parameters are passed to a tool.
@@ -752,6 +830,8 @@ type InvalidParameterError struct {
 	ProvidedParams    []string
 	ExpectedParams    []ParamInfo
 	SimilarParams     map[string]string // provided -> suggested
+	MissingRequired   []string          // required params not provided
+	UnknownParams     []string          // provided params not in schema
 }
 
 // ParamInfo describes a parameter in a tool's schema.
@@ -767,16 +847,43 @@ func (e *InvalidParameterError) Error() string {
 	sb.WriteString(fmt.Sprintf("Invalid parameters for tool '%s' on MCP '%s'\n", e.ToolName, e.MCPName))
 	sb.WriteString(fmt.Sprintf("Error: %s\n\n", e.OriginalError))
 
-	// Show suggestions for similar parameters
-	if len(e.SimilarParams) > 0 {
-		sb.WriteString("Did you mean:\n")
-		for provided, suggested := range e.SimilarParams {
-			sb.WriteString(fmt.Sprintf("  '%s' -> '%s'\n", provided, suggested))
+	// Show missing required parameters first (most critical)
+	if len(e.MissingRequired) > 0 {
+		sb.WriteString("Missing required parameters:\n")
+		for _, name := range e.MissingRequired {
+			// Find the param info for description
+			for _, param := range e.ExpectedParams {
+				if param.Name == name {
+					typeStr := ""
+					if param.Type != "" {
+						typeStr = fmt.Sprintf(" [%s]", param.Type)
+					}
+					descStr := ""
+					if param.Description != "" {
+						descStr = fmt.Sprintf(" - %s", param.Description)
+					}
+					sb.WriteString(fmt.Sprintf("  - %s%s%s\n", name, typeStr, descStr))
+					break
+				}
+			}
 		}
 		sb.WriteString("\n")
 	}
 
-	// Show expected parameters
+	// Show unknown parameters with suggestions
+	if len(e.UnknownParams) > 0 {
+		sb.WriteString("Unknown parameters:\n")
+		for _, name := range e.UnknownParams {
+			if suggestion, ok := e.SimilarParams[name]; ok {
+				sb.WriteString(fmt.Sprintf("  - '%s' (did you mean '%s'?)\n", name, suggestion))
+			} else {
+				sb.WriteString(fmt.Sprintf("  - '%s'\n", name))
+			}
+		}
+		sb.WriteString("\n")
+	}
+
+	// Show all expected parameters for reference
 	if len(e.ExpectedParams) > 0 {
 		sb.WriteString("Expected parameters:\n")
 		for _, param := range e.ExpectedParams {

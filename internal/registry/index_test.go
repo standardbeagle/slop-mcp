@@ -428,7 +428,9 @@ func TestInvalidParameterError(t *testing.T) {
 			{Name: "query", Type: "string", Description: "Search query", Required: true},
 			{Name: "limit", Type: "integer", Description: "Max results", Required: false},
 		},
-		SimilarParams: map[string]string{"qery": "query"},
+		SimilarParams:   map[string]string{"qery": "query"},
+		UnknownParams:   []string{"qery"},
+		MissingRequired: []string{"query"},
 	}
 
 	errStr := err.Error()
@@ -443,11 +445,54 @@ func TestInvalidParameterError(t *testing.T) {
 	if !contains(errStr, "unknown parameter 'qery'") {
 		t.Error("Error should contain original error")
 	}
-	if !contains(errStr, "'qery' -> 'query'") {
+	if !contains(errStr, "did you mean 'query'") {
 		t.Error("Error should contain parameter suggestion")
 	}
-	if !contains(errStr, "query") && !contains(errStr, "(required)") {
+	if !contains(errStr, "Missing required") {
+		t.Error("Error should show missing required parameters")
+	}
+	if !contains(errStr, "Unknown parameters") {
+		t.Error("Error should show unknown parameters")
+	}
+	if !contains(errStr, "(required)") {
 		t.Error("Error should list expected parameters with required flag")
+	}
+}
+
+func TestInvalidParameterError_MultipleErrors(t *testing.T) {
+	// Test with multiple unknown parameters and multiple missing required
+	err := &InvalidParameterError{
+		MCPName:       "test-mcp",
+		ToolName:      "complex_tool",
+		OriginalError: "validation failed",
+		ProvidedParams: []string{"qery", "limt", "ofset"},
+		ExpectedParams: []ParamInfo{
+			{Name: "query", Type: "string", Description: "Search query", Required: true},
+			{Name: "limit", Type: "integer", Description: "Max results", Required: true},
+			{Name: "offset", Type: "integer", Description: "Skip count", Required: true},
+			{Name: "filter", Type: "string", Description: "Filter expression", Required: false},
+		},
+		SimilarParams:   map[string]string{"qery": "query", "limt": "limit", "ofset": "offset"},
+		UnknownParams:   []string{"qery", "limt", "ofset"},
+		MissingRequired: []string{"query", "limit", "offset"},
+	}
+
+	errStr := err.Error()
+
+	// All 3 unknown params should be shown with suggestions
+	if !contains(errStr, "'qery' (did you mean 'query'?)") {
+		t.Error("Error should suggest query for qery")
+	}
+	if !contains(errStr, "'limt' (did you mean 'limit'?)") {
+		t.Error("Error should suggest limit for limt")
+	}
+	if !contains(errStr, "'ofset' (did you mean 'offset'?)") {
+		t.Error("Error should suggest offset for ofset")
+	}
+
+	// All 3 missing required should be shown
+	if !contains(errStr, "query") && !contains(errStr, "Missing required") {
+		t.Error("Error should show query as missing required")
 	}
 }
 
@@ -462,4 +507,191 @@ func containsHelper(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+func TestTokenize(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected []string
+	}{
+		{"lci code insight", []string{"lci", "code", "insight"}},
+		{"code_insight", []string{"code", "insight"}},
+		{"code-insight", []string{"code", "insight"}},
+		{"search.tools", []string{"search", "tools"}},
+		{"CodeInsight", []string{"codeinsight"}}, // camelCase stays together
+		{"", []string{}},
+		{"  spaced   out  ", []string{"spaced", "out"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			result := tokenize(tt.input)
+			if len(result) != len(tt.expected) {
+				t.Errorf("tokenize(%q) = %v, want %v", tt.input, result, tt.expected)
+				return
+			}
+			for i, exp := range tt.expected {
+				if result[i] != exp {
+					t.Errorf("tokenize(%q)[%d] = %q, want %q", tt.input, i, result[i], exp)
+				}
+			}
+		})
+	}
+}
+
+func TestContainsAllTerms(t *testing.T) {
+	tests := []struct {
+		text     string
+		terms    []string
+		expected bool
+	}{
+		{"code insight tool", []string{"code", "insight"}, true},
+		{"code insight tool", []string{"code", "missing"}, false},
+		{"lci code_insight", []string{"lci", "code"}, true},
+		{"anything", []string{}, true}, // empty terms = match all
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.text, func(t *testing.T) {
+			result := containsAllTerms(tt.text, tt.terms)
+			if result != tt.expected {
+				t.Errorf("containsAllTerms(%q, %v) = %v, want %v", tt.text, tt.terms, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestToolIndex_Search_MultiTermQuery(t *testing.T) {
+	idx := NewToolIndex()
+
+	// Simulate lci MCP with code_insight tool
+	idx.Add("lci", []ToolInfo{
+		{Name: "code_insight", Description: "Comprehensive codebase intelligence system for AI agents", MCPName: "lci"},
+		{Name: "search", Description: "Sub-millisecond code search", MCPName: "lci"},
+		{Name: "get_context", Description: "Get detailed context for code objects", MCPName: "lci"},
+	})
+
+	// Add another MCP with similar tools
+	idx.Add("other", []ToolInfo{
+		{Name: "code_analyzer", Description: "Analyzes code structure", MCPName: "other"},
+		{Name: "insight_tool", Description: "Provides insights", MCPName: "other"},
+	})
+
+	tests := []struct {
+		name          string
+		query         string
+		expectedFirst string // the tool that should rank first
+		minResults    int    // minimum number of results expected
+	}{
+		{
+			name:          "multi-term query matches MCP+tool",
+			query:         "lci code insight",
+			expectedFirst: "code_insight",
+			minResults:    1,
+		},
+		{
+			name:          "exact tool name ranks highest",
+			query:         "code_insight",
+			expectedFirst: "code_insight",
+			minResults:    1,
+		},
+		{
+			name:          "MCP name query returns all MCP tools",
+			query:         "lci",
+			expectedFirst: "", // any lci tool is fine
+			minResults:    3,
+		},
+		{
+			name:          "partial term matches work",
+			query:         "code",
+			expectedFirst: "", // multiple matches
+			minResults:    2,
+		},
+		{
+			name:          "description search works",
+			query:         "codebase intelligence",
+			expectedFirst: "code_insight",
+			minResults:    1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			results := idx.Search(tt.query, "")
+
+			if len(results) < tt.minResults {
+				t.Errorf("Search(%q) returned %d results, want >= %d", tt.query, len(results), tt.minResults)
+				return
+			}
+
+			if tt.expectedFirst != "" && results[0].Name != tt.expectedFirst {
+				t.Errorf("Search(%q) first result = %q, want %q", tt.query, results[0].Name, tt.expectedFirst)
+			}
+		})
+	}
+}
+
+func TestToolIndex_Search_Ranking(t *testing.T) {
+	idx := NewToolIndex()
+
+	// Add tools that will have different scores for the same query
+	idx.Add("test", []ToolInfo{
+		{Name: "search", Description: "Basic search", MCPName: "test"},                                       // exact name match
+		{Name: "search_advanced", Description: "Advanced search with filters", MCPName: "test"},              // prefix match
+		{Name: "find", Description: "Find things using search patterns", MCPName: "test"},                    // description match only
+		{Name: "locate", Description: "Locate items in the system", MCPName: "test"},                         // no match
+	})
+
+	results := idx.Search("search", "")
+
+	// Should have 3 results (locate doesn't match)
+	if len(results) != 3 {
+		t.Fatalf("Expected 3 results, got %d: %v", len(results), results)
+	}
+
+	// Exact match should be first
+	if results[0].Name != "search" {
+		t.Errorf("Expected 'search' first (exact match), got %q", results[0].Name)
+	}
+
+	// Prefix match should be second
+	if results[1].Name != "search_advanced" {
+		t.Errorf("Expected 'search_advanced' second (prefix match), got %q", results[1].Name)
+	}
+
+	// Description match should be last
+	if results[2].Name != "find" {
+		t.Errorf("Expected 'find' last (description match), got %q", results[2].Name)
+	}
+}
+
+func TestToolIndex_Search_MCPNameMatching(t *testing.T) {
+	idx := NewToolIndex()
+
+	idx.Add("lci", []ToolInfo{
+		{Name: "search", Description: "Search tool", MCPName: "lci"},
+		{Name: "context", Description: "Context tool", MCPName: "lci"},
+	})
+	idx.Add("other", []ToolInfo{
+		{Name: "lci_helper", Description: "Helper for lci", MCPName: "other"},
+	})
+
+	// Query "lci" should return all lci tools ranked higher than tools just containing "lci"
+	results := idx.Search("lci", "")
+
+	if len(results) != 3 {
+		t.Fatalf("Expected 3 results, got %d", len(results))
+	}
+
+	// The first two results should be from the "lci" MCP (higher MCP name match score)
+	lciCount := 0
+	for i := 0; i < 2; i++ {
+		if results[i].MCPName == "lci" {
+			lciCount++
+		}
+	}
+	if lciCount != 2 {
+		t.Errorf("Expected first 2 results to be from 'lci' MCP, got MCPs: %s, %s",
+			results[0].MCPName, results[1].MCPName)
+	}
 }
