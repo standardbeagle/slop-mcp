@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 
+	"github.com/standardbeagle/slop-mcp/internal/cli"
 	"github.com/standardbeagle/slop-mcp/internal/config"
 	"github.com/standardbeagle/slop-mcp/internal/registry"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -17,16 +20,18 @@ const (
 
 // Server is the slop-mcp server.
 type Server struct {
-	mcpServer *mcp.Server
-	registry  *registry.Registry
-	config    *config.Config
+	mcpServer   *mcp.Server
+	registry    *registry.Registry
+	cliRegistry *cli.Registry
+	config      *config.Config
 }
 
 // New creates a new Server with the given config.
 func New(ctx context.Context, mcps []config.MCPConfig) (*Server, error) {
 	s := &Server{
-		registry: registry.New(),
-		config:   config.NewConfig(),
+		registry:    registry.New(),
+		cliRegistry: cli.NewRegistry(),
+		config:      config.NewConfig(),
 	}
 
 	// Create MCP server
@@ -59,8 +64,9 @@ func New(ctx context.Context, mcps []config.MCPConfig) (*Server, error) {
 // NewFromConfig creates a new Server from a config struct.
 func NewFromConfig(cfg *config.Config) (*Server, error) {
 	s := &Server{
-		registry: registry.New(),
-		config:   cfg,
+		registry:    registry.New(),
+		cliRegistry: cli.NewRegistry(),
+		config:      cfg,
 	}
 
 	// Create MCP server
@@ -91,6 +97,9 @@ func (s *Server) Start(ctx context.Context) error {
 		s.registry.SetConfigured(cfg)
 	}
 
+	// Load CLI tools from configured directories
+	s.loadCLITools()
+
 	// Connect to MCPs in background to avoid blocking server startup
 	go func() {
 		if err := s.registry.ConnectFromConfig(ctx, s.config); err != nil {
@@ -98,6 +107,30 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 	}()
 	return nil
+}
+
+// loadCLITools loads CLI tool definitions from standard directories.
+func (s *Server) loadCLITools() {
+	// User-level CLI tools: ~/.config/slop-mcp/cli/
+	userConfigDir := filepath.Dir(config.UserConfigPath())
+	userCLIDir := filepath.Join(userConfigDir, "cli")
+	if err := s.cliRegistry.LoadFromDirectory(userCLIDir); err != nil {
+		fmt.Printf("Warning: failed to load user CLI tools: %v\n", err)
+	}
+
+	// Project-level CLI tools: .slop-mcp/cli/
+	cwd, err := os.Getwd()
+	if err == nil {
+		projectCLIDir := filepath.Join(cwd, ".slop-mcp", "cli")
+		if err := s.cliRegistry.LoadFromDirectory(projectCLIDir); err != nil {
+			fmt.Printf("Warning: failed to load project CLI tools: %v\n", err)
+		}
+	}
+
+	// Log loaded tools count
+	if count := s.cliRegistry.Count(); count > 0 {
+		fmt.Printf("Loaded %d CLI tools\n", count)
+	}
 }
 
 // RunStdio runs the server using stdio transport.
@@ -138,6 +171,11 @@ func (s *Server) Close() error {
 // Registry returns the underlying registry.
 func (s *Server) Registry() *registry.Registry {
 	return s.registry
+}
+
+// CLIRegistry returns the CLI tool registry.
+func (s *Server) CLIRegistry() *cli.Registry {
+	return s.cliRegistry
 }
 
 // CallTool calls a tool directly (for testing purposes).
