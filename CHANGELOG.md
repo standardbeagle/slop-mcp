@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-01-14
+
+### Added
+
+- Ranked multi-term search: queries like "lci code insight" now find `code_insight` from `lci` MCP
+- Results ranked by relevance: exact match > MCP name match > prefix > term matches > fuzzy
+- `get_metadata` now supports `verbose` flag for full schema output
+- ToolNotFoundError now suggests similar tools using fuzzy matching
+- InvalidParameterError now shows ALL issues exhaustively:
+  - Missing required parameters with descriptions
+  - Unknown parameters with "did you mean" suggestions
+  - Full expected parameter list for reference
+
+### Changed
+
+- `get_metadata` default output is now compact (tool names + descriptions only)
+- Full schemas only included when `verbose=true` or querying specific `mcp_name + tool_name`
+- Reduces token usage significantly when browsing MCP capabilities
+
 ## [0.5.0] - 2026-01-12
 
 ### Added
