@@ -1,0 +1,251 @@
+// Memory CLI Tools - Persistent storage for SLOP scripts
+// Enables LLM freeform storage, semi-structured data, and script storage
+
+// Read from memory bank
+cli "memory_read" {
+    description "Read from a memory bank. Returns value for key, or bank summary if no key specified."
+    command "memory-cli"
+
+    arg "command" {
+        position 0
+        default "read"
+        hidden true
+    }
+
+    arg "bank" {
+        description "Memory bank name (e.g., 'session', 'scripts', 'cache')"
+        required true
+        position 1
+    }
+
+    arg "key" {
+        description "Key to read (omit to get bank summary with all keys)"
+        required false
+        position 2
+    }
+
+    flag "scope" {
+        long "--scope"
+        type "string"
+        description "Storage scope"
+        enum "user" "project"
+    }
+
+    flag "default" {
+        long "--default"
+        type "string"
+        description "Default value (JSON) if key not found"
+    }
+
+    flag "verbose" {
+        long "--verbose"
+        description "Include metadata (created_at, updated_at, ttl)"
+    }
+
+    stdout {
+        format "json"
+    }
+
+    timeout 5000
+}
+
+// Write to memory bank
+cli "memory_write" {
+    description "Write a value to a memory bank. Value can be any JSON type."
+    command "memory-cli"
+
+    arg "command" {
+        position 0
+        default "write"
+        hidden true
+    }
+
+    arg "bank" {
+        description "Memory bank name"
+        required true
+        position 1
+    }
+
+    arg "key" {
+        description "Key to write"
+        required true
+        position 2
+    }
+
+    arg "value" {
+        description "Value to store (JSON string, object, array, number, or boolean)"
+        required true
+        position 3
+    }
+
+    flag "scope" {
+        long "--scope"
+        type "string"
+        description "Storage scope (default: project if .slop-mcp exists)"
+        enum "user" "project"
+    }
+
+    flag "ttl" {
+        long "--ttl"
+        type "number"
+        description "Time-to-live in seconds (entry auto-expires)"
+    }
+
+    stdout {
+        format "json"
+    }
+
+    timeout 5000
+}
+
+// Delete from memory bank
+cli "memory_delete" {
+    description "Delete a key or entire bank from memory"
+    command "memory-cli"
+
+    arg "command" {
+        position 0
+        default "delete"
+        hidden true
+    }
+
+    arg "bank" {
+        description "Memory bank name"
+        required true
+        position 1
+    }
+
+    arg "key" {
+        description "Key to delete (omit to delete entire bank)"
+        required false
+        position 2
+    }
+
+    flag "scope" {
+        long "--scope"
+        type "string"
+        description "Storage scope"
+        enum "user" "project"
+    }
+
+    stdout {
+        format "json"
+    }
+
+    timeout 5000
+}
+
+// List memory banks or keys
+cli "memory_list" {
+    description "List all memory banks, or keys within a specific bank"
+    command "memory-cli"
+
+    arg "command" {
+        position 0
+        default "list"
+        hidden true
+    }
+
+    arg "bank" {
+        description "Bank name to list keys from (omit to list all banks)"
+        required false
+        position 1
+    }
+
+    flag "scope" {
+        long "--scope"
+        type "string"
+        description "Filter by scope"
+        enum "user" "project" "all"
+    }
+
+    stdout {
+        format "json"
+    }
+
+    timeout 5000
+}
+
+// Query memory with jq-style filter
+cli "memory_query" {
+    description "Query memory entries with jq-style filters (e.g., '.field', '.items[0]', 'keys')"
+    command "memory-cli"
+
+    arg "command" {
+        position 0
+        default "query"
+        hidden true
+    }
+
+    arg "bank" {
+        description "Memory bank name"
+        required true
+        position 1
+    }
+
+    arg "key" {
+        description "Key to query (omit to query entire bank)"
+        required false
+        position 2
+    }
+
+    arg "filter" {
+        description "jq-style filter (e.g., '.name', '.items[]', 'keys')"
+        required true
+        position 3
+    }
+
+    flag "scope" {
+        long "--scope"
+        type "string"
+        description "Storage scope"
+        enum "user" "project"
+    }
+
+    flag "raw" {
+        long "--raw"
+        description "Raw string output (no JSON encoding)"
+    }
+
+    stdout {
+        format "auto"
+    }
+
+    timeout 5000
+}
+
+// Search across memory banks
+cli "memory_search" {
+    description "Search for keys or values across all memory banks"
+    command "memory-cli"
+
+    arg "command" {
+        position 0
+        default "search"
+        hidden true
+    }
+
+    arg "pattern" {
+        description "Search pattern (matches key names, case-insensitive)"
+        required true
+        position 1
+    }
+
+    flag "scope" {
+        long "--scope"
+        type "string"
+        description "Scope to search"
+        enum "user" "project" "all"
+    }
+
+    flag "value" {
+        long "--value"
+        description "Also search within values (slower)"
+    }
+
+    stdout {
+        format "json"
+    }
+
+    timeout 10000
+}

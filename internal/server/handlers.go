@@ -204,6 +204,12 @@ func (s *Server) handleRunSlop(
 		}
 	}
 
+	// Register CLI tools as a service (accessible as cli.tool_name() in scripts)
+	if s.cliRegistry.Count() > 0 {
+		cliService := cli.NewSlopService(ctx, s.cliRegistry)
+		rt.RegisterExternalService("cli", cliService)
+	}
+
 	// Execute script
 	result, err := rt.Execute(script)
 	if err != nil {

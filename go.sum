@@ -12,8 +12,8 @@ github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZb
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/sblinch/kdl-go v0.0.0-20251203232544-981d4ecc17c3 h1:msKaIZrrNpvofLPDzNBW3152PJBsnPZsoNNosOCS+C0=
 github.com/sblinch/kdl-go v0.0.0-20251203232544-981d4ecc17c3/go.mod h1:b3oNGuAKOQzhsCKmuLc/urEOPzgHj6fB8vl8bwTBh28=
-github.com/standardbeagle/slop v0.1.2 h1:R3cPFHeA0xeycAm238hO4PwTF9SOCMJfrtsLUZr5LMg=
-github.com/standardbeagle/slop v0.1.2/go.mod h1:k2HgZKjICb0WsZD5UGmsk4cDJuQaUhR6nfqf09lbYX0=
+github.com/standardbeagle/slop v0.2.0 h1:BV0FaLHqUweqvb+O3AVYTQ7cfX57ld3Jy/5rE47OED4=
+github.com/standardbeagle/slop v0.2.0/go.mod h1:k2HgZKjICb0WsZD5UGmsk4cDJuQaUhR6nfqf09lbYX0=
 github.com/stretchr/testify v1.9.0 h1:HtqpIVDClZ4nwg75+f6Lvsy/wHu+3BoSGCbBAcpTsTg=
 github.com/stretchr/testify v1.9.0/go.mod h1:r2ic/lqez/lEtzL7wO/rwa5dbSLXVDPFyf8C91i36aY=
 github.com/yosida95/uritemplate/v3 v3.0.2 h1:Ed3Oyj9yrmi9087+NczuL5BwkIc4wvTb5zIM+UJPGz4=

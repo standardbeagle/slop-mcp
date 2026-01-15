@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-01-15
+
+### Added
+
+- **CLI tools accessible from SLOP scripts**: CLI tools are now available as `cli.tool_name()` in SLOP scripts
+- Memory tools can be used for persistent storage in scripts:
+  ```slop
+  cli.memory_write(bank: "session", key: "context", value: '{"topic": "testing"}')
+  data = cli.memory_read(bank: "session", key: "context")
+  ```
+- Example CLI tool definitions in `examples/cli/memory-tools.kdl`
+- Upgraded to slop v0.2.0 with external service API
+
 ## [0.6.1] - 2026-01-15
 
 ### Fixed
@@ -111,6 +124,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - CI release workflow for PyPI and npm publishing
 
+[0.7.0]: https://github.com/standardbeagle/slop-mcp/releases/tag/v0.7.0
 [0.6.1]: https://github.com/standardbeagle/slop-mcp/releases/tag/v0.6.1
 [0.6.0]: https://github.com/standardbeagle/slop-mcp/releases/tag/v0.6.0
 [0.5.0]: https://github.com/standardbeagle/slop-mcp/releases/tag/v0.5.0

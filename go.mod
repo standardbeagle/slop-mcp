@@ -7,7 +7,7 @@ toolchain go1.24.2
 require (
 	github.com/modelcontextprotocol/go-sdk v1.2.0
 	github.com/sblinch/kdl-go v0.0.0-20251203232544-981d4ecc17c3
-	github.com/standardbeagle/slop v0.1.2
+	github.com/standardbeagle/slop v0.2.0
 	github.com/stretchr/testify v1.9.0
 	golang.org/x/oauth2 v0.34.0
 )
