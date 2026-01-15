@@ -184,8 +184,9 @@ func (s *Server) handleRunSlop(
 	rt := slop.NewRuntime()
 	defer rt.Close()
 
-	// Register crypto built-ins
+	// Register crypto built-ins and SLOP search
 	builtins.RegisterCrypto(rt)
+	builtins.RegisterSlopSearch(rt)
 
 	// Connect all MCP services to the slop runtime
 	for _, cfg := range s.registry.GetConfigs() {
