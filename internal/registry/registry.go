@@ -1070,6 +1070,12 @@ func (r *Registry) ConnectFromConfig(ctx context.Context, cfg *config.Config) er
 	return nil
 }
 
+// AddToolsForTesting adds tools to the index for testing purposes.
+// This bypasses the normal connection flow and directly populates the index.
+func (r *Registry) AddToolsForTesting(mcpName string, tools []ToolInfo) {
+	r.toolIndex.Add(mcpName, tools)
+}
+
 // getValidToken retrieves a stored token and refreshes it if expired.
 // Returns the valid token or nil if unavailable/refresh failed.
 func (r *Registry) getValidToken(ctx context.Context, serverName string) *auth.MCPToken {

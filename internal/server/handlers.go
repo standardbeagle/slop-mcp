@@ -15,16 +15,27 @@ import (
 	"github.com/standardbeagle/slop/pkg/slop"
 )
 
+// DefaultSearchLimit is the default maximum number of tools to return from search_tools.
+const DefaultSearchLimit = 20
+
+// MaxSearchLimit is the maximum allowed limit for search_tools.
+const MaxSearchLimit = 100
+
 // SearchToolsInput is the input for the search_tools tool.
 type SearchToolsInput struct {
 	Query   string `json:"query,omitempty" jsonschema:"Search query for tool names and descriptions"`
 	MCPName string `json:"mcp_name,omitempty" jsonschema:"Filter to a specific MCP server"`
+	Limit   int    `json:"limit,omitempty" jsonschema:"Maximum number of results to return (default: 20, max: 100)"`
+	Offset  int    `json:"offset,omitempty" jsonschema:"Number of results to skip for pagination (default: 0)"`
 }
 
 // SearchToolsOutput is the output for the search_tools tool.
 type SearchToolsOutput struct {
-	Tools []registry.ToolInfo `json:"tools"`
-	Total int                 `json:"total"`
+	Tools   []registry.ToolInfo `json:"tools"`
+	Total   int                 `json:"total"`    // Total matching tools (before pagination)
+	Limit   int                 `json:"limit"`    // Limit applied
+	Offset  int                 `json:"offset"`   // Offset applied
+	HasMore bool                `json:"has_more"` // True if more results available
 }
 
 func (s *Server) handleSearchTools(
@@ -51,9 +62,40 @@ func (s *Server) handleSearchTools(
 		}
 	}
 
+	// Calculate total before pagination
+	total := len(tools)
+
+	// Apply default and max limits
+	limit := input.Limit
+	if limit <= 0 {
+		limit = DefaultSearchLimit
+	}
+	if limit > MaxSearchLimit {
+		limit = MaxSearchLimit
+	}
+
+	// Apply offset
+	offset := input.Offset
+	if offset < 0 {
+		offset = 0
+	}
+
+	// Apply pagination
+	if offset >= len(tools) {
+		tools = []registry.ToolInfo{}
+	} else {
+		tools = tools[offset:]
+		if len(tools) > limit {
+			tools = tools[:limit]
+		}
+	}
+
 	return nil, SearchToolsOutput{
-		Tools: tools,
-		Total: len(tools),
+		Tools:   tools,
+		Total:   total,
+		Limit:   limit,
+		Offset:  offset,
+		HasMore: offset+len(tools) < total,
 	}, nil
 }
 

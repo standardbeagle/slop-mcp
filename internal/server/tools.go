@@ -15,7 +15,7 @@ func (s *Server) registerTools() {
 	s.mcpServer.AddTool(
 		&mcp.Tool{
 			Name:         "search_tools",
-			Description:  "Search and explore all registered MCP tools by name and description",
+			Description:  "Search and explore all registered MCP tools by name and description. Results are paginated (default: 20, max: 100). Use offset for subsequent pages. Response includes total count and has_more flag.",
 			InputSchema:  searchToolsInputSchema,
 			OutputSchema: searchToolsOutputSchema,
 		},

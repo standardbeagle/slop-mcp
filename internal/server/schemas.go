@@ -17,6 +17,14 @@ var searchToolsInputSchema = json.RawMessage(`{
 		"mcp_name": {
 			"type": "string",
 			"description": "Filter to a specific MCP server"
+		},
+		"limit": {
+			"type": "integer",
+			"description": "Maximum number of results to return (default: 20, max: 100)"
+		},
+		"offset": {
+			"type": "integer",
+			"description": "Number of results to skip for pagination (default: 0)"
 		}
 	},
 	"additionalProperties": false
@@ -39,9 +47,12 @@ var searchToolsOutputSchema = json.RawMessage(`{
 				"required": ["name", "description", "mcp_name"]
 			}
 		},
-		"total": {"type": "integer"}
+		"total": {"type": "integer", "description": "Total number of matching tools before pagination"},
+		"limit": {"type": "integer", "description": "Limit applied to results"},
+		"offset": {"type": "integer", "description": "Offset applied to results"},
+		"has_more": {"type": "boolean", "description": "True if more results are available beyond this page"}
 	},
-	"required": ["tools", "total"],
+	"required": ["tools", "total", "limit", "offset", "has_more"],
 	"additionalProperties": false
 }`)
 
