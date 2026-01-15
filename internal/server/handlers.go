@@ -230,8 +230,8 @@ func (s *Server) handleRunSlop(
 
 // ManageMCPsInput is the input for the manage_mcps tool.
 type ManageMCPsInput struct {
-	Action  string            `json:"action" jsonschema:"Action to perform: register, unregister, list, or status"`
-	Name    string            `json:"name,omitempty" jsonschema:"MCP server name (required for register/unregister)"`
+	Action  string            `json:"action" jsonschema:"Action to perform: register, unregister, reconnect, list, status, or health_check"`
+	Name    string            `json:"name,omitempty" jsonschema:"MCP server name (required for register/unregister/reconnect, optional for health_check)"`
 	Type    string            `json:"type,omitempty" jsonschema:"Transport type: command (default), sse, or streamable"`
 	Command string            `json:"command,omitempty" jsonschema:"Command executable for command transport"`
 	Args    []string          `json:"args,omitempty" jsonschema:"Command arguments"`
@@ -243,9 +243,10 @@ type ManageMCPsInput struct {
 
 // ManageMCPsOutput is the output for the manage_mcps tool.
 type ManageMCPsOutput struct {
-	Message string                   `json:"message,omitempty"`
-	MCPs    []registry.MCPStatus     `json:"mcps,omitempty"`
-	Status  []registry.MCPFullStatus `json:"status,omitempty"`
+	Message      string                        `json:"message,omitempty"`
+	MCPs         []registry.MCPStatus          `json:"mcps,omitempty"`
+	Status       []registry.MCPFullStatus      `json:"status,omitempty"`
+	HealthChecks []registry.HealthCheckResult  `json:"health_checks,omitempty"`
 }
 
 func (s *Server) handleManageMCPs(
@@ -339,6 +340,19 @@ func (s *Server) handleManageMCPs(
 			Message: fmt.Sprintf("Unregistered MCP: %s", input.Name),
 		}, nil
 
+	case "reconnect":
+		if input.Name == "" {
+			return nil, ManageMCPsOutput{}, fmt.Errorf("name is required for reconnect action")
+		}
+
+		if err := s.registry.Reconnect(ctx, input.Name); err != nil {
+			return nil, ManageMCPsOutput{}, fmt.Errorf("failed to reconnect MCP: %w", err)
+		}
+
+		return nil, ManageMCPsOutput{
+			Message: fmt.Sprintf("Successfully reconnected MCP: %s", input.Name),
+		}, nil
+
 	case "list":
 		return nil, ManageMCPsOutput{
 			MCPs: s.registry.List(),
@@ -349,8 +363,32 @@ func (s *Server) handleManageMCPs(
 			Status: s.registry.Status(),
 		}, nil
 
+	case "health_check":
+		// Perform health check on specific MCP or all connected MCPs
+		results := s.registry.HealthCheck(ctx, input.Name)
+		msg := ""
+		if input.Name != "" {
+			if len(results) > 0 {
+				msg = fmt.Sprintf("Health check for %s: %s", input.Name, results[0].Status)
+			} else {
+				msg = fmt.Sprintf("MCP %s is not connected", input.Name)
+			}
+		} else {
+			healthy := 0
+			for _, r := range results {
+				if r.Status == registry.HealthStatusHealthy {
+					healthy++
+				}
+			}
+			msg = fmt.Sprintf("Health check complete: %d/%d MCPs healthy", healthy, len(results))
+		}
+		return nil, ManageMCPsOutput{
+			Message:      msg,
+			HealthChecks: results,
+		}, nil
+
 	default:
-		return nil, ManageMCPsOutput{}, fmt.Errorf("invalid action: %s (must be register, unregister, list, or status)", input.Action)
+		return nil, ManageMCPsOutput{}, fmt.Errorf("invalid action: %s (must be register, unregister, reconnect, list, status, or health_check)", input.Action)
 	}
 }
 

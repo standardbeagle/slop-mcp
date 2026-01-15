@@ -7,10 +7,11 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/standardbeagle/slop-mcp/internal/cli"
 	"github.com/standardbeagle/slop-mcp/internal/config"
+	"github.com/standardbeagle/slop-mcp/internal/logging"
 	"github.com/standardbeagle/slop-mcp/internal/registry"
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 const (
@@ -24,6 +25,7 @@ type Server struct {
 	registry    *registry.Registry
 	cliRegistry *cli.Registry
 	config      *config.Config
+	logger      logging.Logger
 }
 
 // New creates a new Server with the given config.
@@ -32,6 +34,7 @@ func New(ctx context.Context, mcps []config.MCPConfig) (*Server, error) {
 		registry:    registry.New(),
 		cliRegistry: cli.NewRegistry(),
 		config:      config.NewConfig(),
+		logger:      logging.Default(),
 	}
 
 	// Create MCP server
@@ -67,6 +70,7 @@ func NewFromConfig(cfg *config.Config) (*Server, error) {
 		registry:    registry.New(),
 		cliRegistry: cli.NewRegistry(),
 		config:      cfg,
+		logger:      logging.Default(),
 	}
 
 	// Create MCP server
@@ -103,7 +107,7 @@ func (s *Server) Start(ctx context.Context) error {
 	// Connect to MCPs in background to avoid blocking server startup
 	go func() {
 		if err := s.registry.ConnectFromConfig(ctx, s.config); err != nil {
-			fmt.Printf("Warning: error connecting to MCPs: %v\n", err)
+			s.logger.Warn("error connecting to MCPs", "error", err)
 		}
 	}()
 	return nil
@@ -115,7 +119,7 @@ func (s *Server) loadCLITools() {
 	userConfigDir := filepath.Dir(config.UserConfigPath())
 	userCLIDir := filepath.Join(userConfigDir, "cli")
 	if err := s.cliRegistry.LoadFromDirectory(userCLIDir); err != nil {
-		fmt.Printf("Warning: failed to load user CLI tools: %v\n", err)
+		s.logger.Debug("failed to load user CLI tools", "dir", userCLIDir, "error", err)
 	}
 
 	// Project-level CLI tools: .slop-mcp/cli/
@@ -123,13 +127,13 @@ func (s *Server) loadCLITools() {
 	if err == nil {
 		projectCLIDir := filepath.Join(cwd, ".slop-mcp", "cli")
 		if err := s.cliRegistry.LoadFromDirectory(projectCLIDir); err != nil {
-			fmt.Printf("Warning: failed to load project CLI tools: %v\n", err)
+			s.logger.Debug("failed to load project CLI tools", "dir", projectCLIDir, "error", err)
 		}
 	}
 
 	// Log loaded tools count
 	if count := s.cliRegistry.Count(); count > 0 {
-		fmt.Printf("Loaded %d CLI tools\n", count)
+		s.logger.Info("loaded CLI tools", "count", count)
 	}
 }
 
@@ -159,7 +163,7 @@ func (s *Server) RunHTTP(ctx context.Context, port int) error {
 	mux := http.NewServeMux()
 	mux.Handle("/", sseHandler)
 
-	fmt.Printf("slop-mcp server running on http://localhost%s\n", addr)
+	s.logger.Info("slop-mcp server running", "addr", addr)
 	return http.ListenAndServe(addr, mux)
 }
 

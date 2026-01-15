@@ -30,6 +30,7 @@ type KDLMCPConfig struct {
 	Env     map[string]string `kdl:"env"`
 	URL     string            `kdl:"url"`
 	Headers map[string]string `kdl:"headers"`
+	Timeout string            `kdl:"timeout"`
 }
 
 // UserConfigPath returns the path to the user config file.
@@ -183,6 +184,7 @@ func loadClaudeCodeMainConfig(path string, cfg *Config) error {
 			Env:     mcp.Env,
 			URL:     mcp.URL,
 			Headers: mcp.Headers,
+			Timeout: mcp.Timeout,
 		}
 	}
 
@@ -255,6 +257,7 @@ func loadClaudeCodePluginMCPs(pluginsPath string, cfg *Config) error {
 					Env:     mcp.Env,
 					URL:     mcp.URL,
 					Headers: mcp.Headers,
+					Timeout: mcp.Timeout,
 				}
 			}
 		}
@@ -293,6 +296,7 @@ func LoadClaudeDesktopConfig() (*Config, error) {
 			Env:     mcp.Env,
 			URL:     mcp.URL,
 			Headers: mcp.Headers,
+			Timeout: mcp.Timeout,
 		}
 	}
 
@@ -352,6 +356,7 @@ func GetMCP(path, name string) (*MCPConfig, error) {
 			Env:     jmcp.Env,
 			URL:     jmcp.URL,
 			Headers: jmcp.Headers,
+			Timeout: jmcp.Timeout,
 		}, nil
 	}
 
@@ -399,6 +404,7 @@ func ParseKDLConfig(data string, source Source) (*Config, error) {
 			Env:     m.Env,
 			URL:     m.URL,
 			Headers: m.Headers,
+			Timeout: m.Timeout,
 			Source:  source,
 		}
 	}
@@ -487,6 +493,10 @@ func formatMCPBlock(mcp MCPConfig) string {
 
 	if mcp.URL != "" {
 		result += "    url \"" + mcp.URL + "\"\n"
+	}
+
+	if mcp.Timeout != "" {
+		result += "    timeout \"" + mcp.Timeout + "\"\n"
 	}
 
 	if len(mcp.Env) > 0 {

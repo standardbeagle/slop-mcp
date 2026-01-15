@@ -126,11 +126,11 @@ var manageMCPsInputSchema = json.RawMessage(`{
 	"properties": {
 		"action": {
 			"type": "string",
-			"description": "Action to perform: register, unregister, list, or status"
+			"description": "Action to perform: register, unregister, reconnect, list, or status"
 		},
 		"name": {
 			"type": "string",
-			"description": "MCP server name (required for register/unregister)"
+			"description": "MCP server name (required for register/unregister/reconnect)"
 		},
 		"type": {
 			"type": "string",
@@ -197,7 +197,8 @@ var manageMCPsOutputSchema = json.RawMessage(`{
 					"state": {"type": "string"},
 					"source": {"type": "string"},
 					"tool_count": {"type": "integer"},
-					"error": {"type": "string"}
+					"error": {"type": "string"},
+					"reconnect_attempts": {"type": "integer"}
 				},
 				"required": ["name", "type", "state", "source"]
 			}

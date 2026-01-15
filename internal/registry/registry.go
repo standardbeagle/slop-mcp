@@ -14,10 +14,35 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/standardbeagle/slop-mcp/internal/auth"
 	"github.com/standardbeagle/slop-mcp/internal/config"
+	"github.com/standardbeagle/slop-mcp/internal/logging"
 )
 
-// ConnectionTimeout is the default timeout for connecting to an MCP server.
-const ConnectionTimeout = 30 * time.Second
+// DefaultConnectionTimeout is the default timeout for connecting to an MCP server.
+const DefaultConnectionTimeout = 30 * time.Second
+
+// TimeoutEnvVar is the environment variable name for global timeout configuration.
+const TimeoutEnvVar = "SLOP_MCP_TIMEOUT"
+
+// GetConnectionTimeout returns the connection timeout for an MCP.
+// Priority: per-MCP config > SLOP_MCP_TIMEOUT env var > default (30s).
+func GetConnectionTimeout(cfg config.MCPConfig) time.Duration {
+	// 1. Per-MCP config takes highest priority
+	if cfg.Timeout != "" {
+		if d, err := time.ParseDuration(cfg.Timeout); err == nil && d > 0 {
+			return d
+		}
+	}
+
+	// 2. Environment variable takes second priority
+	if envTimeout := os.Getenv(TimeoutEnvVar); envTimeout != "" {
+		if d, err := time.ParseDuration(envTimeout); err == nil && d > 0 {
+			return d
+		}
+	}
+
+	// 3. Default timeout
+	return DefaultConnectionTimeout
+}
 
 // ToolInfo represents a tool with its source MCP.
 type ToolInfo struct {
@@ -84,29 +109,62 @@ type MCPStatus struct {
 type MCPState string
 
 const (
-	StateConfigured   MCPState = "configured"
-	StateConnecting   MCPState = "connecting"
-	StateConnected    MCPState = "connected"
-	StateDisconnected MCPState = "disconnected"
-	StateError        MCPState = "error"
-	StateNeedsAuth    MCPState = "needs_auth"
+	StateConfigured    MCPState = "configured"
+	StateConnecting    MCPState = "connecting"
+	StateConnected     MCPState = "connected"
+	StateDisconnected  MCPState = "disconnected"
+	StateReconnecting  MCPState = "reconnecting"
+	StateError         MCPState = "error"
+	StateNeedsAuth     MCPState = "needs_auth"
+)
+
+// Reconnection constants for exponential backoff.
+const (
+	DefaultMaxRetries    = 5              // Default max auto-reconnect retries (0 = disabled)
+	InitialBackoff       = 1 * time.Second
+	MaxBackoff           = 60 * time.Second
+	BackoffMultiplier    = 2.0
+)
+
+// Health check constants.
+const (
+	DefaultHealthCheckTimeout  = 5 * time.Second  // Timeout for individual health check pings
+	DefaultHealthCheckInterval = 0                 // Default is disabled (0 = no background health checks)
+)
+
+// HealthStatus represents the health check status of an MCP.
+type HealthStatus string
+
+const (
+	HealthStatusUnknown   HealthStatus = "unknown"   // Never checked
+	HealthStatusHealthy   HealthStatus = "healthy"   // Last ping succeeded
+	HealthStatusUnhealthy HealthStatus = "unhealthy" // Last ping failed
 )
 
 // MCPFullStatus includes state and error information for all MCPs.
 type MCPFullStatus struct {
-	Name      string   `json:"name"`
-	Type      string   `json:"type"`
-	State     MCPState `json:"state"`
-	ToolCount int      `json:"tool_count,omitempty"`
-	Source    string   `json:"source"`
-	Error     string   `json:"error,omitempty"`
+	Name              string       `json:"name"`
+	Type              string       `json:"type"`
+	State             MCPState     `json:"state"`
+	ToolCount         int          `json:"tool_count,omitempty"`
+	Source            string       `json:"source"`
+	Error             string       `json:"error,omitempty"`
+	ReconnectAttempts int          `json:"reconnect_attempts,omitempty"`
+	HealthStatus      HealthStatus `json:"health_status,omitempty"`
+	LastHealthCheck   string       `json:"last_health_check,omitempty"`
+	HealthError       string       `json:"health_error,omitempty"`
 }
 
 // mcpState tracks the state of a configured MCP.
 type mcpState struct {
-	config config.MCPConfig
-	state  MCPState
-	err    error
+	config            config.MCPConfig
+	state             MCPState
+	err               error
+	reconnectAttempts int          // Number of reconnection attempts since last successful connect
+	lastReconnect     time.Time    // Time of last reconnection attempt
+	healthStatus      HealthStatus // Last health check result
+	lastHealthCheck   time.Time    // Time of last health check
+	healthError       error        // Error from last health check if unhealthy
 }
 
 // mcpConnection holds an MCP client session.
@@ -118,10 +176,12 @@ type mcpConnection struct {
 
 // Registry manages multiple MCP connections.
 type Registry struct {
-	connections map[string]*mcpConnection
-	states      map[string]*mcpState // tracks all configured MCPs and their states
-	toolIndex   *ToolIndex
-	mu          sync.RWMutex
+	connections       map[string]*mcpConnection
+	states            map[string]*mcpState // tracks all configured MCPs and their states
+	toolIndex         *ToolIndex
+	logger            logging.Logger
+	mu                sync.RWMutex
+	healthCheckCancel context.CancelFunc // cancels background health check goroutine
 }
 
 // New creates a new Registry.
@@ -130,6 +190,17 @@ func New() *Registry {
 		connections: make(map[string]*mcpConnection),
 		states:      make(map[string]*mcpState),
 		toolIndex:   NewToolIndex(),
+		logger:      logging.Default(),
+	}
+}
+
+// NewWithLogger creates a new Registry with a custom logger.
+func NewWithLogger(logger logging.Logger) *Registry {
+	return &Registry{
+		connections: make(map[string]*mcpConnection),
+		states:      make(map[string]*mcpState),
+		toolIndex:   NewToolIndex(),
+		logger:      logger,
 	}
 }
 
@@ -155,10 +226,11 @@ func (r *Registry) Status() []MCPFullStatus {
 	result := make([]MCPFullStatus, 0, len(r.states))
 	for name, state := range r.states {
 		status := MCPFullStatus{
-			Name:   name,
-			Type:   state.config.Type,
-			State:  state.state,
-			Source: state.config.Source.String(),
+			Name:              name,
+			Type:              state.config.Type,
+			State:             state.state,
+			Source:            state.config.Source.String(),
+			ReconnectAttempts: state.reconnectAttempts,
 		}
 
 		// Add tool count if connected
@@ -169,6 +241,19 @@ func (r *Registry) Status() []MCPFullStatus {
 		// Add error message if in error state
 		if state.state == StateError && state.err != nil {
 			status.Error = state.err.Error()
+		}
+
+		// Add health check info
+		if state.healthStatus != "" {
+			status.HealthStatus = state.healthStatus
+		} else {
+			status.HealthStatus = HealthStatusUnknown
+		}
+		if !state.lastHealthCheck.IsZero() {
+			status.LastHealthCheck = state.lastHealthCheck.Format(time.RFC3339)
+		}
+		if state.healthError != nil {
+			status.HealthError = state.healthError.Error()
 		}
 
 		result = append(result, status)
@@ -246,7 +331,8 @@ func (r *Registry) Connect(ctx context.Context, cfg config.MCPConfig) error {
 	}
 
 	// Use a timeout for connection to avoid hanging on slow/unresponsive MCPs
-	connectCtx, cancel := context.WithTimeout(ctx, ConnectionTimeout)
+	timeout := GetConnectionTimeout(cfg)
+	connectCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	// Connect
@@ -274,11 +360,14 @@ func (r *Registry) Connect(ctx context.Context, cfg config.MCPConfig) error {
 	}
 
 	// Index tools from this MCP with a fresh timeout
-	indexCtx, indexCancel := context.WithTimeout(ctx, ConnectionTimeout)
+	indexCtx, indexCancel := context.WithTimeout(ctx, timeout)
 	defer indexCancel()
 	if err := r.indexTools(indexCtx, cfg.Name, session); err != nil {
-		fmt.Printf("Warning: failed to index tools for %s: %v\n", cfg.Name, err)
+		r.logger.Warn("failed to index tools", "mcp_name", cfg.Name, "error", err)
 	}
+
+	toolCount := r.toolIndex.CountForMCP(cfg.Name)
+	r.logger.Info("connected to MCP", "mcp_name", cfg.Name, "type", cfg.Type, "tool_count", toolCount)
 
 	return nil
 }
@@ -297,7 +386,7 @@ func (r *Registry) Disconnect(name string) error {
 	// when killing a subprocess-based MCP
 	if err := conn.session.Close(); err != nil {
 		// Log but don't fail - the MCP is still being disconnected
-		fmt.Printf("Warning: error closing %s: %v\n", name, err)
+		r.logger.Warn("error closing MCP session", "mcp_name", name, "error", err)
 	}
 
 	// Update state to disconnected (preserve config for potential reconnect)
@@ -334,6 +423,292 @@ func (r *Registry) Reconnect(ctx context.Context, name string) error {
 	return r.Connect(ctx, cfg)
 }
 
+// ReconnectWithBackoff attempts to reconnect an MCP with exponential backoff.
+// It will try up to maxRetries times (or cfg.MaxRetries if 0 is passed), with increasing delays.
+// Returns nil on successful reconnection, or the last error if all retries failed.
+// If maxRetries is 0, uses the config's MaxRetries value (defaults to DefaultMaxRetries=5).
+// To disable retries entirely, set cfg.MaxRetries to -1.
+func (r *Registry) ReconnectWithBackoff(ctx context.Context, name string, maxRetries int) error {
+	// Get the config and current state
+	r.mu.RLock()
+	state, exists := r.states[name]
+	if !exists {
+		r.mu.RUnlock()
+		return fmt.Errorf("MCP not configured: %s", name)
+	}
+	cfg := state.config
+	currentAttempts := state.reconnectAttempts
+	r.mu.RUnlock()
+
+	// Determine max retries
+	if maxRetries == 0 {
+		if cfg.MaxRetries > 0 {
+			maxRetries = cfg.MaxRetries
+		} else if cfg.MaxRetries == 0 {
+			maxRetries = DefaultMaxRetries
+		} else {
+			// MaxRetries < 0 means disabled
+			return fmt.Errorf("auto-reconnect disabled for MCP %s", name)
+		}
+	}
+
+	// Update state to reconnecting
+	r.mu.Lock()
+	if s, ok := r.states[name]; ok {
+		s.state = StateReconnecting
+	}
+	r.mu.Unlock()
+
+	var lastErr error
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		// Calculate backoff delay
+		backoff := calculateBackoff(attempt)
+
+		// Update state with attempt count
+		r.mu.Lock()
+		if s, ok := r.states[name]; ok {
+			s.reconnectAttempts = currentAttempts + attempt
+			s.lastReconnect = time.Now()
+		}
+		r.mu.Unlock()
+
+		// Wait for backoff (respecting context cancellation)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoff):
+		}
+
+		// Attempt reconnection
+		err := r.Reconnect(ctx, name)
+		if err == nil {
+			// Success - reset reconnection attempts
+			r.mu.Lock()
+			if s, ok := r.states[name]; ok {
+				s.reconnectAttempts = 0
+			}
+			r.mu.Unlock()
+			return nil
+		}
+
+		lastErr = err
+		r.logger.Warn("reconnect attempt failed",
+			"mcp_name", name,
+			"attempt", attempt,
+			"max_retries", maxRetries,
+			"error", err)
+	}
+
+	// All retries exhausted - update state to error
+	r.mu.Lock()
+	if s, ok := r.states[name]; ok {
+		s.state = StateError
+		s.err = fmt.Errorf("reconnection failed after %d attempts: %w", maxRetries, lastErr)
+	}
+	r.mu.Unlock()
+
+	return fmt.Errorf("reconnection failed after %d attempts: %w", maxRetries, lastErr)
+}
+
+// calculateBackoff returns the backoff duration for a given retry attempt.
+// Uses exponential backoff: 1s, 2s, 4s, 8s, ..., up to MaxBackoff (60s).
+func calculateBackoff(attempt int) time.Duration {
+	backoff := InitialBackoff
+	for i := 1; i < attempt; i++ {
+		backoff = time.Duration(float64(backoff) * BackoffMultiplier)
+		if backoff > MaxBackoff {
+			return MaxBackoff
+		}
+	}
+	return backoff
+}
+
+// GetReconnectAttempts returns the number of reconnection attempts for an MCP.
+func (r *Registry) GetReconnectAttempts(name string) int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if state, ok := r.states[name]; ok {
+		return state.reconnectAttempts
+	}
+	return 0
+}
+
+// HealthCheckResult contains the result of a health check for a single MCP.
+type HealthCheckResult struct {
+	Name         string       `json:"name"`
+	Status       HealthStatus `json:"status"`
+	ResponseTime string       `json:"response_time,omitempty"`
+	Error        string       `json:"error,omitempty"`
+	CheckedAt    time.Time    `json:"checked_at"`
+}
+
+// HealthCheck performs a health check on the specified MCP or all connected MCPs.
+// If name is empty, all connected MCPs are checked concurrently.
+// Health checks use the MCP ping method with a 5-second timeout.
+// Results are stored in the MCP state and returned.
+func (r *Registry) HealthCheck(ctx context.Context, name string) []HealthCheckResult {
+	r.mu.RLock()
+	var toCheck []string
+	if name != "" {
+		// Check specific MCP
+		if _, ok := r.connections[name]; ok {
+			toCheck = []string{name}
+		}
+	} else {
+		// Check all connected MCPs
+		for n := range r.connections {
+			toCheck = append(toCheck, n)
+		}
+	}
+	r.mu.RUnlock()
+
+	if len(toCheck) == 0 {
+		return nil
+	}
+
+	// Run health checks concurrently
+	results := make([]HealthCheckResult, len(toCheck))
+	var wg sync.WaitGroup
+	wg.Add(len(toCheck))
+
+	for i, mcpName := range toCheck {
+		go func(idx int, n string) {
+			defer wg.Done()
+			results[idx] = r.healthCheckOne(ctx, n)
+		}(i, mcpName)
+	}
+
+	wg.Wait()
+	return results
+}
+
+// healthCheckOne performs a health check on a single MCP.
+func (r *Registry) healthCheckOne(ctx context.Context, name string) HealthCheckResult {
+	checkTime := time.Now()
+	result := HealthCheckResult{
+		Name:      name,
+		CheckedAt: checkTime,
+	}
+
+	// Get the connection
+	r.mu.RLock()
+	conn, ok := r.connections[name]
+	r.mu.RUnlock()
+
+	if !ok {
+		result.Status = HealthStatusUnhealthy
+		result.Error = "MCP not connected"
+		r.updateHealthState(name, HealthStatusUnhealthy, checkTime, fmt.Errorf("MCP not connected"))
+		return result
+	}
+
+	// Create a context with health check timeout
+	pingCtx, cancel := context.WithTimeout(ctx, DefaultHealthCheckTimeout)
+	defer cancel()
+
+	// Perform ping
+	start := time.Now()
+	err := conn.session.Ping(pingCtx, &mcp.PingParams{})
+	elapsed := time.Since(start)
+
+	result.ResponseTime = elapsed.String()
+
+	if err != nil {
+		result.Status = HealthStatusUnhealthy
+		result.Error = err.Error()
+		r.updateHealthState(name, HealthStatusUnhealthy, checkTime, err)
+		r.logger.Warn("health check failed", "mcp_name", name, "error", err, "response_time", elapsed)
+	} else {
+		result.Status = HealthStatusHealthy
+		r.updateHealthState(name, HealthStatusHealthy, checkTime, nil)
+		r.logger.Debug("health check passed", "mcp_name", name, "response_time", elapsed)
+	}
+
+	return result
+}
+
+// updateHealthState updates the health check state for an MCP.
+func (r *Registry) updateHealthState(name string, status HealthStatus, checkedAt time.Time, err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if state, ok := r.states[name]; ok {
+		state.healthStatus = status
+		state.lastHealthCheck = checkedAt
+		state.healthError = err
+	}
+}
+
+// GetHealthStatus returns the last known health status for an MCP.
+func (r *Registry) GetHealthStatus(name string) (HealthStatus, time.Time, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if state, ok := r.states[name]; ok {
+		return state.healthStatus, state.lastHealthCheck, state.healthError
+	}
+	return HealthStatusUnknown, time.Time{}, nil
+}
+
+// StartBackgroundHealthCheck starts a background goroutine that periodically runs health checks.
+// The interval is parsed from a duration string (e.g., "30s", "1m").
+// Pass an empty string or "0" to disable background health checks.
+// Calling this method again will stop any existing background health check and start a new one.
+func (r *Registry) StartBackgroundHealthCheck(intervalStr string) error {
+	// Stop any existing background health check
+	r.StopBackgroundHealthCheck()
+
+	if intervalStr == "" || intervalStr == "0" {
+		return nil // Disabled
+	}
+
+	interval, err := time.ParseDuration(intervalStr)
+	if err != nil {
+		return fmt.Errorf("invalid health check interval: %w", err)
+	}
+
+	if interval <= 0 {
+		return nil // Disabled
+	}
+
+	// Create a cancellable context for the background goroutine
+	ctx, cancel := context.WithCancel(context.Background())
+	r.mu.Lock()
+	r.healthCheckCancel = cancel
+	r.mu.Unlock()
+
+	go r.backgroundHealthCheckLoop(ctx, interval)
+	r.logger.Info("started background health check", "interval", interval)
+	return nil
+}
+
+// StopBackgroundHealthCheck stops any running background health check goroutine.
+func (r *Registry) StopBackgroundHealthCheck() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.healthCheckCancel != nil {
+		r.healthCheckCancel()
+		r.healthCheckCancel = nil
+	}
+}
+
+// backgroundHealthCheckLoop runs health checks on all connected MCPs at the specified interval.
+func (r *Registry) backgroundHealthCheckLoop(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			r.logger.Debug("background health check stopped")
+			return
+		case <-ticker.C:
+			r.HealthCheck(ctx, "") // Check all MCPs
+		}
+	}
+}
+
 // List returns all configured MCPs (including disconnected ones).
 func (r *Registry) List() []MCPStatus {
 	r.mu.RLock()
@@ -364,6 +739,8 @@ func (r *Registry) List() []MCPStatus {
 			status.Error = "not connected (configured but never attempted)"
 		} else if state.state == StateConnecting {
 			status.Error = "connecting..."
+		} else if state.state == StateReconnecting {
+			status.Error = fmt.Sprintf("reconnecting (attempt %d)", state.reconnectAttempts)
 		}
 
 		result = append(result, status)
@@ -629,8 +1006,11 @@ func (r *Registry) createParameterError(mcpName, toolName, originalError string,
 	}
 }
 
-// Close closes all MCP connections.
+// Close closes all MCP connections and stops background health checks.
 func (r *Registry) Close() error {
+	// Stop background health check first (uses its own lock)
+	r.StopBackgroundHealthCheck()
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -638,7 +1018,7 @@ func (r *Registry) Close() error {
 	for name, conn := range r.connections {
 		if err := conn.session.Close(); err != nil {
 			lastErr = err
-			fmt.Printf("Warning: error closing %s: %v\n", name, err)
+			r.logger.Warn("error closing MCP", "mcp_name", name, "error", err)
 		}
 	}
 	r.connections = make(map[string]*mcpConnection)
@@ -1064,7 +1444,7 @@ func extractParamsFromSchema(schema map[string]any) []ParamInfo {
 func (r *Registry) ConnectFromConfig(ctx context.Context, cfg *config.Config) error {
 	for _, mcpCfg := range cfg.MCPs {
 		if err := r.Connect(ctx, mcpCfg); err != nil {
-			fmt.Printf("Warning: failed to connect to MCP %s: %v\n", mcpCfg.Name, err)
+			r.logger.Warn("failed to connect to MCP", "mcp_name", mcpCfg.Name, "error", err)
 		}
 	}
 	return nil
