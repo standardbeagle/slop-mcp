@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/standardbeagle/slop-mcp/internal/builtins"
 	"github.com/standardbeagle/slop-mcp/internal/config"
 	"github.com/standardbeagle/slop/pkg/slop"
 )
@@ -87,6 +88,9 @@ func cmdRun(args []string) {
 	// Create SLOP runtime
 	rt := slop.NewRuntime()
 	defer rt.Close()
+
+	// Register crypto built-ins
+	builtins.RegisterCrypto(rt)
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()

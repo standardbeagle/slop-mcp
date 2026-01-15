@@ -9,6 +9,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/standardbeagle/slop-mcp/internal/auth"
+	"github.com/standardbeagle/slop-mcp/internal/builtins"
 	"github.com/standardbeagle/slop-mcp/internal/cli"
 	"github.com/standardbeagle/slop-mcp/internal/config"
 	"github.com/standardbeagle/slop-mcp/internal/registry"
@@ -182,6 +183,9 @@ func (s *Server) handleRunSlop(
 	// Create SLOP runtime
 	rt := slop.NewRuntime()
 	defer rt.Close()
+
+	// Register crypto built-ins
+	builtins.RegisterCrypto(rt)
 
 	// Connect all MCP services to the slop runtime
 	for _, cfg := range s.registry.GetConfigs() {
