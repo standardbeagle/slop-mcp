@@ -31,6 +31,8 @@ build:
 	@echo "Building $(BINARY)..."
 	@mkdir -p $(BUILD_DIR)
 	$(GOBUILD) $(BUILD_FLAGS) $(BUILD_TAGS) -o $(BUILD_DIR)/$(BINARY) ./cmd/slop-mcp
+	@echo "Building memory-cli..."
+	$(GOBUILD) $(BUILD_FLAGS) -o $(BUILD_DIR)/memory-cli ./cmd/memory-cli
 
 # Build the mock MCP server for testing
 build-mock:
@@ -85,13 +87,15 @@ clean:
 install: build
 	@echo "Installing $(BINARY) to $(INSTALL_DIR)..."
 	install -D -m 755 $(BUILD_DIR)/$(BINARY) $(INSTALL_DIR)/$(BINARY)
-	@echo "Installed $(BINARY) to $(INSTALL_DIR)/$(BINARY)"
+	install -D -m 755 $(BUILD_DIR)/memory-cli $(INSTALL_DIR)/memory-cli
+	@echo "Installed $(BINARY) and memory-cli to $(INSTALL_DIR)"
 
 # Uninstall from ~/.local/bin
 uninstall:
-	@echo "Removing $(BINARY) from $(INSTALL_DIR)..."
+	@echo "Removing $(BINARY) and memory-cli from $(INSTALL_DIR)..."
 	@rm -f $(INSTALL_DIR)/$(BINARY)
-	@echo "Uninstalled $(BINARY)"
+	@rm -f $(INSTALL_DIR)/memory-cli
+	@echo "Uninstalled $(BINARY) and memory-cli"
 
 # Help
 help:

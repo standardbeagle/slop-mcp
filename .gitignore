@@ -1,5 +1,7 @@
 # Local config (not shared via git)
 .slop-mcp.local.kdl
+.slop-mcp/
+.claude/
 
 # Build artifacts
 /slop-mcp

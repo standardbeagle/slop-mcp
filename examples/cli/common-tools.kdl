@@ -1,0 +1,449 @@
+// Common CLI Tools - Example Definitions
+// These tools are commonly used in development workflows
+
+// JSON processor
+cli "jq" {
+    description "Process JSON with jq filters"
+    command "jq"
+
+    arg "filter" {
+        description "jq filter expression (e.g., '.name', '.[] | select(.active)')"
+        required true
+        position 0
+    }
+
+    flag "raw-output" {
+        short "-r"
+        description "Output raw strings instead of JSON-encoded"
+    }
+
+    flag "compact" {
+        short "-c"
+        description "Compact output (no pretty-printing)"
+    }
+
+    flag "slurp" {
+        short "-s"
+        description "Read entire input into single array"
+    }
+
+    flag "sort-keys" {
+        short "-S"
+        description "Sort object keys"
+    }
+
+    stdin {
+        description "JSON input to process"
+        format "json"
+    }
+
+    stdout {
+        format "auto"
+    }
+
+    timeout 30000
+}
+
+// YAML processor (yq)
+cli "yq" {
+    description "Process YAML with yq expressions"
+    command "yq"
+
+    arg "expression" {
+        description "yq expression (similar to jq syntax)"
+        required true
+        position 0
+    }
+
+    arg "file" {
+        description "YAML file to process (uses stdin if omitted)"
+        required false
+        position 1
+    }
+
+    flag "output-format" {
+        short "-o"
+        type "string"
+        description "Output format"
+        enum "yaml" "json" "props" "csv" "tsv" "xml"
+        default "yaml"
+    }
+
+    flag "in-place" {
+        short "-i"
+        description "Edit file in place"
+    }
+
+    stdin {
+        description "YAML input to process"
+        format "text"
+    }
+
+    timeout 30000
+}
+
+// ripgrep - fast search
+cli "rg" {
+    description "Search files for patterns using ripgrep (fast grep alternative)"
+    command "rg"
+
+    arg "pattern" {
+        description "Search pattern (supports regex)"
+        required true
+        position 0
+    }
+
+    arg "path" {
+        description "Path to search (default: current directory)"
+        required false
+        position 1
+        default "."
+    }
+
+    flag "ignore-case" {
+        short "-i"
+        description "Case insensitive search"
+    }
+
+    flag "word-regexp" {
+        short "-w"
+        description "Only match whole words"
+    }
+
+    flag "fixed-strings" {
+        short "-F"
+        description "Treat pattern as literal string"
+    }
+
+    flag "context" {
+        short "-C"
+        type "number"
+        description "Lines of context to show around matches"
+        default 0
+    }
+
+    flag "glob" {
+        short "-g"
+        type "array"
+        repeat true
+        description "Include/exclude globs (e.g., '*.js', '!*.min.js')"
+    }
+
+    flag "type" {
+        short "-t"
+        type "array"
+        repeat true
+        description "File types to search (e.g., 'js', 'py', 'go')"
+    }
+
+    flag "max-count" {
+        short "-m"
+        type "number"
+        description "Maximum matches per file"
+    }
+
+    flag "count" {
+        short "-c"
+        description "Only show count of matches"
+    }
+
+    flag "files-with-matches" {
+        short "-l"
+        description "Only show filenames with matches"
+    }
+
+    flag "json" {
+        long "--json"
+        description "Output results as JSON"
+    }
+
+    stdout {
+        format "auto"
+    }
+
+    timeout 120000
+}
+
+// fd - fast file finder
+cli "fd" {
+    description "Find files/directories by name (fast find alternative)"
+    command "fd"
+
+    arg "pattern" {
+        description "Search pattern (regex by default)"
+        required false
+        position 0
+    }
+
+    arg "path" {
+        description "Path to search (default: current directory)"
+        required false
+        position 1
+    }
+
+    flag "type" {
+        short "-t"
+        type "string"
+        description "Filter by type"
+        enum "f" "d" "l" "s" "p" "x" "e"
+    }
+
+    flag "extension" {
+        short "-e"
+        type "array"
+        repeat true
+        description "Filter by file extension"
+    }
+
+    flag "hidden" {
+        short "-H"
+        description "Include hidden files"
+    }
+
+    flag "no-ignore" {
+        short "-I"
+        description "Don't respect .gitignore"
+    }
+
+    flag "max-depth" {
+        short "-d"
+        type "number"
+        description "Maximum search depth"
+    }
+
+    flag "exec" {
+        short "-x"
+        type "string"
+        description "Execute command for each result"
+    }
+
+    flag "absolute-path" {
+        short "-a"
+        description "Show absolute paths"
+    }
+
+    timeout 60000
+}
+
+// bat - syntax highlighted cat
+cli "bat" {
+    description "Display file contents with syntax highlighting"
+    command "bat"
+
+    arg "file" {
+        description "File to display"
+        required true
+        position 0
+    }
+
+    flag "language" {
+        short "-l"
+        type "string"
+        description "Force language for syntax highlighting"
+    }
+
+    flag "plain" {
+        short "-p"
+        description "Plain output (no line numbers, headers)"
+    }
+
+    flag "line-range" {
+        short "-r"
+        type "string"
+        description "Range of lines to display (e.g., '10:20', ':50', '100:')"
+    }
+
+    flag "show-all" {
+        short "-A"
+        description "Show non-printable characters"
+    }
+
+    flag "number" {
+        short "-n"
+        description "Show line numbers"
+    }
+
+    stdout {
+        format "text"
+        trim false
+    }
+
+    timeout 30000
+}
+
+// GitHub CLI
+cli "gh" {
+    description "GitHub CLI for repository operations"
+    command "gh"
+
+    arg "command" {
+        description "gh subcommand (e.g., 'pr list', 'issue view 123')"
+        required true
+        position 0
+        type "array"
+    }
+
+    flag "repo" {
+        short "-R"
+        type "string"
+        description "Repository in OWNER/REPO format"
+    }
+
+    flag "json" {
+        long "--json"
+        type "array"
+        separator ","
+        description "JSON fields to output"
+    }
+
+    flag "jq" {
+        short "-q"
+        type "string"
+        description "jq expression to filter JSON output"
+    }
+
+    flag "limit" {
+        short "-L"
+        type "number"
+        description "Maximum number of items"
+    }
+
+    env {
+        GH_FORCE_TTY "true"
+    }
+
+    timeout 60000
+}
+
+// curl - HTTP client
+cli "curl" {
+    description "Make HTTP requests"
+    command "curl"
+
+    arg "url" {
+        description "URL to request"
+        required true
+        position 0
+    }
+
+    flag "method" {
+        short "-X"
+        type "string"
+        description "HTTP method"
+        enum "GET" "POST" "PUT" "DELETE" "PATCH" "HEAD" "OPTIONS"
+        default "GET"
+    }
+
+    flag "header" {
+        short "-H"
+        type "array"
+        repeat true
+        description "HTTP headers (e.g., 'Content-Type: application/json')"
+    }
+
+    flag "data" {
+        short "-d"
+        type "string"
+        description "Request body data"
+    }
+
+    flag "data-raw" {
+        long "--data-raw"
+        type "string"
+        description "Request body (no @ interpretation)"
+    }
+
+    flag "output" {
+        short "-o"
+        type "string"
+        description "Write output to file"
+    }
+
+    flag "include" {
+        short "-i"
+        description "Include response headers in output"
+    }
+
+    flag "head" {
+        short "-I"
+        description "HEAD request (headers only)"
+    }
+
+    flag "location" {
+        short "-L"
+        description "Follow redirects"
+        default true
+    }
+
+    flag "max-time" {
+        short "-m"
+        type "number"
+        description "Maximum time in seconds"
+        default 30
+    }
+
+    flag "silent" {
+        short "-s"
+        description "Silent mode (no progress)"
+        default true
+    }
+
+    flag "show-error" {
+        short "-S"
+        description "Show errors in silent mode"
+        default true
+    }
+
+    timeout 120000
+}
+
+// sqlite3 - SQLite CLI
+cli "sqlite3" {
+    description "Execute SQL on SQLite databases"
+    command "sqlite3"
+
+    arg "database" {
+        description "Database file path (use :memory: for in-memory)"
+        required true
+        position 0
+    }
+
+    arg "sql" {
+        description "SQL query to execute"
+        required false
+        position 1
+    }
+
+    flag "header" {
+        long "-header"
+        description "Show column headers"
+        default true
+    }
+
+    flag "json" {
+        long "-json"
+        description "Output as JSON array"
+    }
+
+    flag "csv" {
+        long "-csv"
+        description "Output as CSV"
+    }
+
+    flag "readonly" {
+        long "-readonly"
+        description "Open in read-only mode"
+    }
+
+    flag "separator" {
+        short "-separator"
+        type "string"
+        description "Column separator for list mode"
+    }
+
+    stdin {
+        description "SQL commands to execute"
+    }
+
+    timeout 60000
+}
