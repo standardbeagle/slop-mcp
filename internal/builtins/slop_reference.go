@@ -270,6 +270,19 @@ var SlopReference = []SlopFunction{
 	{Name: "crypto_base64_decode", Category: "crypto", Signature: "crypto_base64_decode(data)", Description: "Base64 decode", Example: `crypto_base64_decode("aGVsbG8=")`, Returns: "string", Tags: []string{"slop-mcp"}},
 	{Name: "crypto_hex_encode", Category: "crypto", Signature: "crypto_hex_encode(data)", Description: "Hex encode", Example: `crypto_hex_encode("hello")`, Returns: "string", Tags: []string{"slop-mcp"}},
 	{Name: "crypto_hex_decode", Category: "crypto", Signature: "crypto_hex_decode(data)", Description: "Hex decode", Example: `crypto_hex_decode("68656c6c6f")`, Returns: "string", Tags: []string{"slop-mcp"}},
+
+	// JWT functions (slop-mcp additions)
+	{Name: "jwt_decode", Category: "jwt", Signature: "jwt_decode(token)", Description: "Decodes JWT without verification", Example: `jwt_decode("eyJ...")`, Returns: "map", Tags: []string{"slop-mcp", "auth"}},
+	{Name: "jwt_verify", Category: "jwt", Signature: "jwt_verify(token, key, alg)", Description: "Verifies JWT signature", Example: `jwt_verify(token, secret, "HS256")`, Returns: "map", Tags: []string{"slop-mcp", "auth"}},
+	{Name: "jwt_sign", Category: "jwt", Signature: "jwt_sign(claims, key, alg)", Description: "Creates signed JWT", Example: `jwt_sign({"sub": "1234"}, secret, "HS256")`, Returns: "string", Tags: []string{"slop-mcp", "auth"}},
+	{Name: "jwt_expired", Category: "jwt", Signature: "jwt_expired(token)", Description: "Checks if JWT exp claim has passed", Example: `jwt_expired(token)`, Returns: "bool", Tags: []string{"slop-mcp", "auth"}},
+
+	// Template functions (slop-mcp additions)
+	{Name: "template_render", Category: "template", Signature: "template_render(tmpl, data)", Description: "Renders Go template with data", Example: `template_render("Hello {{.name}}", {"name": "World"})`, Returns: "string", Tags: []string{"slop-mcp"}},
+	{Name: "template_render_file", Category: "template", Signature: "template_render_file(path, data)", Description: "Renders Go template from file", Example: `template_render_file("template.tmpl", data)`, Returns: "string", Tags: []string{"slop-mcp"}},
+	{Name: "indent", Category: "template", Signature: "indent(text, spaces)", Description: "Indents all lines by spaces", Example: `indent("hello\nworld", 4)`, Returns: "string", Tags: []string{"slop-mcp"}},
+	{Name: "dedent", Category: "template", Signature: "dedent(text)", Description: "Removes common leading whitespace", Example: `dedent("  hello\n  world")`, Returns: "string", Tags: []string{"slop-mcp"}},
+	{Name: "wrap", Category: "template", Signature: "wrap(text, width)", Description: "Wraps text at specified width", Example: `wrap("long text here", 40)`, Returns: "string", Tags: []string{"slop-mcp"}},
 }
 
 // RegisterSlopSearch registers the slop_search built-in function.

@@ -89,9 +89,11 @@ func cmdRun(args []string) {
 	rt := slop.NewRuntime()
 	defer rt.Close()
 
-	// Register crypto built-ins and SLOP search
+	// Register built-in functions
 	builtins.RegisterCrypto(rt)
 	builtins.RegisterSlopSearch(rt)
+	builtins.RegisterJWT(rt)
+	builtins.RegisterTemplate(rt)
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()

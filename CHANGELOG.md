@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **JWT built-in functions for SLOP scripts**:
+  - `jwt_decode(token)`: Decode JWT without verification (inspect claims)
+  - `jwt_verify(token, key, alg)`: Verify JWT signature with key
+  - `jwt_sign(claims, key, alg)`: Create signed JWT token
+  - `jwt_expired(token)`: Check if JWT exp claim has passed
+  - Supports HS256/384/512, RS256/384/512, ES256/384/512, EdDSA
+
+- **Go template built-in functions for SLOP scripts**:
+  - `template_render(template, data)`: Render Go template with data
+  - `template_render_file(path, data)`: Render template from file
+  - `indent(text, spaces)`: Indent all lines by N spaces
+  - `dedent(text)`: Remove common leading whitespace
+  - `wrap(text, width)`: Word-wrap text at width
+  - Templates support SLOP callbacks via `{{ slop "expression" }}`
+  - Rich template functions: upper, lower, trim, split, join, toJson, etc.
+
 ## [0.8.0] - 2026-01-15
 
 ### Added
