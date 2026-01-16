@@ -5,6 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-01-15
+
+### Added
+
+- **SLOP language reference MCP tools**:
+  - `slop_reference`: Search SLOP built-in functions with progressive disclosure
+    - Compact mode (default): signature only, 10 results
+    - `verbose=true`: adds category, description, example
+    - `list_categories=true`: returns category counts
+  - `slop_help`: Get full details for a specific function by name
+  - Text output format for token efficiency
+
+- **Crypto built-in functions for SLOP scripts**:
+  - `crypto_password(length)`: Generate secure random password
+  - `crypto_passphrase(words)`: Generate word-based passphrase
+  - `crypto_ed25519_keygen()`: Generate Ed25519 keypair
+  - `crypto_rsa_keygen(bits)`: Generate RSA keypair
+  - `crypto_x25519_keygen()`: Generate X25519 key exchange keypair
+  - `crypto_sha256(data)`, `crypto_sha512(data)`: Hash functions
+  - `crypto_random_bytes(n)`, `crypto_random_base64(n)`: Random data generation
+
+- **SLOP language search functions** (accessible in scripts):
+  - `slop_search(query, limit)`: Search function reference
+  - `slop_categories()`: List all function categories
+  - `slop_help(name)`: Get function details
+
+- **Comprehensive test coverage**:
+  - Handler unit tests for all meta-tools
+  - Config tests for KDL parsing and three-tier merge
+  - Auth tests for OAuth flow, token refresh, expiry detection
+
+- **Configurable timeouts**: `SLOP_MCP_TIMEOUT` env var or per-MCP `timeout` config
+
+- **MCP reconnection**: Automatic reconnect with exponential backoff, `manage_mcps reconnect` action
+
+- **Health checks**: `manage_mcps health_check` action to detect stale connections
+
+- **Structured logging**: Optional JSON logging via `SLOP_MCP_LOG_FORMAT=json`
+
+### Changed
+
+- SLOP reference tools output formatted text instead of JSON for better readability and token efficiency
+
 ## [0.7.0] - 2026-01-15
 
 ### Added
