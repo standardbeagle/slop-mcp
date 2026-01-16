@@ -1885,3 +1885,154 @@ func TestManageMCPsInputActionDocumentation(t *testing.T) {
 	}
 	assert.Equal(t, "health_check", input.Action)
 }
+
+// TestHandleSlopReference tests the slop_reference MCP tool.
+func TestHandleSlopReference(t *testing.T) {
+	s := mockServer([]registry.ToolInfo{})
+	ctx := context.Background()
+
+	tests := []struct {
+		name        string
+		input       SlopReferenceInput
+		wantContain []string
+		wantNotContain []string
+	}{
+		{
+			name:        "default returns compact signatures",
+			input:       SlopReferenceInput{},
+			wantContain: []string{"(", ")"}, // signatures have parens
+		},
+		{
+			name: "query for map function",
+			input: SlopReferenceInput{
+				Query: "map",
+			},
+			wantContain: []string{"map("},
+		},
+		{
+			name: "verbose mode includes category and description",
+			input: SlopReferenceInput{
+				Query:   "map",
+				Verbose: true,
+			},
+			wantContain: []string{"map(", "[functional]", "Applies"},
+		},
+		{
+			name: "list_categories returns category list",
+			input: SlopReferenceInput{
+				ListCategories: true,
+			},
+			wantContain: []string{"SLOP Categories:", "string", "math", "list"},
+		},
+		{
+			name: "filter by category",
+			input: SlopReferenceInput{
+				Category: "math",
+				Verbose:  true,
+			},
+			wantContain:    []string{"[math]"},
+			wantNotContain: []string{"[string]", "[list]"},
+		},
+		{
+			name: "nonexistent query",
+			input: SlopReferenceInput{
+				Query: "zzz_nonexistent_xyz",
+			},
+			wantContain: []string{"No functions found"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, output, err := s.handleSlopReference(ctx, &mcp.CallToolRequest{}, tt.input)
+
+			assert.NoError(t, err)
+			assert.Nil(t, result)
+			assert.NotEmpty(t, output.Text, "should have text output")
+
+			for _, want := range tt.wantContain {
+				assert.Contains(t, output.Text, want, "output should contain %q", want)
+			}
+			for _, notWant := range tt.wantNotContain {
+				assert.NotContains(t, output.Text, notWant, "output should not contain %q", notWant)
+			}
+		})
+	}
+}
+
+// TestHandleSlopHelp tests the slop_help MCP tool.
+func TestHandleSlopHelp(t *testing.T) {
+	s := mockServer([]registry.ToolInfo{})
+	ctx := context.Background()
+
+	tests := []struct {
+		name        string
+		input       SlopHelpInput
+		wantErr     bool
+		wantContain []string
+	}{
+		{
+			name:        "get help for map function",
+			input:       SlopHelpInput{Name: "map"},
+			wantContain: []string{"map(", "[functional]", "Applies"},
+		},
+		{
+			name:        "get help for filter function",
+			input:       SlopHelpInput{Name: "filter"},
+			wantContain: []string{"filter(", "[functional]"},
+		},
+		{
+			name:        "get help for len function",
+			input:       SlopHelpInput{Name: "len"},
+			wantContain: []string{"len("},
+		},
+		{
+			name:        "nonexistent function shows not found",
+			input:       SlopHelpInput{Name: "nonexistent_function_xyz"},
+			wantContain: []string{"not found", "slop_reference"},
+		},
+		{
+			name:    "empty function name returns error",
+			input:   SlopHelpInput{},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, output, err := s.handleSlopHelp(ctx, &mcp.CallToolRequest{}, tt.input)
+
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+
+			assert.NoError(t, err)
+			assert.Nil(t, result)
+			assert.NotEmpty(t, output.Text, "should have text output")
+
+			for _, want := range tt.wantContain {
+				assert.Contains(t, output.Text, want, "output should contain %q", want)
+			}
+		})
+	}
+}
+
+// TestSlopReferenceCategories verifies that list_categories mode works.
+func TestSlopReferenceCategories(t *testing.T) {
+	s := mockServer([]registry.ToolInfo{})
+	ctx := context.Background()
+
+	_, output, err := s.handleSlopReference(ctx, &mcp.CallToolRequest{}, SlopReferenceInput{
+		ListCategories: true,
+	})
+
+	assert.NoError(t, err)
+	assert.Contains(t, output.Text, "SLOP Categories:")
+
+	// Verify expected categories exist
+	expectedCategories := []string{"string", "list", "math", "random", "type"}
+	for _, expected := range expectedCategories {
+		assert.Contains(t, output.Text, expected, "should have category: %s", expected)
+	}
+}

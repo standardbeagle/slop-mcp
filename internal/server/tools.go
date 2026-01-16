@@ -76,6 +76,28 @@ func (s *Server) registerTools() {
 		},
 		s.wrapGetMetadata,
 	)
+
+	// 7. slop_reference - Search SLOP language built-in functions
+	s.mcpServer.AddTool(
+		&mcp.Tool{
+			Name:         "slop_reference",
+			Description:  "Search SLOP built-in functions. Compact output (name+signature) by default. Use verbose=true for full details, list_categories=true for category counts.",
+			InputSchema:  slopReferenceInputSchema,
+			OutputSchema: slopReferenceOutputSchema,
+		},
+		s.wrapSlopReference,
+	)
+
+	// 8. slop_help - Get detailed help for a specific SLOP function
+	s.mcpServer.AddTool(
+		&mcp.Tool{
+			Name:         "slop_help",
+			Description:  "Get full details for a specific SLOP function by name.",
+			InputSchema:  slopHelpInputSchema,
+			OutputSchema: slopHelpOutputSchema,
+		},
+		s.wrapSlopHelp,
+	)
 }
 
 // Wrapper handlers that parse JSON manually and call the typed handlers.
@@ -157,6 +179,34 @@ func (s *Server) wrapGetMetadata(ctx context.Context, req *mcp.CallToolRequest) 
 	}
 
 	_, output, err := s.handleGetMetadata(ctx, req, input)
+	if err != nil {
+		return errorResult(err), nil
+	}
+
+	return toCallToolResult(output)
+}
+
+func (s *Server) wrapSlopReference(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	var input SlopReferenceInput
+	if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
+		return nil, err
+	}
+
+	_, output, err := s.handleSlopReference(ctx, req, input)
+	if err != nil {
+		return errorResult(err), nil
+	}
+
+	return toCallToolResult(output)
+}
+
+func (s *Server) wrapSlopHelp(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	var input SlopHelpInput
+	if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
+		return nil, err
+	}
+
+	_, output, err := s.handleSlopHelp(ctx, req, input)
 	if err != nil {
 		return errorResult(err), nil
 	}

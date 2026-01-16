@@ -720,3 +720,110 @@ func valueToAny(v any) any {
 
 	return result
 }
+
+// SlopReferenceInput is the input for the slop_reference tool.
+type SlopReferenceInput struct {
+	Query          string `json:"query,omitempty"`
+	Category       string `json:"category,omitempty"`
+	Limit          int    `json:"limit,omitempty"`
+	Verbose        bool   `json:"verbose,omitempty"`
+	ListCategories bool   `json:"list_categories,omitempty"`
+}
+
+// SlopReferenceOutput is formatted text for token efficiency.
+type SlopReferenceOutput struct {
+	Text string `json:"text"`
+}
+
+func (s *Server) handleSlopReference(
+	ctx context.Context,
+	req *mcp.CallToolRequest,
+	input SlopReferenceInput,
+) (*mcp.CallToolResult, SlopReferenceOutput, error) {
+	var sb strings.Builder
+
+	// Handle list_categories mode
+	if input.ListCategories {
+		cats := builtins.GetCategories()
+		sb.WriteString("SLOP Categories:\n")
+		for name, count := range cats {
+			sb.WriteString(fmt.Sprintf("  %s (%d)\n", name, count))
+		}
+		return nil, SlopReferenceOutput{Text: sb.String()}, nil
+	}
+
+	// Default limit is 10
+	limit := input.Limit
+	if limit <= 0 {
+		limit = 10
+	}
+
+	// Search functions
+	results := builtins.SearchSlopFunctions(input.Query, input.Category, limit)
+
+	if len(results) == 0 {
+		return nil, SlopReferenceOutput{Text: "No functions found."}, nil
+	}
+
+	// Format output
+	for _, fn := range results {
+		sb.WriteString(fn.Signature)
+		if input.Verbose {
+			sb.WriteString(fmt.Sprintf(" [%s]", fn.Category))
+			if fn.Description != "" {
+				sb.WriteString(fmt.Sprintf("\n  %s", fn.Description))
+			}
+			if fn.Example != "" {
+				sb.WriteString(fmt.Sprintf("\n  Ex: %s", fn.Example))
+			}
+		}
+		sb.WriteString("\n")
+	}
+
+	if len(results) == limit {
+		sb.WriteString(fmt.Sprintf("(%d shown, use limit for more)\n", limit))
+	}
+
+	return nil, SlopReferenceOutput{Text: sb.String()}, nil
+}
+
+// SlopHelpInput is the input for the slop_help tool.
+type SlopHelpInput struct {
+	Name string `json:"name"` // function name
+}
+
+// SlopHelpOutput is formatted text.
+type SlopHelpOutput struct {
+	Text string `json:"text"`
+}
+
+func (s *Server) handleSlopHelp(
+	ctx context.Context,
+	req *mcp.CallToolRequest,
+	input SlopHelpInput,
+) (*mcp.CallToolResult, SlopHelpOutput, error) {
+	if input.Name == "" {
+		return nil, SlopHelpOutput{}, fmt.Errorf("name is required")
+	}
+
+	// Search for exact match
+	for _, fn := range builtins.SlopReference {
+		if fn.Name == input.Name {
+			var sb strings.Builder
+			sb.WriteString(fmt.Sprintf("%s [%s]\n", fn.Signature, fn.Category))
+			if fn.Description != "" {
+				sb.WriteString(fmt.Sprintf("%s\n", fn.Description))
+			}
+			if fn.Example != "" {
+				sb.WriteString(fmt.Sprintf("Example: %s\n", fn.Example))
+			}
+			if fn.Returns != "" {
+				sb.WriteString(fmt.Sprintf("Returns: %s\n", fn.Returns))
+			}
+			return nil, SlopHelpOutput{Text: sb.String()}, nil
+		}
+	}
+
+	// Not found
+	return nil, SlopHelpOutput{Text: fmt.Sprintf("Function '%s' not found. Use slop_reference to search.", input.Name)}, nil
+}

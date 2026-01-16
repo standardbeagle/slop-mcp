@@ -371,3 +371,64 @@ var getMetadataOutputSchema = json.RawMessage(`{
 	"required": ["metadata", "total"],
 	"additionalProperties": false
 }`)
+
+// slopReferenceInputSchema is the input schema for slop_reference.
+var slopReferenceInputSchema = json.RawMessage(`{
+	"type": "object",
+	"properties": {
+		"query": {
+			"type": "string",
+			"description": "Search query (matches name, signature, description)"
+		},
+		"category": {
+			"type": "string",
+			"description": "Filter by category: math, string, list, map, random, type, json, regex, time, encoding, functional, crypto, slop"
+		},
+		"limit": {
+			"type": "integer",
+			"description": "Max results (default: 10)"
+		},
+		"verbose": {
+			"type": "boolean",
+			"description": "Include description, example, returns (default: false, compact mode shows name+signature only)"
+		},
+		"list_categories": {
+			"type": "boolean",
+			"description": "Return category counts instead of functions"
+		}
+	},
+	"additionalProperties": false
+}`)
+
+// slopReferenceOutputSchema is the output schema for slop_reference.
+var slopReferenceOutputSchema = json.RawMessage(`{
+	"type": "object",
+	"properties": {
+		"text": {"type": "string", "description": "Formatted function list"}
+	},
+	"required": ["text"],
+	"additionalProperties": false
+}`)
+
+// slopHelpInputSchema is the input schema for slop_help.
+var slopHelpInputSchema = json.RawMessage(`{
+	"type": "object",
+	"properties": {
+		"name": {
+			"type": "string",
+			"description": "Function name"
+		}
+	},
+	"required": ["name"],
+	"additionalProperties": false
+}`)
+
+// slopHelpOutputSchema is the output schema for slop_help.
+var slopHelpOutputSchema = json.RawMessage(`{
+	"type": "object",
+	"properties": {
+		"text": {"type": "string", "description": "Function details"}
+	},
+	"required": ["text"],
+	"additionalProperties": false
+}`)
