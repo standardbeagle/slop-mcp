@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -105,7 +106,7 @@ func (s *Server) registerTools() {
 func (s *Server) wrapSearchTools(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	var input SearchToolsInput
 	if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
-		return nil, err
+		return errorResult(fmt.Errorf("invalid parameters: %w", err)), nil
 	}
 
 	_, output, err := s.handleSearchTools(ctx, req, input)
@@ -119,7 +120,7 @@ func (s *Server) wrapSearchTools(ctx context.Context, req *mcp.CallToolRequest) 
 func (s *Server) wrapExecuteTool(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	var input ExecuteToolInput
 	if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
-		return nil, err
+		return errorResult(fmt.Errorf("invalid parameters: %w", err)), nil
 	}
 
 	_, output, err := s.handleExecuteTool(ctx, req, input)
@@ -133,7 +134,7 @@ func (s *Server) wrapExecuteTool(ctx context.Context, req *mcp.CallToolRequest) 
 func (s *Server) wrapRunSlop(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	var input RunSlopInput
 	if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
-		return nil, err
+		return errorResult(fmt.Errorf("invalid parameters: %w", err)), nil
 	}
 
 	_, output, err := s.handleRunSlop(ctx, req, input)
@@ -147,7 +148,7 @@ func (s *Server) wrapRunSlop(ctx context.Context, req *mcp.CallToolRequest) (*mc
 func (s *Server) wrapManageMCPs(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	var input ManageMCPsInput
 	if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
-		return nil, err
+		return errorResult(fmt.Errorf("invalid parameters: %w", err)), nil
 	}
 
 	_, output, err := s.handleManageMCPs(ctx, req, input)
@@ -161,7 +162,7 @@ func (s *Server) wrapManageMCPs(ctx context.Context, req *mcp.CallToolRequest) (
 func (s *Server) wrapAuthMCP(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	var input AuthMCPInput
 	if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
-		return nil, err
+		return errorResult(fmt.Errorf("invalid parameters: %w", err)), nil
 	}
 
 	_, output, err := s.handleAuthMCP(ctx, req, input)
@@ -175,7 +176,7 @@ func (s *Server) wrapAuthMCP(ctx context.Context, req *mcp.CallToolRequest) (*mc
 func (s *Server) wrapGetMetadata(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	var input GetMetadataInput
 	if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
-		return nil, err
+		return errorResult(fmt.Errorf("invalid parameters: %w", err)), nil
 	}
 
 	_, output, err := s.handleGetMetadata(ctx, req, input)
@@ -189,7 +190,7 @@ func (s *Server) wrapGetMetadata(ctx context.Context, req *mcp.CallToolRequest) 
 func (s *Server) wrapSlopReference(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	var input SlopReferenceInput
 	if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
-		return nil, err
+		return errorResult(fmt.Errorf("invalid parameters: %w", err)), nil
 	}
 
 	_, output, err := s.handleSlopReference(ctx, req, input)
@@ -203,7 +204,7 @@ func (s *Server) wrapSlopReference(ctx context.Context, req *mcp.CallToolRequest
 func (s *Server) wrapSlopHelp(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	var input SlopHelpInput
 	if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
-		return nil, err
+		return errorResult(fmt.Errorf("invalid parameters: %w", err)), nil
 	}
 
 	_, output, err := s.handleSlopHelp(ctx, req, input)

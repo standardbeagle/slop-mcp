@@ -66,16 +66,16 @@ func cmdServe(args []string) {
 	}()
 
 	// Run with appropriate transport
+	var runErr error
 	if port > 0 {
-		if err := srv.RunHTTP(ctx, port); err != nil {
-			fmt.Fprintf(os.Stderr, "Server error: %v\n", err)
-			os.Exit(1)
-		}
+		runErr = srv.RunHTTP(ctx, port)
 	} else {
-		if err := srv.RunStdio(ctx); err != nil {
-			fmt.Fprintf(os.Stderr, "Server error: %v\n", err)
-			os.Exit(1)
-		}
+		runErr = srv.RunStdio(ctx)
+	}
+	// Context cancellation from signals is clean shutdown, not an error
+	if runErr != nil && runErr != context.Canceled {
+		fmt.Fprintf(os.Stderr, "Server error: %v\n", runErr)
+		os.Exit(1)
 	}
 }
 

@@ -229,11 +229,13 @@ func (f *OAuthFlow) DiscoverAndAuth(ctx context.Context) (*AuthResult, error) {
 
 	// Step 7: Open browser
 	if err := openBrowser(authURL); err != nil {
-		fmt.Printf("Please open this URL in your browser:\n%s\n", authURL)
+		// stderr: stdout is reserved for MCP JSON-RPC protocol
+		fmt.Fprintf(os.Stderr, "Please open this URL in your browser:\n%s\n", authURL)
 	}
 
 	// Step 8: Wait for callback
-	fmt.Println("Waiting for authorization callback...")
+	// stderr: stdout is reserved for MCP JSON-RPC protocol
+	fmt.Fprintln(os.Stderr, "Waiting for authorization callback...")
 	select {
 	case code := <-codeChan:
 		if code.err != nil {

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-01-24
+
 ### Added
 
 - **JWT built-in functions for SLOP scripts**:
@@ -24,6 +26,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `wrap(text, width)`: Word-wrap text at width
   - Templates support SLOP callbacks via `{{ slop "expression" }}`
   - Rich template functions: upper, lower, trim, split, join, toJson, etc.
+
+### Fixed
+
+- **Stdio transport stdout corruption**: Removed all `fmt.Printf` calls that wrote
+  to stdout during MCP serve mode, corrupting the JSON-RPC protocol stream
+- **Default to serve mode**: Running the binary without a subcommand now defaults
+  to stdio MCP server mode instead of printing usage and exiting
+- **MCP-compliant error responses**: Tool parameter validation errors now return
+  proper `isError: true` tool results instead of JSON-RPC protocol errors
+- **OAuth flow output**: Auth flow messages (browser URL, status) now write to
+  stderr instead of stdout to avoid protocol interference
+- **Clean signal shutdown**: SIGINT/SIGTERM no longer reports "Server error:
+  context canceled" on normal shutdown
 
 ## [0.8.0] - 2026-01-15
 

@@ -9,8 +9,9 @@ var Version = "dev"
 
 func main() {
 	if len(os.Args) < 2 {
-		printUsage()
-		os.Exit(1)
+		// No subcommand: default to serve mode (stdio MCP server)
+		cmdServe(nil)
+		return
 	}
 
 	switch os.Args[1] {
