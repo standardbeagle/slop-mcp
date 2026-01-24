@@ -115,3 +115,77 @@ mcp "github" {
 Configured in `.pre-commit-config.yaml`:
 - golangci-lint on `.go` files
 - `go test -short ./...` and `go build ./...` before commit
+
+## Release Process
+
+### Version Locations
+
+Versions are tracked in multiple places that must stay in sync:
+
+| Location | Purpose | Updated By |
+|----------|---------|------------|
+| `internal/server/server.go` | `serverVersion` constant for MCP server info | Release script |
+| `CHANGELOG.md` | Version history with `## [X.Y.Z]` headers | Manual (before release) |
+| `cmd/slop-mcp/main.go` | `Version` var (default "dev") | CI via `-ldflags` at build |
+| `npm/package.json` | npm package version (default "0.0.0") | CI at publish time |
+| `pyproject.toml` | PyPI package version (default "0.0.0") | CI at publish time |
+
+### Creating a Release
+
+Use the release script to ensure version sync and automate the release:
+
+```bash
+./scripts/release.sh 0.10.0
+```
+
+The script will:
+1. Validate semver format
+2. Update `serverVersion` in `internal/server/server.go`
+3. Verify CHANGELOG.md has an entry for the version
+4. Run build and tests
+5. Commit version updates (if any)
+6. Create and push git tag `vX.Y.Z`
+7. Create GitHub release (triggers CI)
+
+### CI/CD Pipeline
+
+On release publish (`.github/workflows/release.yml`):
+1. Builds Go binaries for linux/darwin/windows × amd64/arm64
+2. Injects version via `-ldflags="-X main.Version=$TAG"`
+3. Uploads binaries to GitHub release
+4. Publishes to PyPI (updates `pyproject.toml` version)
+5. Publishes to npm (updates `package.json` version)
+
+### Manual Release Checklist
+
+If not using the script:
+
+1. Update `CHANGELOG.md` with new version section
+2. Update `serverVersion` in `internal/server/server.go`
+3. Commit: `git commit -m "chore: prepare release vX.Y.Z"`
+4. Tag: `git tag vX.Y.Z`
+5. Push: `git push origin main && git push origin vX.Y.Z`
+6. Create GitHub release from the tag
+
+## MCP Protocol Compliance
+
+### Stdout Reservation
+
+**Critical**: stdout is reserved exclusively for MCP JSON-RPC protocol. Never write to stdout during serve mode:
+
+- Use `s.logger.Warn/Info/Debug()` for diagnostics (writes to stderr)
+- Return errors via `errorResult()` for tool-level errors (`isError: true`)
+- Return `(nil, err)` only for malformed requests (JSON-RPC protocol error)
+- User-facing messages (e.g., OAuth prompts) must use `fmt.Fprintf(os.Stderr, ...)`
+
+### Error Handling
+
+Tool handlers should return MCP-compliant responses:
+
+```go
+// Tool-level error (tool ran but failed) - preferred for business logic errors
+return errorResult(fmt.Errorf("invalid parameters: %w", err)), nil
+
+// Protocol-level error (request malformed) - for JSON-RPC layer issues
+return nil, err
+```
