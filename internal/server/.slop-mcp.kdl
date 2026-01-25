@@ -1,0 +1,5 @@
+mcp "test-mcp" {
+    type "command"
+    command "nonexistent-command"
+}
+

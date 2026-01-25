@@ -16,7 +16,7 @@ import (
 
 const (
 	serverName    = "slop-mcp"
-	serverVersion = "0.9.0"
+	serverVersion = "0.9.1"
 )
 
 // Server is the slop-mcp server.
@@ -107,7 +107,8 @@ func (s *Server) Start(ctx context.Context) error {
 	// Connect to MCPs in background to avoid blocking server startup
 	go func() {
 		if err := s.registry.ConnectFromConfig(ctx, s.config); err != nil {
-			s.logger.Warn("error connecting to MCPs", "error", err)
+			// Debug level: individual connection errors stored in registry state
+			s.logger.Debug("error connecting to MCPs", "error", err)
 		}
 	}()
 	return nil

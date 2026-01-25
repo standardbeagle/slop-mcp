@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-01-24
+
+### Changed
+
+- **Quieter operation**: Connection, shutdown, and health check errors are now
+  logged at DEBUG level instead of WARN. These errors are stored in registry
+  state and can be queried via `mcp status`. Only tool indexing failures remain
+  at WARN level as they indicate actual operational issues.
+
 ## [0.9.0] - 2026-01-24
 
 ### Added

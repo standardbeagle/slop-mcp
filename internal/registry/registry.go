@@ -385,8 +385,8 @@ func (r *Registry) Disconnect(name string) error {
 	// Close the session - ignore termination signals since they're expected
 	// when killing a subprocess-based MCP
 	if err := conn.session.Close(); err != nil {
-		// Log but don't fail - the MCP is still being disconnected
-		r.logger.Warn("error closing MCP session", "mcp_name", name, "error", err)
+		// Debug level: expected during shutdown, errors stored in state for status queries
+		r.logger.Debug("error closing MCP session", "mcp_name", name, "error", err)
 	}
 
 	// Update state to disconnected (preserve config for potential reconnect)
@@ -492,7 +492,8 @@ func (r *Registry) ReconnectWithBackoff(ctx context.Context, name string, maxRet
 		}
 
 		lastErr = err
-		r.logger.Warn("reconnect attempt failed",
+		// Debug level: transient failures during reconnection, final state stored for queries
+		r.logger.Debug("reconnect attempt failed",
 			"mcp_name", name,
 			"attempt", attempt,
 			"max_retries", maxRetries,
@@ -617,7 +618,8 @@ func (r *Registry) healthCheckOne(ctx context.Context, name string) HealthCheckR
 		result.Status = HealthStatusUnhealthy
 		result.Error = err.Error()
 		r.updateHealthState(name, HealthStatusUnhealthy, checkTime, err)
-		r.logger.Warn("health check failed", "mcp_name", name, "error", err, "response_time", elapsed)
+		// Debug level: health status stored in state for status queries
+		r.logger.Debug("health check failed", "mcp_name", name, "error", err, "response_time", elapsed)
 	} else {
 		result.Status = HealthStatusHealthy
 		r.updateHealthState(name, HealthStatusHealthy, checkTime, nil)
@@ -1018,7 +1020,8 @@ func (r *Registry) Close() error {
 	for name, conn := range r.connections {
 		if err := conn.session.Close(); err != nil {
 			lastErr = err
-			r.logger.Warn("error closing MCP", "mcp_name", name, "error", err)
+			// Debug level: subprocess exit codes during shutdown are expected
+			r.logger.Debug("error closing MCP", "mcp_name", name, "error", err)
 		}
 	}
 	r.connections = make(map[string]*mcpConnection)
@@ -1444,7 +1447,8 @@ func extractParamsFromSchema(schema map[string]any) []ParamInfo {
 func (r *Registry) ConnectFromConfig(ctx context.Context, cfg *config.Config) error {
 	for _, mcpCfg := range cfg.MCPs {
 		if err := r.Connect(ctx, mcpCfg); err != nil {
-			r.logger.Warn("failed to connect to MCP", "mcp_name", mcpCfg.Name, "error", err)
+			// Debug level: errors are stored in state for status queries
+			r.logger.Debug("failed to connect to MCP", "mcp_name", mcpCfg.Name, "error", err)
 		}
 	}
 	return nil

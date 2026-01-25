@@ -207,7 +207,8 @@ func (s *Server) handleRunSlop(
 			Headers: cfg.Headers,
 		}
 		if err := rt.ConnectMCP(ctx, slopCfg); err != nil {
-			s.logger.Warn("failed to connect MCP to slop runtime", "mcp_name", cfg.Name, "error", err)
+			// Debug level: script execution continues, error reflected if MCP is used
+			s.logger.Debug("failed to connect MCP to slop runtime", "mcp_name", cfg.Name, "error", err)
 		}
 	}
 
