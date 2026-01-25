@@ -33,6 +33,31 @@ make tidy               # Tidy go.mod
 go test -v -run TestHandleSearchTools ./internal/server/...
 ```
 
+### End-to-End Integration Tests
+
+Tests slop-mcp with real AI agent CLIs (Claude, Gemini, Copilot):
+
+```bash
+# Run all integration tests (requires API keys configured)
+./scripts/integration-test.sh
+
+# Test specific agent
+./scripts/integration-test.sh claude
+./scripts/integration-test.sh gemini
+./scripts/integration-test.sh copilot
+
+# Via pre-commit (manual stage)
+pre-commit run integration-test --hook-stage manual
+
+# Verbose output
+SLOP_TEST_VERBOSE=1 ./scripts/integration-test.sh
+```
+
+**Requirements:**
+- Built binary (`make build` first)
+- API keys configured for each CLI
+- CLIs installed: `claude`, `gemini`, `copilot`
+
 ### Build Requirements
 - Go 1.24.0+
 - Build tags: `-tags mcp_go_client_oauth` (required for OAuth support)

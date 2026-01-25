@@ -28,3 +28,13 @@ repos:
         language: system
         pass_filenames: false
         types: [go]
+
+      # Integration tests - run manually with: pre-commit run integration-test --hook-stage manual
+      # Or directly: ./scripts/integration-test.sh
+      - id: integration-test
+        name: integration test (Claude/Gemini/Copilot)
+        entry: ./scripts/integration-test.sh
+        language: script
+        pass_filenames: false
+        stages: [manual]
+        verbose: true
