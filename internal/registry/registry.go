@@ -874,12 +874,18 @@ func (r *Registry) ExecuteTool(ctx context.Context, mcpName, toolName string, pa
 		}
 	}
 
+	// Normalize nil params to empty map (MCP protocol requires object, not null)
+	if params == nil {
+		params = make(map[string]any)
+	}
+
 	// Call tool
 	result, err := conn.session.CallTool(ctx, &mcp.CallToolParams{
 		Name:      toolName,
 		Arguments: params,
 	})
 	if err != nil {
+		// Check for tool not found errors
 		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "unknown") {
 			availableTools := r.toolIndex.ListForMCP(mcpName)
 			return nil, &ToolNotFoundError{
@@ -889,7 +895,11 @@ func (r *Registry) ExecuteTool(ctx context.Context, mcpName, toolName string, pa
 				SimilarTools:   findSimilarTools(toolName, availableTools),
 			}
 		}
-		return nil, err
+		// Check for protocol/validation errors
+		if protocolErr := parseProtocolError(mcpName, toolName, err); protocolErr != nil {
+			return nil, protocolErr
+		}
+		return nil, fmt.Errorf("error calling tool '%s' on '%s': %w", toolName, mcpName, err)
 	}
 
 	if result.IsError {
@@ -929,12 +939,18 @@ func (r *Registry) ExecuteToolRaw(ctx context.Context, mcpName, toolName string,
 		}
 	}
 
+	// Normalize nil params to empty map (MCP protocol requires object, not null)
+	if params == nil {
+		params = make(map[string]any)
+	}
+
 	// Call tool and return raw result
 	result, err := conn.session.CallTool(ctx, &mcp.CallToolParams{
 		Name:      toolName,
 		Arguments: params,
 	})
 	if err != nil {
+		// Check for tool not found errors
 		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "unknown") {
 			availableTools := r.toolIndex.ListForMCP(mcpName)
 			return nil, &ToolNotFoundError{
@@ -944,7 +960,11 @@ func (r *Registry) ExecuteToolRaw(ctx context.Context, mcpName, toolName string,
 				SimilarTools:   findSimilarTools(toolName, availableTools),
 			}
 		}
-		return nil, err
+		// Check for protocol/validation errors
+		if protocolErr := parseProtocolError(mcpName, toolName, err); protocolErr != nil {
+			return nil, protocolErr
+		}
+		return nil, fmt.Errorf("error calling tool '%s' on '%s': %w", toolName, mcpName, err)
 	}
 
 	return result, nil
@@ -1322,6 +1342,88 @@ func (e *InvalidParameterError) Error() string {
 	}
 
 	return sb.String()
+}
+
+// MCPProtocolError wraps MCP protocol-level errors with actionable messages.
+type MCPProtocolError struct {
+	MCPName       string
+	ToolName      string
+	OriginalError string
+	ErrorCode     string // e.g., "invalid_type"
+	Path          string // e.g., "params.arguments"
+	Suggestion    string // actionable fix
+}
+
+func (e *MCPProtocolError) Error() string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("MCP protocol error calling '%s' on '%s'\n\n", e.ToolName, e.MCPName))
+
+	// Provide a human-readable interpretation
+	if e.ErrorCode == "invalid_type" && strings.Contains(e.Path, "arguments") {
+		sb.WriteString("Issue: Tool arguments have incorrect type\n")
+	} else if e.OriginalError != "" {
+		sb.WriteString(fmt.Sprintf("Details: %s\n", e.OriginalError))
+	}
+
+	if e.Suggestion != "" {
+		sb.WriteString(fmt.Sprintf("\nFix: %s\n", e.Suggestion))
+	}
+
+	return sb.String()
+}
+
+// parseProtocolError attempts to parse common MCP protocol error formats.
+// Returns nil if the error doesn't match known patterns.
+func parseProtocolError(mcpName, toolName string, err error) *MCPProtocolError {
+	errStr := err.Error()
+
+	// Detect Zod-style validation errors (common in TypeScript MCPs)
+	// Format: [{"expected":"record","code":"invalid_type","path":["params","arguments"],"message":"..."}]
+	if strings.Contains(errStr, "invalid_type") && strings.Contains(errStr, "expected") {
+		protocolErr := &MCPProtocolError{
+			MCPName:       mcpName,
+			ToolName:      toolName,
+			OriginalError: errStr,
+			ErrorCode:     "invalid_type",
+		}
+
+		// Extract path
+		if strings.Contains(errStr, "arguments") {
+			protocolErr.Path = "params.arguments"
+			protocolErr.Suggestion = "Pass an empty object {} instead of null for parameters"
+		}
+
+		// Extract expected type
+		if strings.Contains(errStr, "expected") && strings.Contains(errStr, "record") {
+			protocolErr.Suggestion = "The 'parameters' field must be an object {}, not null or undefined"
+		}
+
+		return protocolErr
+	}
+
+	// Detect JSON-RPC error format
+	if strings.Contains(errStr, "Invalid params") || strings.Contains(errStr, "-32602") {
+		return &MCPProtocolError{
+			MCPName:       mcpName,
+			ToolName:      toolName,
+			OriginalError: errStr,
+			ErrorCode:     "invalid_params",
+			Suggestion:    "Check the tool's expected parameters using get_metadata",
+		}
+	}
+
+	// Detect method not found
+	if strings.Contains(errStr, "Method not found") || strings.Contains(errStr, "-32601") {
+		return &MCPProtocolError{
+			MCPName:       mcpName,
+			ToolName:      toolName,
+			OriginalError: errStr,
+			ErrorCode:     "method_not_found",
+			Suggestion:    "This tool may not exist on the MCP server. Use search_tools to find available tools.",
+		}
+	}
+
+	return nil
 }
 
 // findSimilarParams finds expected parameters that are similar to provided ones.

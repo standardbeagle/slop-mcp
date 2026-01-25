@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"fmt"
 	"testing"
 )
 
@@ -493,6 +494,100 @@ func TestInvalidParameterError_MultipleErrors(t *testing.T) {
 	// All 3 missing required should be shown
 	if !contains(errStr, "query") && !contains(errStr, "Missing required") {
 		t.Error("Error should show query as missing required")
+	}
+}
+
+func TestMCPProtocolError(t *testing.T) {
+	err := &MCPProtocolError{
+		MCPName:       "test-mcp",
+		ToolName:      "list_tasks",
+		OriginalError: `{"expected":"record","code":"invalid_type"}`,
+		ErrorCode:     "invalid_type",
+		Path:          "params.arguments",
+		Suggestion:    "Pass an empty object {} instead of null for parameters",
+	}
+
+	errStr := err.Error()
+
+	if !contains(errStr, "test-mcp") {
+		t.Error("Error should contain MCP name")
+	}
+	if !contains(errStr, "list_tasks") {
+		t.Error("Error should contain tool name")
+	}
+	if !contains(errStr, "Fix:") {
+		t.Error("Error should contain fix suggestion")
+	}
+	if !contains(errStr, "empty object {}") {
+		t.Error("Error should contain actionable suggestion")
+	}
+}
+
+func TestParseProtocolError(t *testing.T) {
+	tests := []struct {
+		name          string
+		errMsg        string
+		wantNil       bool
+		wantErrorCode string
+		wantHasSugg   bool
+	}{
+		{
+			name:          "zod invalid_type record",
+			errMsg:        `[{"expected":"record","code":"invalid_type","path":["params","arguments"],"message":"Invalid input"}]`,
+			wantNil:       false,
+			wantErrorCode: "invalid_type",
+			wantHasSugg:   true,
+		},
+		{
+			name:          "json-rpc invalid params",
+			errMsg:        `Invalid params: expected object, got null (-32602)`,
+			wantNil:       false,
+			wantErrorCode: "invalid_params",
+			wantHasSugg:   true,
+		},
+		{
+			name:          "json-rpc method not found",
+			errMsg:        `Method not found (-32601)`,
+			wantNil:       false,
+			wantErrorCode: "method_not_found",
+			wantHasSugg:   true,
+		},
+		{
+			name:    "generic error - not protocol",
+			errMsg:  `connection timeout`,
+			wantNil: true,
+		},
+		{
+			name:    "network error - not protocol",
+			errMsg:  `dial tcp: connection refused`,
+			wantNil: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := parseProtocolError("test-mcp", "test-tool", fmt.Errorf("%s", tt.errMsg))
+
+			if tt.wantNil {
+				if result != nil {
+					t.Errorf("Expected nil, got %+v", result)
+				}
+				return
+			}
+
+			if result == nil {
+				t.Error("Expected non-nil result")
+				return
+			}
+
+			if result.ErrorCode != tt.wantErrorCode {
+				t.Errorf("Expected error code %s, got %s", tt.wantErrorCode, result.ErrorCode)
+			}
+
+			if tt.wantHasSugg && result.Suggestion == "" {
+				t.Error("Expected suggestion, got empty")
+			}
+		})
 	}
 }
 
