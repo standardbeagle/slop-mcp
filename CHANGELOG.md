@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-01-24
+
+### Fixed
+
+- **Nil parameters handling**: Convert null/nil parameters to empty object `{}` before
+  calling downstream MCPs, preventing "expected record, received null" validation errors.
+
+- **Improved error messages**: Added `MCPProtocolError` type with human-readable messages
+  and actionable fix suggestions for common MCP protocol errors (Zod validation errors,
+  JSON-RPC -32602/-32601 errors).
+
 ## [0.9.2] - 2026-01-24
 
 ### Fixed
