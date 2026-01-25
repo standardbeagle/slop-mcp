@@ -9,7 +9,7 @@
 #   ./scripts/integration-test.sh copilot   # Test Copilot only
 #
 # Environment variables:
-#   SLOP_TEST_TIMEOUT   - Timeout per test in seconds (default: 60)
+#   SLOP_TEST_TIMEOUT   - Timeout per test in seconds (default: 120)
 #   SLOP_TEST_VERBOSE   - Set to 1 for verbose output
 #   SLOP_TEST_KEEP_DIRS - Set to 1 to keep temp directories after test
 #
@@ -33,7 +33,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 BUILD_DIR="$PROJECT_ROOT/build"
 SLOP_MCP_BIN="$BUILD_DIR/slop-mcp"
-TIMEOUT="${SLOP_TEST_TIMEOUT:-60}"
+TIMEOUT="${SLOP_TEST_TIMEOUT:-120}"
 VERBOSE="${SLOP_TEST_VERBOSE:-0}"
 KEEP_DIRS="${SLOP_TEST_KEEP_DIRS:-0}"
 
@@ -137,8 +137,9 @@ EOF
         --mcp-config "$mcp_config" \
         --permission-mode bypassPermissions \
         --print \
+        --output-format stream-json \
         --model haiku \
-        "$TEST_PROMPT" 2>&1) || exit_code=$?
+        -p "$TEST_PROMPT" 2>&1) || exit_code=$?
 
     TESTS_RUN=$((TESTS_RUN + 1))
 
