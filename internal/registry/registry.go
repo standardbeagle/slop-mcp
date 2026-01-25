@@ -915,6 +915,41 @@ func (r *Registry) ExecuteTool(ctx context.Context, mcpName, toolName string, pa
 	return contentToAny(result), nil
 }
 
+// ExecuteToolRaw calls a tool and returns the raw MCP response without conversion.
+// Use this when you need to pass through the underlying MCP's response format directly.
+func (r *Registry) ExecuteToolRaw(ctx context.Context, mcpName, toolName string, params map[string]any) (*mcp.CallToolResult, error) {
+	r.mu.RLock()
+	conn, ok := r.connections[mcpName]
+	r.mu.RUnlock()
+
+	if !ok {
+		return nil, &MCPNotFoundError{
+			Name:          mcpName,
+			AvailableMCPs: r.listNames(),
+		}
+	}
+
+	// Call tool and return raw result
+	result, err := conn.session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      toolName,
+		Arguments: params,
+	})
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "unknown") {
+			availableTools := r.toolIndex.ListForMCP(mcpName)
+			return nil, &ToolNotFoundError{
+				MCPName:        mcpName,
+				ToolName:       toolName,
+				AvailableTools: availableTools,
+				SimilarTools:   findSimilarTools(toolName, availableTools),
+			}
+		}
+		return nil, err
+	}
+
+	return result, nil
+}
+
 // isParameterError checks if an error message indicates invalid parameters.
 func isParameterError(errMsg string) bool {
 	errLower := strings.ToLower(errMsg)

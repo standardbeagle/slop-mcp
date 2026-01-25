@@ -30,32 +30,6 @@ var searchToolsInputSchema = json.RawMessage(`{
 	"additionalProperties": false
 }`)
 
-// searchToolsOutputSchema is the output schema for search_tools.
-var searchToolsOutputSchema = json.RawMessage(`{
-	"type": "object",
-	"properties": {
-		"tools": {
-			"type": "array",
-			"items": {
-				"type": "object",
-				"properties": {
-					"name": {"type": "string"},
-					"description": {"type": "string"},
-					"mcp_name": {"type": "string"},
-					"input_schema": {"type": "object", "additionalProperties": true}
-				},
-				"required": ["name", "description", "mcp_name"]
-			}
-		},
-		"total": {"type": "integer", "description": "Total number of matching tools before pagination"},
-		"limit": {"type": "integer", "description": "Limit applied to results"},
-		"offset": {"type": "integer", "description": "Offset applied to results"},
-		"has_more": {"type": "boolean", "description": "True if more results are available beyond this page"}
-	},
-	"required": ["tools", "total", "limit", "offset", "has_more"],
-	"additionalProperties": false
-}`)
-
 // executeToolInputSchema is the input schema for execute_tool.
 var executeToolInputSchema = json.RawMessage(`{
 	"type": "object",
@@ -78,12 +52,6 @@ var executeToolInputSchema = json.RawMessage(`{
 	"additionalProperties": false
 }`)
 
-// executeToolOutputSchema - execute_tool returns pass-through results, so we use a flexible schema.
-var executeToolOutputSchema = json.RawMessage(`{
-	"type": "object",
-	"additionalProperties": true
-}`)
-
 // runSlopInputSchema is the input schema for run_slop.
 var runSlopInputSchema = json.RawMessage(`{
 	"type": "object",
@@ -95,26 +63,6 @@ var runSlopInputSchema = json.RawMessage(`{
 		"file_path": {
 			"type": "string",
 			"description": "Path to a .slop file to execute"
-		}
-	},
-	"additionalProperties": false
-}`)
-
-// runSlopOutputSchema is the output schema for run_slop.
-// Using "additionalProperties": true for dynamic result types instead of "true" literal.
-var runSlopOutputSchema = json.RawMessage(`{
-	"type": "object",
-	"properties": {
-		"result": {
-			"type": "object",
-			"additionalProperties": true
-		},
-		"emitted": {
-			"type": "array",
-			"items": {
-				"type": "object",
-				"additionalProperties": true
-			}
 		}
 	},
 	"additionalProperties": false
@@ -168,45 +116,6 @@ var manageMCPsInputSchema = json.RawMessage(`{
 	"additionalProperties": false
 }`)
 
-// manageMCPsOutputSchema is the output schema for manage_mcps.
-var manageMCPsOutputSchema = json.RawMessage(`{
-	"type": "object",
-	"properties": {
-		"message": {"type": "string"},
-		"mcps": {
-			"type": "array",
-			"items": {
-				"type": "object",
-				"properties": {
-					"name": {"type": "string"},
-					"type": {"type": "string"},
-					"connected": {"type": "boolean"},
-					"tool_count": {"type": "integer"},
-					"source": {"type": "string"}
-				},
-				"required": ["name", "type", "connected", "tool_count", "source"]
-			}
-		},
-		"status": {
-			"type": "array",
-			"items": {
-				"type": "object",
-				"properties": {
-					"name": {"type": "string"},
-					"type": {"type": "string"},
-					"state": {"type": "string"},
-					"source": {"type": "string"},
-					"tool_count": {"type": "integer"},
-					"error": {"type": "string"},
-					"reconnect_attempts": {"type": "integer"}
-				},
-				"required": ["name", "type", "state", "source"]
-			}
-		}
-	},
-	"additionalProperties": false
-}`)
-
 // authMCPInputSchema is the input schema for auth_mcp.
 var authMCPInputSchema = json.RawMessage(`{
 	"type": "object",
@@ -221,43 +130,6 @@ var authMCPInputSchema = json.RawMessage(`{
 		}
 	},
 	"required": ["action"],
-	"additionalProperties": false
-}`)
-
-// authMCPOutputSchema is the output schema for auth_mcp.
-// Note: "status" is now a plain object (not nullable) - it will be omitted if not present.
-var authMCPOutputSchema = json.RawMessage(`{
-	"type": "object",
-	"properties": {
-		"message": {"type": "string"},
-		"status": {
-			"type": "object",
-			"properties": {
-				"server_name": {"type": "string"},
-				"server_url": {"type": "string"},
-				"is_authenticated": {"type": "boolean"},
-				"expires_at": {"type": "string"},
-				"is_expired": {"type": "boolean"},
-				"has_refresh_token": {"type": "boolean"}
-			},
-			"required": ["server_name", "is_authenticated"]
-		},
-		"tokens": {
-			"type": "array",
-			"items": {
-				"type": "object",
-				"properties": {
-					"server_name": {"type": "string"},
-					"server_url": {"type": "string"},
-					"is_authenticated": {"type": "boolean"},
-					"expires_at": {"type": "string"},
-					"is_expired": {"type": "boolean"},
-					"has_refresh_token": {"type": "boolean"}
-				},
-				"required": ["server_name", "is_authenticated"]
-			}
-		}
-	},
 	"additionalProperties": false
 }`)
 
@@ -282,93 +154,6 @@ var getMetadataInputSchema = json.RawMessage(`{
 			"description": "Include full input schemas for all tools (default: false, schemas only included when querying specific mcp_name + tool_name)"
 		}
 	},
-	"additionalProperties": false
-}`)
-
-// getMetadataOutputSchema is the output schema for get_metadata.
-var getMetadataOutputSchema = json.RawMessage(`{
-	"type": "object",
-	"properties": {
-		"metadata": {
-			"type": "array",
-			"items": {
-				"type": "object",
-				"properties": {
-					"name": {"type": "string"},
-					"type": {"type": "string"},
-					"state": {"type": "string"},
-					"source": {"type": "string"},
-					"error": {"type": "string"},
-					"tools": {
-						"type": "array",
-						"items": {
-							"type": "object",
-							"properties": {
-								"name": {"type": "string"},
-								"description": {"type": "string"},
-								"mcp_name": {"type": "string"},
-								"input_schema": {"type": "object", "additionalProperties": true}
-							},
-							"required": ["name", "description", "mcp_name"]
-						}
-					},
-					"prompts": {
-						"type": "array",
-						"items": {
-							"type": "object",
-							"properties": {
-								"name": {"type": "string"},
-								"description": {"type": "string"},
-								"arguments": {
-									"type": "array",
-									"items": {
-										"type": "object",
-										"properties": {
-											"name": {"type": "string"},
-											"description": {"type": "string"},
-											"required": {"type": "boolean"}
-										},
-										"required": ["name"]
-									}
-								}
-							},
-							"required": ["name"]
-						}
-					},
-					"resources": {
-						"type": "array",
-						"items": {
-							"type": "object",
-							"properties": {
-								"uri": {"type": "string"},
-								"name": {"type": "string"},
-								"description": {"type": "string"},
-								"mime_type": {"type": "string"}
-							},
-							"required": ["uri", "name"]
-						}
-					},
-					"resource_templates": {
-						"type": "array",
-						"items": {
-							"type": "object",
-							"properties": {
-								"uri_template": {"type": "string"},
-								"name": {"type": "string"},
-								"description": {"type": "string"},
-								"mime_type": {"type": "string"}
-							},
-							"required": ["uri_template", "name"]
-						}
-					}
-				},
-				"required": ["name", "type", "state", "source"]
-			}
-		},
-		"total": {"type": "integer"},
-		"file_path": {"type": "string"}
-	},
-	"required": ["metadata", "total"],
 	"additionalProperties": false
 }`)
 
@@ -400,16 +185,6 @@ var slopReferenceInputSchema = json.RawMessage(`{
 	"additionalProperties": false
 }`)
 
-// slopReferenceOutputSchema is the output schema for slop_reference.
-var slopReferenceOutputSchema = json.RawMessage(`{
-	"type": "object",
-	"properties": {
-		"text": {"type": "string", "description": "Formatted function list"}
-	},
-	"required": ["text"],
-	"additionalProperties": false
-}`)
-
 // slopHelpInputSchema is the input schema for slop_help.
 var slopHelpInputSchema = json.RawMessage(`{
 	"type": "object",
@@ -423,12 +198,3 @@ var slopHelpInputSchema = json.RawMessage(`{
 	"additionalProperties": false
 }`)
 
-// slopHelpOutputSchema is the output schema for slop_help.
-var slopHelpOutputSchema = json.RawMessage(`{
-	"type": "object",
-	"properties": {
-		"text": {"type": "string", "description": "Function details"}
-	},
-	"required": ["text"],
-	"additionalProperties": false
-}`)

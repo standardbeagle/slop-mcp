@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/standardbeagle/slop-mcp/internal/cli"
 )
 
 // registerTools registers all server tools with manually crafted schemas.
@@ -15,10 +16,9 @@ func (s *Server) registerTools() {
 	// 1. search_tools - Search registered MCP tools
 	s.mcpServer.AddTool(
 		&mcp.Tool{
-			Name:         "search_tools",
-			Description:  "Search and explore all registered MCP tools by name and description. Results are paginated (default: 20, max: 100). Use offset for subsequent pages. Response includes total count and has_more flag.",
-			InputSchema:  searchToolsInputSchema,
-			OutputSchema: searchToolsOutputSchema,
+			Name:        "search_tools",
+			Description: "Search and explore all registered MCP tools by name and description. Results are paginated (default: 20, max: 100). Use offset for subsequent pages. Response includes total count and has_more flag.",
+			InputSchema: searchToolsInputSchema,
 		},
 		s.wrapSearchTools,
 	)
@@ -26,10 +26,9 @@ func (s *Server) registerTools() {
 	// 2. execute_tool - Execute an MCP tool
 	s.mcpServer.AddTool(
 		&mcp.Tool{
-			Name:         "execute_tool",
-			Description:  "Execute a tool on a specific MCP server. Pass through the tool name and parameters directly.",
-			InputSchema:  executeToolInputSchema,
-			OutputSchema: executeToolOutputSchema,
+			Name:        "execute_tool",
+			Description: "Execute a tool on a specific MCP server. Pass through the tool name and parameters directly. Returns the underlying MCP tool's response as-is.",
+			InputSchema: executeToolInputSchema,
 		},
 		s.wrapExecuteTool,
 	)
@@ -37,10 +36,9 @@ func (s *Server) registerTools() {
 	// 3. run_slop - Execute a SLOP script
 	s.mcpServer.AddTool(
 		&mcp.Tool{
-			Name:         "run_slop",
-			Description:  "Execute a SLOP script with access to all registered MCPs. Provide either an inline script or a file path.",
-			InputSchema:  runSlopInputSchema,
-			OutputSchema: runSlopOutputSchema,
+			Name:        "run_slop",
+			Description: "Execute a SLOP script with access to all registered MCPs. Provide either an inline script or a file path. Returns the script's final expression value as text.",
+			InputSchema: runSlopInputSchema,
 		},
 		s.wrapRunSlop,
 	)
@@ -48,10 +46,9 @@ func (s *Server) registerTools() {
 	// 4. manage_mcps - Register, unregister, or list MCP servers
 	s.mcpServer.AddTool(
 		&mcp.Tool{
-			Name:         "manage_mcps",
-			Description:  "Manage MCP server connections: register new servers, unregister existing ones, or list all registered servers",
-			InputSchema:  manageMCPsInputSchema,
-			OutputSchema: manageMCPsOutputSchema,
+			Name:        "manage_mcps",
+			Description: "Manage MCP server connections: register new servers, unregister existing ones, or list all registered servers. Returns text status by default.",
+			InputSchema: manageMCPsInputSchema,
 		},
 		s.wrapManageMCPs,
 	)
@@ -59,10 +56,9 @@ func (s *Server) registerTools() {
 	// 5. auth_mcp - Authenticate with MCP servers using OAuth
 	s.mcpServer.AddTool(
 		&mcp.Tool{
-			Name:         "auth_mcp",
-			Description:  "Authenticate with MCP servers using OAuth. Actions: login (initiate OAuth flow), logout (remove token), status (check auth status), list (show all authenticated MCPs)",
-			InputSchema:  authMCPInputSchema,
-			OutputSchema: authMCPOutputSchema,
+			Name:        "auth_mcp",
+			Description: "Authenticate with MCP servers using OAuth. Actions: login (initiate OAuth flow), logout (remove token), status (check auth status), list (show all authenticated MCPs). Returns text status.",
+			InputSchema: authMCPInputSchema,
 		},
 		s.wrapAuthMCP,
 	)
@@ -70,10 +66,9 @@ func (s *Server) registerTools() {
 	// 6. get_metadata - Get full metadata for all MCPs
 	s.mcpServer.AddTool(
 		&mcp.Tool{
-			Name:         "get_metadata",
-			Description:  "Get metadata for connected MCP servers. Returns tool names and descriptions by default (compact). Use verbose=true for full schemas, or specify both mcp_name and tool_name to get schema for a specific tool.",
-			InputSchema:  getMetadataInputSchema,
-			OutputSchema: getMetadataOutputSchema,
+			Name:        "get_metadata",
+			Description: "Get metadata for connected MCP servers. Returns tool names and descriptions by default (compact). Use verbose=true for full schemas, or specify both mcp_name and tool_name to get schema for a specific tool.",
+			InputSchema: getMetadataInputSchema,
 		},
 		s.wrapGetMetadata,
 	)
@@ -81,10 +76,9 @@ func (s *Server) registerTools() {
 	// 7. slop_reference - Search SLOP language built-in functions
 	s.mcpServer.AddTool(
 		&mcp.Tool{
-			Name:         "slop_reference",
-			Description:  "Search SLOP built-in functions. Compact output (name+signature) by default. Use verbose=true for full details, list_categories=true for category counts.",
-			InputSchema:  slopReferenceInputSchema,
-			OutputSchema: slopReferenceOutputSchema,
+			Name:        "slop_reference",
+			Description: "Search SLOP built-in functions. Compact text output (name+signature) by default. Use verbose=true for full details, list_categories=true for category counts.",
+			InputSchema: slopReferenceInputSchema,
 		},
 		s.wrapSlopReference,
 	)
@@ -92,10 +86,9 @@ func (s *Server) registerTools() {
 	// 8. slop_help - Get detailed help for a specific SLOP function
 	s.mcpServer.AddTool(
 		&mcp.Tool{
-			Name:         "slop_help",
-			Description:  "Get full details for a specific SLOP function by name.",
-			InputSchema:  slopHelpInputSchema,
-			OutputSchema: slopHelpOutputSchema,
+			Name:        "slop_help",
+			Description: "Get full details for a specific SLOP function by name. Returns formatted text.",
+			InputSchema: slopHelpInputSchema,
 		},
 		s.wrapSlopHelp,
 	)
@@ -123,12 +116,29 @@ func (s *Server) wrapExecuteTool(ctx context.Context, req *mcp.CallToolRequest) 
 		return errorResult(fmt.Errorf("invalid parameters: %w", err)), nil
 	}
 
-	_, output, err := s.handleExecuteTool(ctx, req, input)
+	if input.MCPName == "" {
+		return errorResult(fmt.Errorf("mcp_name is required")), nil
+	}
+	if input.ToolName == "" {
+		return errorResult(fmt.Errorf("tool_name is required")), nil
+	}
+
+	// Handle CLI tools (mcp_name is "cli" or tool_name has cli_ prefix)
+	if input.MCPName == "cli" || cli.IsCLITool(input.ToolName) {
+		_, output, err := s.handleExecuteTool(ctx, req, input)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		return toCallToolResult(output)
+	}
+
+	// For MCP tools, pass through the raw response from the underlying MCP
+	result, err := s.registry.ExecuteToolRaw(ctx, input.MCPName, input.ToolName, input.Parameters)
 	if err != nil {
 		return errorResult(err), nil
 	}
 
-	return toCallToolResult(output)
+	return result, nil
 }
 
 func (s *Server) wrapRunSlop(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
