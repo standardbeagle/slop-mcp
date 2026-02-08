@@ -247,6 +247,7 @@ type ManageMCPsInput struct {
 	URL     string            `json:"url,omitempty" jsonschema:"Server URL for HTTP transports"`
 	Headers map[string]string `json:"headers,omitempty" jsonschema:"HTTP headers for HTTP transports"`
 	Scope   string            `json:"scope,omitempty" jsonschema:"Where to save: memory (default, runtime only), user (~/.config/slop-mcp/config.kdl), or project (.slop-mcp.kdl)"`
+	Dynamic bool              `json:"dynamic,omitempty" jsonschema:"Mark MCP as dynamic (always re-fetch tool list, never cache)"`
 }
 
 // ManageMCPsOutput is the output for the manage_mcps tool.
@@ -299,6 +300,7 @@ func (s *Server) handleManageMCPs(
 			Env:     input.Env,
 			URL:     input.URL,
 			Headers: input.Headers,
+			Dynamic: input.Dynamic,
 			Source:  source,
 		}
 
@@ -593,6 +595,16 @@ func (s *Server) handleGetMetadata(
 	req *mcp.CallToolRequest,
 	input GetMetadataInput,
 ) (*mcp.CallToolResult, GetMetadataOutput, error) {
+	// If a specific MCP is requested and it's cached, connect it first
+	// so we can fetch prompts, resources, etc.
+	if input.MCPName != "" {
+		if state := s.registry.GetState(input.MCPName); state == registry.StateCached {
+			if err := s.registry.EnsureConnected(ctx, input.MCPName); err != nil {
+				s.logger.Debug("failed to lazy-connect for metadata", "mcp_name", input.MCPName, "error", err)
+			}
+		}
+	}
+
 	allMetadata := s.registry.GetMetadata(ctx)
 
 	// Filter by MCP name if specified

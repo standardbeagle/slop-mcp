@@ -95,6 +95,7 @@ func NewFromConfig(cfg *config.Config) (*Server, error) {
 // Start connects to all configured MCPs in the background.
 // This is non-blocking - the server will be ready immediately while
 // MCP connections are established asynchronously.
+// Cached MCPs are loaded from disk immediately and lazy-connect on demand.
 func (s *Server) Start(ctx context.Context) error {
 	// Register all configured MCPs first (so status shows them immediately)
 	for _, cfg := range s.config.MCPs {
@@ -104,7 +105,15 @@ func (s *Server) Start(ctx context.Context) error {
 	// Load CLI tools from configured directories
 	s.loadCLITools()
 
+	// Load cached tool metadata (non-dynamic MCPs with valid cache)
+	// Cached MCPs skip eager connection and lazy-connect on first execute_tool
+	cached := s.registry.LoadCache(s.config)
+	if cached > 0 {
+		s.logger.Info("loaded MCPs from cache", "count", cached)
+	}
+
 	// Connect to MCPs in background to avoid blocking server startup
+	// Cached MCPs are skipped (ConnectFromConfig checks for StateCached)
 	go func() {
 		if err := s.registry.ConnectFromConfig(ctx, s.config); err != nil {
 			// Debug level: individual connection errors stored in registry state
@@ -221,6 +230,7 @@ func (s *Server) CallTool(ctx context.Context, toolName string, args map[string]
 			Env:     getStringMapArg(args, "env"),
 			URL:     getStringArg(args, "url"),
 			Headers: getStringMapArg(args, "headers"),
+			Dynamic: getBoolArg(args, "dynamic"),
 		}
 		_, result, err := s.handleManageMCPs(ctx, nil, input)
 		return result, err
@@ -246,6 +256,15 @@ func getMapArg(args map[string]any, key string) map[string]any {
 		}
 	}
 	return nil
+}
+
+func getBoolArg(args map[string]any, key string) bool {
+	if v, ok := args[key]; ok {
+		if b, ok := v.(bool); ok {
+			return b
+		}
+	}
+	return false
 }
 
 func getStringSliceArg(args map[string]any, key string) []string {

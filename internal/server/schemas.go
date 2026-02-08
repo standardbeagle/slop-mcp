@@ -110,6 +110,10 @@ var manageMCPsInputSchema = json.RawMessage(`{
 		"scope": {
 			"type": "string",
 			"description": "Where to save: memory (default, runtime only), user (~/.config/slop-mcp/config.kdl), or project (.slop-mcp.kdl)"
+		},
+		"dynamic": {
+			"type": "boolean",
+			"description": "Mark MCP as dynamic (always re-fetch tool list, never cache)"
 		}
 	},
 	"required": ["action"],

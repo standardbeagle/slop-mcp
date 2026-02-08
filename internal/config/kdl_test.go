@@ -831,6 +831,101 @@ func TestFormatMCPBlock_WithTimeout(t *testing.T) {
 	assert.Contains(t, result, `mcp "with-timeout"`)
 }
 
+func TestParseKDLConfig_Dynamic(t *testing.T) {
+	tests := []struct {
+		name            string
+		kdl             string
+		expectedDynamic bool
+	}{
+		{
+			name: "with dynamic true",
+			kdl: `mcp "github" {
+    type "sse"
+    url "https://mcp.github.com/sse"
+    dynamic true
+}`,
+			expectedDynamic: true,
+		},
+		{
+			name: "with dynamic false",
+			kdl: `mcp "static-server" {
+    type "stdio"
+    command "static-mcp"
+    dynamic false
+}`,
+			expectedDynamic: false,
+		},
+		{
+			name: "without dynamic (default false)",
+			kdl: `mcp "default-server" {
+    type "stdio"
+    command "default-mcp"
+}`,
+			expectedDynamic: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := ParseKDLConfig(tt.kdl, SourceProject)
+			require.NoError(t, err)
+			require.NotNil(t, cfg)
+			require.Len(t, cfg.MCPs, 1)
+
+			var mcp MCPConfig
+			for _, m := range cfg.MCPs {
+				mcp = m
+				break
+			}
+
+			assert.Equal(t, tt.expectedDynamic, mcp.Dynamic)
+		})
+	}
+}
+
+func TestFormatMCPBlock_WithDynamic(t *testing.T) {
+	mcp := MCPConfig{
+		Name:    "dynamic-mcp",
+		Type:    "sse",
+		URL:     "https://example.com/sse",
+		Dynamic: true,
+	}
+
+	result := formatMCPBlock(mcp)
+	assert.Contains(t, result, "dynamic true")
+	assert.Contains(t, result, `mcp "dynamic-mcp"`)
+}
+
+func TestFormatMCPBlock_WithoutDynamic(t *testing.T) {
+	mcp := MCPConfig{
+		Name:    "static-mcp",
+		Type:    "stdio",
+		Command: "server",
+		Dynamic: false,
+	}
+
+	result := formatMCPBlock(mcp)
+	assert.NotContains(t, result, "dynamic")
+}
+
+func TestFormatMCPBlock_RoundTripWithDynamic(t *testing.T) {
+	original := MCPConfig{
+		Name:    "roundtrip-dynamic",
+		Type:    "sse",
+		URL:     "https://api.example.com/sse",
+		Dynamic: true,
+	}
+
+	formatted := formatMCPBlock(original)
+	cfg, err := ParseKDLConfig(formatted, SourceProject)
+	require.NoError(t, err)
+
+	parsed, ok := cfg.MCPs["roundtrip-dynamic"]
+	require.True(t, ok)
+
+	assert.Equal(t, original.Dynamic, parsed.Dynamic)
+}
+
 func TestFormatMCPBlock_RoundTripWithTimeout(t *testing.T) {
 	original := MCPConfig{
 		Name:    "roundtrip-timeout",

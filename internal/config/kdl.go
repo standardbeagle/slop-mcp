@@ -31,6 +31,7 @@ type KDLMCPConfig struct {
 	URL     string            `kdl:"url"`
 	Headers map[string]string `kdl:"headers"`
 	Timeout string            `kdl:"timeout"`
+	Dynamic bool              `kdl:"dynamic"`
 }
 
 // UserConfigPath returns the path to the user config file.
@@ -185,6 +186,7 @@ func loadClaudeCodeMainConfig(path string, cfg *Config) error {
 			URL:     mcp.URL,
 			Headers: mcp.Headers,
 			Timeout: mcp.Timeout,
+			Dynamic: mcp.Dynamic,
 		}
 	}
 
@@ -258,6 +260,7 @@ func loadClaudeCodePluginMCPs(pluginsPath string, cfg *Config) error {
 					URL:     mcp.URL,
 					Headers: mcp.Headers,
 					Timeout: mcp.Timeout,
+					Dynamic: mcp.Dynamic,
 				}
 			}
 		}
@@ -297,6 +300,7 @@ func LoadClaudeDesktopConfig() (*Config, error) {
 			URL:     mcp.URL,
 			Headers: mcp.Headers,
 			Timeout: mcp.Timeout,
+			Dynamic: mcp.Dynamic,
 		}
 	}
 
@@ -357,6 +361,7 @@ func GetMCP(path, name string) (*MCPConfig, error) {
 			URL:     jmcp.URL,
 			Headers: jmcp.Headers,
 			Timeout: jmcp.Timeout,
+			Dynamic: jmcp.Dynamic,
 		}, nil
 	}
 
@@ -405,6 +410,7 @@ func ParseKDLConfig(data string, source Source) (*Config, error) {
 			URL:     m.URL,
 			Headers: m.Headers,
 			Timeout: m.Timeout,
+			Dynamic: m.Dynamic,
 			Source:  source,
 		}
 	}
@@ -497,6 +503,10 @@ func formatMCPBlock(mcp MCPConfig) string {
 
 	if mcp.Timeout != "" {
 		result += "    timeout \"" + mcp.Timeout + "\"\n"
+	}
+
+	if mcp.Dynamic {
+		result += "    dynamic true\n"
 	}
 
 	if len(mcp.Env) > 0 {

@@ -19,6 +19,7 @@ type MCPConfig struct {
 	Timeout             string            `json:"timeout,omitempty"`              // Connection timeout (e.g., "30s", "1m")
 	MaxRetries          int               `json:"max_retries,omitempty"`          // Max auto-reconnect retries (default 5, 0 = disabled)
 	HealthCheckInterval string            `json:"health_check_interval,omitempty"` // Background health check interval (e.g., "30s", "1m"); 0 = disabled
+	Dynamic             bool              `json:"dynamic,omitempty"`              // If true, always re-fetch tool list (never use cache)
 	Source              Source            `json:"-"`
 }
 
@@ -105,6 +106,7 @@ type JSONMCPConfig struct {
 	Headers    map[string]string `json:"headers,omitempty"`
 	Timeout    string            `json:"timeout,omitempty"`
 	MaxRetries int               `json:"max_retries,omitempty"`
+	Dynamic    bool              `json:"dynamic,omitempty"`
 }
 
 // ParseJSONConfig parses a JSON MCP config string.
@@ -123,6 +125,7 @@ func ParseJSONConfig(data string) (*MCPConfig, error) {
 		Headers:    cfg.Headers,
 		Timeout:    cfg.Timeout,
 		MaxRetries: cfg.MaxRetries,
+		Dynamic:    cfg.Dynamic,
 	}, nil
 }
 

@@ -13,6 +13,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/standardbeagle/slop-mcp/internal/auth"
+	"github.com/standardbeagle/slop-mcp/internal/cache"
 	"github.com/standardbeagle/slop-mcp/internal/config"
 	"github.com/standardbeagle/slop-mcp/internal/logging"
 )
@@ -116,6 +117,7 @@ const (
 	StateReconnecting  MCPState = "reconnecting"
 	StateError         MCPState = "error"
 	StateNeedsAuth     MCPState = "needs_auth"
+	StateCached        MCPState = "cached" // Tools loaded from cache, not yet connected
 )
 
 // Reconnection constants for exponential backoff.
@@ -181,7 +183,9 @@ type Registry struct {
 	toolIndex         *ToolIndex
 	logger            logging.Logger
 	mu                sync.RWMutex
-	healthCheckCancel context.CancelFunc // cancels background health check goroutine
+	healthCheckCancel context.CancelFunc    // cancels background health check goroutine
+	cache             *cache.Store          // disk cache for tool metadata
+	connectMu         map[string]*sync.Mutex // per-MCP mutex for serializing lazy-connect
 }
 
 // New creates a new Registry.
@@ -191,6 +195,8 @@ func New() *Registry {
 		states:      make(map[string]*mcpState),
 		toolIndex:   NewToolIndex(),
 		logger:      logging.Default(),
+		cache:       cache.NewStore(),
+		connectMu:   make(map[string]*sync.Mutex),
 	}
 }
 
@@ -201,6 +207,20 @@ func NewWithLogger(logger logging.Logger) *Registry {
 		states:      make(map[string]*mcpState),
 		toolIndex:   NewToolIndex(),
 		logger:      logger,
+		cache:       cache.NewStore(),
+		connectMu:   make(map[string]*sync.Mutex),
+	}
+}
+
+// NewWithCache creates a new Registry with a custom cache store (for testing).
+func NewWithCache(logger logging.Logger, cacheStore *cache.Store) *Registry {
+	return &Registry{
+		connections: make(map[string]*mcpConnection),
+		states:      make(map[string]*mcpState),
+		toolIndex:   NewToolIndex(),
+		logger:      logger,
+		cache:       cacheStore,
+		connectMu:   make(map[string]*sync.Mutex),
 	}
 }
 
@@ -215,6 +235,185 @@ func (r *Registry) SetConfigured(cfg config.MCPConfig) {
 			config: cfg,
 			state:  StateConfigured,
 		}
+	}
+}
+
+// GetState returns the current state of an MCP.
+func (r *Registry) GetState(name string) MCPState {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if state, ok := r.states[name]; ok {
+		return state.state
+	}
+	return ""
+}
+
+// SetCached loads tools from a cache entry into the tool index without connecting.
+// Sets the MCP state to StateCached and initializes the per-MCP connect mutex.
+func (r *Registry) SetCached(cfg config.MCPConfig, tools []ToolInfo) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.states[cfg.Name] = &mcpState{
+		config: cfg,
+		state:  StateCached,
+	}
+
+	r.toolIndex.Add(cfg.Name, tools)
+
+	if _, ok := r.connectMu[cfg.Name]; !ok {
+		r.connectMu[cfg.Name] = &sync.Mutex{}
+	}
+}
+
+// LoadCache loads cached tool metadata for all non-dynamic MCPs with valid cache entries.
+// Returns the number of MCPs loaded from cache.
+func (r *Registry) LoadCache(cfg *config.Config) int {
+	loaded := 0
+	for name, mcpCfg := range cfg.MCPs {
+		// Skip dynamic MCPs -- they must always connect fresh
+		if mcpCfg.Dynamic {
+			continue
+		}
+
+		// Check if cache entry is valid (exists and config hash matches)
+		if !r.cache.IsValid(name, mcpCfg) {
+			continue
+		}
+
+		entry, err := r.cache.GetEntry(name)
+		if err != nil || entry == nil {
+			continue
+		}
+
+		// Convert cache.CachedToolInfo to registry.ToolInfo
+		tools := make([]ToolInfo, len(entry.Tools))
+		for i, ct := range entry.Tools {
+			tools[i] = ToolInfo{
+				Name:        ct.Name,
+				Description: ct.Description,
+				MCPName:     ct.MCPName,
+				InputSchema: ct.InputSchema,
+			}
+		}
+
+		// Load tools from cache
+		r.SetCached(mcpCfg, tools)
+		r.logger.Info("loaded MCP from cache",
+			"mcp_name", name,
+			"tool_count", len(entry.Tools),
+			"server_version", entry.ServerVersion)
+		loaded++
+	}
+	return loaded
+}
+
+// EnsureConnected ensures an MCP is connected, performing lazy connection if needed.
+// If the MCP is in StateCached or StateConfigured, it will attempt to connect.
+// The per-MCP mutex serializes concurrent lazy-connect attempts.
+func (r *Registry) EnsureConnected(ctx context.Context, mcpName string) error {
+	// Fast path: already connected
+	r.mu.RLock()
+	state, exists := r.states[mcpName]
+	if !exists {
+		r.mu.RUnlock()
+		return fmt.Errorf("MCP not configured: %s", mcpName)
+	}
+
+	if state.state == StateConnected {
+		r.mu.RUnlock()
+		return nil
+	}
+
+	if state.state != StateCached && state.state != StateConfigured {
+		r.mu.RUnlock()
+		return fmt.Errorf("MCP %s is in state %s, cannot connect", mcpName, state.state)
+	}
+
+	cfg := state.config
+	r.mu.RUnlock()
+
+	// Get or create per-MCP mutex
+	r.mu.Lock()
+	mu, ok := r.connectMu[mcpName]
+	if !ok {
+		mu = &sync.Mutex{}
+		r.connectMu[mcpName] = mu
+	}
+	r.mu.Unlock()
+
+	// Serialize concurrent lazy-connects for this MCP
+	mu.Lock()
+	defer mu.Unlock()
+
+	// Double-check: another goroutine may have connected while we waited
+	r.mu.RLock()
+	state, exists = r.states[mcpName]
+	r.mu.RUnlock()
+	if exists && state.state == StateConnected {
+		return nil
+	}
+
+	// Perform the connection
+	if err := r.Connect(ctx, cfg); err != nil {
+		return err
+	}
+
+	// After connect, update the cache with fresh data
+	r.updateCache(mcpName)
+
+	return nil
+}
+
+// updateCache saves the current tool index and server info to the disk cache.
+// Called after a successful Connect (outside of the main lock).
+func (r *Registry) updateCache(mcpName string) {
+	r.mu.RLock()
+	conn, ok := r.connections[mcpName]
+	if !ok {
+		r.mu.RUnlock()
+		return
+	}
+
+	state, exists := r.states[mcpName]
+	if !exists {
+		r.mu.RUnlock()
+		return
+	}
+	cfg := state.config
+	tools := r.toolIndex.GetAllForMCP(mcpName)
+	r.mu.RUnlock()
+
+	// Extract server info from the session
+	var serverName, serverVersion string
+	if conn.session != nil {
+		if initResult := conn.session.InitializeResult(); initResult != nil && initResult.ServerInfo != nil {
+			serverName = initResult.ServerInfo.Name
+			serverVersion = initResult.ServerInfo.Version
+		}
+	}
+
+	// Convert registry.ToolInfo to cache.CachedToolInfo
+	cachedTools := make([]cache.CachedToolInfo, len(tools))
+	for i, t := range tools {
+		cachedTools[i] = cache.CachedToolInfo{
+			Name:        t.Name,
+			Description: t.Description,
+			MCPName:     t.MCPName,
+			InputSchema: t.InputSchema,
+		}
+	}
+
+	entry := &cache.CacheEntry{
+		ConfigHash:    cache.ConfigHash(cfg),
+		ServerName:    serverName,
+		ServerVersion: serverVersion,
+		Tools:         cachedTools,
+	}
+
+	if err := r.cache.SetEntry(mcpName, entry); err != nil {
+		r.logger.Debug("failed to update tool cache", "mcp_name", mcpName, "error", err)
 	}
 }
 
@@ -233,8 +432,8 @@ func (r *Registry) Status() []MCPFullStatus {
 			ReconnectAttempts: state.reconnectAttempts,
 		}
 
-		// Add tool count if connected
-		if state.state == StateConnected {
+		// Add tool count if connected or cached
+		if state.state == StateConnected || state.state == StateCached {
 			status.ToolCount = r.toolIndex.CountForMCP(name)
 		}
 
@@ -265,7 +464,6 @@ func (r *Registry) Status() []MCPFullStatus {
 // Connect connects to an MCP server and registers it.
 func (r *Registry) Connect(ctx context.Context, cfg config.MCPConfig) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 
 	// Track state: set to connecting
 	r.states[cfg.Name] = &mcpState{
@@ -280,6 +478,7 @@ func (r *Registry) Connect(ctx context.Context, cfg config.MCPConfig) error {
 			state:  state,
 			err:    err,
 		}
+		r.mu.Unlock()
 		return err
 	}
 
@@ -368,6 +567,9 @@ func (r *Registry) Connect(ctx context.Context, cfg config.MCPConfig) error {
 
 	toolCount := r.toolIndex.CountForMCP(cfg.Name)
 	r.logger.Info("connected to MCP", "mcp_name", cfg.Name, "type", cfg.Type, "tool_count", toolCount)
+
+	// Release lock before disk I/O for cache update
+	r.mu.Unlock()
 
 	return nil
 }
@@ -725,8 +927,8 @@ func (r *Registry) List() []MCPStatus {
 			Source:    state.config.Source.String(),
 		}
 
-		// Add tool count if connected
-		if status.Connected {
+		// Add tool count if connected or cached
+		if status.Connected || state.state == StateCached {
 			status.ToolCount = r.toolIndex.CountForMCP(name)
 		}
 
@@ -743,6 +945,8 @@ func (r *Registry) List() []MCPStatus {
 			status.Error = "connecting..."
 		} else if state.state == StateReconnecting {
 			status.Error = fmt.Sprintf("reconnecting (attempt %d)", state.reconnectAttempts)
+		} else if state.state == StateCached {
+			status.Error = "cached (not yet connected)"
 		}
 
 		result = append(result, status)
@@ -751,12 +955,17 @@ func (r *Registry) List() []MCPStatus {
 	return result
 }
 
-// HasMCP checks if an MCP is registered.
+// HasMCP checks if an MCP is registered (connected, cached, or configured).
 func (r *Registry) HasMCP(name string) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	_, ok := r.connections[name]
-	return ok
+	if _, ok := r.connections[name]; ok {
+		return true
+	}
+	if state, ok := r.states[name]; ok {
+		return state.state == StateCached || state.state == StateConfigured
+	}
+	return false
 }
 
 // SearchTools searches tools by query and/or MCP name.
@@ -780,6 +989,11 @@ func (r *Registry) GetMetadata(ctx context.Context) []MCPMetadata {
 			Type:   state.config.Type,
 			State:  state.state,
 			Source: state.config.Source.String(),
+		}
+
+		// For cached MCPs, return tools from index (without connecting)
+		if state.state == StateCached {
+			metadata.Tools = r.toolIndex.GetAllForMCP(name)
 		}
 
 		// If connected, fetch full metadata
@@ -863,6 +1077,13 @@ func (r *Registry) GetMetadata(ctx context.Context) []MCPMetadata {
 
 // ExecuteTool executes a tool on a specific MCP.
 func (r *Registry) ExecuteTool(ctx context.Context, mcpName, toolName string, params map[string]any) (any, error) {
+	// Lazy-connect if cached
+	if state := r.GetState(mcpName); state == StateCached || state == StateConfigured {
+		if err := r.EnsureConnected(ctx, mcpName); err != nil {
+			return nil, fmt.Errorf("lazy-connect failed for MCP %s: %w", mcpName, err)
+		}
+	}
+
 	r.mu.RLock()
 	conn, ok := r.connections[mcpName]
 	r.mu.RUnlock()
@@ -928,6 +1149,13 @@ func (r *Registry) ExecuteTool(ctx context.Context, mcpName, toolName string, pa
 // ExecuteToolRaw calls a tool and returns the raw MCP response without conversion.
 // Use this when you need to pass through the underlying MCP's response format directly.
 func (r *Registry) ExecuteToolRaw(ctx context.Context, mcpName, toolName string, params map[string]any) (*mcp.CallToolResult, error) {
+	// Lazy-connect if cached
+	if state := r.GetState(mcpName); state == StateCached || state == StateConfigured {
+		if err := r.EnsureConnected(ctx, mcpName); err != nil {
+			return nil, fmt.Errorf("lazy-connect failed for MCP %s: %w", mcpName, err)
+		}
+	}
+
 	r.mu.RLock()
 	conn, ok := r.connections[mcpName]
 	r.mu.RUnlock()
@@ -1096,9 +1324,17 @@ func (r *Registry) GetConfigs() []config.MCPConfig {
 }
 
 func (r *Registry) listNames() []string {
-	names := make([]string, 0, len(r.connections))
+	// Include both connected and cached MCPs
+	seen := make(map[string]bool)
+	names := make([]string, 0, len(r.states))
 	for name := range r.connections {
 		names = append(names, name)
+		seen[name] = true
+	}
+	for name, state := range r.states {
+		if !seen[name] && (state.state == StateCached || state.state == StateConfigured) {
+			names = append(names, name)
+		}
 	}
 	return names
 }
@@ -1581,12 +1817,22 @@ func extractParamsFromSchema(schema map[string]any) []ParamInfo {
 }
 
 // ConnectFromConfig connects all MCPs from a config.
+// MCPs in StateCached are skipped (they lazy-connect on demand).
 func (r *Registry) ConnectFromConfig(ctx context.Context, cfg *config.Config) error {
 	for _, mcpCfg := range cfg.MCPs {
+		// Skip MCPs that are already loaded from cache -- they will lazy-connect
+		if r.GetState(mcpCfg.Name) == StateCached {
+			continue
+		}
+
 		if err := r.Connect(ctx, mcpCfg); err != nil {
 			// Debug level: errors are stored in state for status queries
 			r.logger.Debug("failed to connect to MCP", "mcp_name", mcpCfg.Name, "error", err)
+			continue
 		}
+
+		// Update cache after successful connect
+		r.updateCache(mcpCfg.Name)
 	}
 	return nil
 }
