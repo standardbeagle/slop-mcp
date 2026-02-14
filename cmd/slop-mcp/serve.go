@@ -95,10 +95,9 @@ Examples:
   slop-mcp serve --port 8080        # Run with HTTP/SSE on port 8080
 
 Configuration:
-  The server loads MCP configurations from:
+  The server loads MCP configurations from (later overrides earlier):
   1. User config: ~/.config/slop-mcp/config.kdl
   2. Project config: .slop-mcp.kdl (in current directory)
-
-  Project config overrides user config for the same MCP name.
+  3. Local config: .slop-mcp.local.kdl (gitignored, for secrets)
 `)
 }

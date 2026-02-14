@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-02-14
+
+### Added
+
+- **Tool metadata cache and lazy loading**: MCP tool metadata is cached to
+  `~/.config/slop-mcp/cache/tools.json` for faster startup. Cached MCPs
+  connect lazily on first `execute_tool` or specific `get_metadata` call.
+  Use `dynamic true` in MCP config to skip caching and always connect eagerly.
+
+### Fixed
+
+- **Documentation**: Corrected tool count from 5/6 to 8 across README and
+  CLAUDE.md to reflect `slop_reference` and `slop_help` tools added in v0.8.0.
+- **README**: Removed non-existent `--transport` flag from `serve` command
+  examples (use `--port` instead).
+- **serve --help**: Added missing local config tier to configuration
+  description.
+
 ## [0.9.3] - 2026-01-24
 
 ### Fixed
@@ -238,6 +256,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - CI release workflow for PyPI and npm publishing
 
+[0.10.0]: https://github.com/standardbeagle/slop-mcp/releases/tag/v0.10.0
+[0.9.3]: https://github.com/standardbeagle/slop-mcp/releases/tag/v0.9.3
 [0.7.0]: https://github.com/standardbeagle/slop-mcp/releases/tag/v0.7.0
 [0.6.1]: https://github.com/standardbeagle/slop-mcp/releases/tag/v0.6.1
 [0.6.0]: https://github.com/standardbeagle/slop-mcp/releases/tag/v0.6.0

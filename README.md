@@ -2,11 +2,11 @@
 
 **Install many MCPs without killing your context.**
 
-slop-mcp is an MCP orchestrator that lets you connect dozens of MCP servers while exposing only 5 meta-tools to your agent. No more context window bloat from loading hundreds of tool definitions upfront.
+slop-mcp is an MCP orchestrator that lets you connect dozens of MCP servers while exposing only 8 meta-tools to your agent. No more context window bloat from loading hundreds of tool definitions upfront.
 
 ```
 Without slop-mcp:  50 MCPs × 20 tools = 1000 tool definitions in context
-With slop-mcp:     50 MCPs × 20 tools = 6 tool definitions in context
+With slop-mcp:     50 MCPs × 20 tools = 8 tool definitions in context
 ```
 
 ## Documentation
@@ -32,7 +32,7 @@ slop-mcp takes a different but complementary approach: instead of code execution
 
 ### Progressive Tool Discovery
 
-Rather than loading all tool definitions upfront, slop-mcp exposes just 6 meta-tools:
+Rather than loading all tool definitions upfront, slop-mcp exposes just 8 meta-tools:
 
 | Tool | Purpose |
 |------|---------|
@@ -42,8 +42,10 @@ Rather than loading all tool definitions upfront, slop-mcp exposes just 6 meta-t
 | `run_slop` | Execute SLOP scripts with access to all MCPs |
 | `manage_mcps` | Register/unregister MCPs at runtime |
 | `auth_mcp` | Handle OAuth authentication for MCPs that require it |
+| `slop_reference` | Search SLOP built-in functions by name or category |
+| `slop_help` | Get full details for a specific SLOP function |
 
-This means an agent connecting to slop-mcp sees **6 tool definitions** regardless of how many MCPs are connected or how many tools they expose. The agent discovers tools on-demand via `search_tools` and executes them via `execute_tool`.
+This means an agent connecting to slop-mcp sees **8 tool definitions** regardless of how many MCPs are connected or how many tools they expose. The agent discovers tools on-demand via `search_tools` and executes them via `execute_tool`.
 
 ### Lazy Connection & Async Startup
 
@@ -82,10 +84,11 @@ Tools are indexed locally when MCPs connect:
 ┌─────────────────────────────────────────────────────┐
 │              slop-mcp Server                        │
 │  ┌───────────────────────────────────────────────┐  │
-│  │  6 Meta-Tools (constant context cost)         │  │
+│  │  8 Meta-Tools (constant context cost)         │  │
 │  │  • search_tools    • execute_tool             │  │
 │  │  • get_metadata    • run_slop                 │  │
 │  │  • manage_mcps     • auth_mcp                 │  │
+│  │  • slop_reference  • slop_help                │  │
 │  └───────────────────────────────────────────────┘  │
 │                          │                          │
 │         ┌────────────────┼────────────────┐         │
@@ -177,7 +180,7 @@ slop-mcp serve
 ### With HTTP/SSE Transport
 
 ```bash
-slop-mcp serve --transport http --port 8080
+slop-mcp serve --port 8080
 ```
 
 ### Claude Desktop Configuration

@@ -79,7 +79,7 @@ internal/
 └── auth/               # OAuth token storage and automatic refresh
 ```
 
-### The 6 Meta-Tools
+### The 8 Meta-Tools
 
 | Tool | Handler |
 |------|---------|
@@ -89,6 +89,8 @@ internal/
 | `run_slop` | Execute SLOP scripts with multi-MCP access |
 | `manage_mcps` | Register/unregister MCPs at runtime |
 | `auth_mcp` | OAuth authentication (login, logout, status, list) |
+| `slop_reference` | Search SLOP built-in functions by name or category |
+| `slop_help` | Get full details for a specific SLOP function |
 
 ### Key Design Patterns
 
