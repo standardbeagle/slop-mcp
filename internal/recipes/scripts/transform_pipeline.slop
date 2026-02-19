@@ -1,0 +1,17 @@
+// transform_pipeline: Data transformation with pipes.
+// Parameters (set before loading):
+//   data - Input data (list or map)
+//
+// Example usage:
+//   store_set("data", [1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+//
+// Demonstrates pipe syntax for chaining transforms.
+
+data = store_get("data")
+if data == none:
+    data = range(1, 11)
+
+// Chain transforms using pipe syntax
+result = data | filter(|x| is_number(x)) | sorted()
+
+emit(input: data, output: result, count: len(result))

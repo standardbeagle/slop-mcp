@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -9,6 +11,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/standardbeagle/slop-mcp/internal/auth"
+	"github.com/standardbeagle/slop-mcp/internal/builtins"
 	"github.com/standardbeagle/slop-mcp/internal/cli"
 	"github.com/standardbeagle/slop-mcp/internal/config"
 	"github.com/standardbeagle/slop-mcp/internal/registry"
@@ -23,8 +26,10 @@ func mockServer(tools []registry.ToolInfo) *Server {
 	reg.AddToolsForTesting("test-mcp", tools)
 
 	return &Server{
-		registry:    reg,
-		cliRegistry: cli.NewRegistry(),
+		registry:     reg,
+		cliRegistry:  cli.NewRegistry(),
+		sessionStore: builtins.NewSessionStore(),
+		memoryStore:  builtins.NewMemoryStore(),
 	}
 }
 
@@ -1183,7 +1188,7 @@ func TestHandleRunSlop_MissingInput(t *testing.T) {
 	result, output, err := s.handleRunSlop(ctx, &mcp.CallToolRequest{}, RunSlopInput{})
 
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "either script or file_path is required")
+	assert.Contains(t, err.Error(), "either script, file_path, or recipe is required")
 	assert.Nil(t, result)
 	assert.Equal(t, RunSlopOutput{}, output)
 }
@@ -1270,7 +1275,10 @@ func TestHandleRunSlop_InlineScript_Invalid(t *testing.T) {
 	})
 
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "script execution error")
+	// Error is now structured JSON
+	var slopErr map[string]any
+	assert.NoError(t, json.Unmarshal([]byte(err.Error()), &slopErr), "error should be valid JSON")
+	assert.Contains(t, []string{"parse", "runtime"}, slopErr["type"])
 	assert.Nil(t, result)
 	assert.Equal(t, RunSlopOutput{}, output)
 }
@@ -1285,7 +1293,9 @@ func TestHandleRunSlop_InlineScript_UndefinedVariable(t *testing.T) {
 	})
 
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "script execution error")
+	// Error is now structured JSON
+	var slopErr map[string]any
+	assert.NoError(t, json.Unmarshal([]byte(err.Error()), &slopErr), "error should be valid JSON")
 	assert.Nil(t, result)
 	assert.Equal(t, RunSlopOutput{}, output)
 }
@@ -1367,7 +1377,9 @@ func TestHandleRunSlop_FilePath_InvalidContent(t *testing.T) {
 	})
 
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "script execution error")
+	// Error is now structured JSON
+	var slopErr map[string]any
+	assert.NoError(t, json.Unmarshal([]byte(err.Error()), &slopErr), "error should be valid JSON")
 	assert.Nil(t, result)
 	assert.Equal(t, RunSlopOutput{}, output)
 }
@@ -2030,9 +2042,125 @@ func TestSlopReferenceCategories(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Contains(t, output.Text, "SLOP Categories:")
 
-	// Verify expected categories exist
-	expectedCategories := []string{"string", "list", "math", "random", "type"}
+	// Verify expected categories exist (including new memory category)
+	expectedCategories := []string{"string", "list", "math", "random", "type", "memory"}
 	for _, expected := range expectedCategories {
 		assert.Contains(t, output.Text, expected, "should have category: %s", expected)
 	}
+}
+
+// =============================================================================
+// Tests for structured SLOP errors
+// =============================================================================
+
+func TestParseSlopError_RuntimeError(t *testing.T) {
+	err := parseSlopError("x = 1", fmt.Errorf("undefined variable: foo"))
+
+	var slopErr *slopError
+	require.ErrorAs(t, err, &slopErr)
+	assert.Equal(t, "runtime", slopErr.Type)
+	assert.Len(t, slopErr.Errors, 1)
+	assert.Contains(t, slopErr.Errors[0].Message, "undefined variable")
+
+	// Should serialize to valid JSON
+	var parsed map[string]any
+	assert.NoError(t, json.Unmarshal([]byte(slopErr.Error()), &parsed))
+	assert.Equal(t, "runtime", parsed["type"])
+}
+
+func TestParseSlopError_ParseError(t *testing.T) {
+	script := "x = 1\ny = !!!\nz = 3"
+	err := parseSlopError(script, fmt.Errorf("parse error at 2:5: unexpected token '!'"))
+
+	var slopErr *slopError
+	require.ErrorAs(t, err, &slopErr)
+	assert.Equal(t, "parse", slopErr.Type)
+	assert.Len(t, slopErr.Errors, 1)
+	assert.Equal(t, 2, slopErr.Errors[0].Line)
+	assert.Equal(t, 5, slopErr.Errors[0].Column)
+	assert.Equal(t, "y = !!!", slopErr.Errors[0].SourceLine)
+}
+
+// =============================================================================
+// Tests for session store via handlers
+// =============================================================================
+
+func TestHandleRunSlop_SessionStore_PersistsAcrossCalls(t *testing.T) {
+	s := mockServer([]registry.ToolInfo{})
+	ctx := context.Background()
+
+	// First call: set a value
+	_, _, err := s.handleRunSlop(ctx, &mcp.CallToolRequest{}, RunSlopInput{
+		Script: `store_set("test_key", "test_value")`,
+	})
+	require.NoError(t, err)
+
+	// Second call: retrieve the value
+	_, output, err := s.handleRunSlop(ctx, &mcp.CallToolRequest{}, RunSlopInput{
+		Script: `store_get("test_key")`,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "test_value", extractSlopValue(output.Result))
+}
+
+// =============================================================================
+// Tests for memory store via handlers
+// =============================================================================
+
+func TestHandleRunSlop_MemoryStore_SaveAndLoad(t *testing.T) {
+	// Use temp dir for memory to avoid polluting real storage
+	s := mockServer([]registry.ToolInfo{})
+	s.memoryStore = builtins.NewMemoryStoreWithDir(t.TempDir())
+	ctx := context.Background()
+
+	// Save
+	_, _, err := s.handleRunSlop(ctx, &mcp.CallToolRequest{}, RunSlopInput{
+		Script: `mem_save("test_bank", "key1", "value1")`,
+	})
+	require.NoError(t, err)
+
+	// Load
+	_, output, err := s.handleRunSlop(ctx, &mcp.CallToolRequest{}, RunSlopInput{
+		Script: `mem_load("test_bank", "key1")`,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "value1", extractSlopValue(output.Result))
+}
+
+// =============================================================================
+// Tests for recipe loading
+// =============================================================================
+
+func TestHandleRunSlop_Recipe_List(t *testing.T) {
+	s := mockServer([]registry.ToolInfo{})
+	ctx := context.Background()
+
+	_, output, err := s.handleRunSlop(ctx, &mcp.CallToolRequest{}, RunSlopInput{
+		Recipe: "list",
+	})
+
+	require.NoError(t, err)
+	result, ok := output.Result.([]any)
+	require.True(t, ok, "result should be a list")
+	assert.GreaterOrEqual(t, len(result), 3, "should have at least 3 recipes")
+
+	// Check that each recipe has name and description
+	for _, r := range result {
+		recipe, ok := r.(map[string]any)
+		require.True(t, ok)
+		assert.NotEmpty(t, recipe["name"])
+		assert.NotEmpty(t, recipe["description"])
+	}
+}
+
+func TestHandleRunSlop_Recipe_NotFound(t *testing.T) {
+	s := mockServer([]registry.ToolInfo{})
+	ctx := context.Background()
+
+	_, _, err := s.handleRunSlop(ctx, &mcp.CallToolRequest{}, RunSlopInput{
+		Recipe: "nonexistent_recipe",
+	})
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
 }

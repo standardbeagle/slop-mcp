@@ -63,6 +63,10 @@ var runSlopInputSchema = json.RawMessage(`{
 		"file_path": {
 			"type": "string",
 			"description": "Path to a .slop file to execute"
+		},
+		"recipe": {
+			"type": "string",
+			"description": "Load embedded recipe: 'list' for available, or recipe name to load"
 		}
 	},
 	"additionalProperties": false

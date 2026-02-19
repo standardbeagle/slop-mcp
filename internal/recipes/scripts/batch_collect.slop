@@ -1,0 +1,25 @@
+// batch_collect: Run a tool across multiple inputs and collect results.
+// Parameters (set before loading):
+//   mcp_name  - MCP server name
+//   tool_name - Tool to call
+//   inputs    - List of parameter maps
+//
+// Example usage:
+//   store_set("mcp_name", "github")
+//   store_set("tool_name", "get_repo")
+//   store_set("inputs", [{"owner": "anthropics", "repo": "claude-code"}, {"owner": "standardbeagle", "repo": "slop-mcp"}])
+
+mcp = store_get("mcp_name")
+tool = store_get("tool_name")
+inputs = store_get("inputs")
+
+results = []
+errors = []
+for item in inputs:
+    result = none
+    err = none
+    // Use dynamic MCP call pattern
+    result = __mcp_call__(mcp, tool, item)
+    results = results + [result]
+
+emit(results: results, total: len(results), errors: errors)

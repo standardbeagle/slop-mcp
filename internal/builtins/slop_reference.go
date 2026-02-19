@@ -255,6 +255,13 @@ var SlopReference = []SlopFunction{
 	{Name: "store_exists", Category: "store", Signature: "store_exists(key)", Description: "Checks if key exists", Example: `store_exists("mykey")`, Returns: "bool"},
 	{Name: "store_keys", Category: "store", Signature: "store_keys()", Description: "Returns all keys in store", Example: `store_keys()`, Returns: "list"},
 
+	// Persistent memory (slop-mcp additions)
+	{Name: "mem_save", Category: "memory", Signature: "mem_save(bank, key, value)", Description: "Saves value to persistent disk-backed memory", Example: `mem_save("cache", "result", data)`, Returns: "none", Tags: []string{"slop-mcp"}},
+	{Name: "mem_load", Category: "memory", Signature: "mem_load(bank, key, [default])", Description: "Loads value from persistent memory, returns default or none if missing", Example: `mem_load("cache", "result", "fallback")`, Returns: "any", Tags: []string{"slop-mcp"}},
+	{Name: "mem_delete", Category: "memory", Signature: "mem_delete(bank, key)", Description: "Deletes key from persistent memory bank", Example: `mem_delete("cache", "result")`, Returns: "none", Tags: []string{"slop-mcp"}},
+	{Name: "mem_keys", Category: "memory", Signature: "mem_keys(bank)", Description: "Returns all keys in a persistent memory bank", Example: `mem_keys("cache")`, Returns: "list", Tags: []string{"slop-mcp"}},
+	{Name: "mem_banks", Category: "memory", Signature: "mem_banks()", Description: "Returns all persistent memory bank names", Example: `mem_banks()`, Returns: "list", Tags: []string{"slop-mcp"}},
+
 	// Crypto (slop-mcp additions)
 	{Name: "crypto_password", Category: "crypto", Signature: "crypto_password(length)", Description: "Generates secure password", Example: `crypto_password(32)`, Returns: "string", Tags: []string{"slop-mcp"}},
 	{Name: "crypto_passphrase", Category: "crypto", Signature: "crypto_passphrase(words)", Description: "Generates passphrase from EFF wordlist", Example: `crypto_passphrase(6)`, Returns: "string", Tags: []string{"slop-mcp"}},

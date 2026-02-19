@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-02-18
+
+### Added
+
+- **Session-level memory**: Thread-safe `store_set`/`store_get`/`store_delete`/
+  `store_exists`/`store_keys` that persist across `run_slop` calls within a
+  server session. Overrides SLOP's unsynchronized built-in store with
+  `sync.RWMutex`-backed implementation safe for concurrent access.
+
+- **Persistent memory**: Disk-backed `mem_save`/`mem_load`/`mem_delete`/
+  `mem_keys`/`mem_banks` functions that survive server restarts. Data stored as
+  JSON in `~/.config/slop-mcp/memory/<bank>.json`, compatible with memory-cli
+  format. Atomic writes via temp file + rename.
+
+- **Structured SLOP errors**: Script execution errors now return structured JSON
+  with `type` ("parse"/"runtime"), `message`, and `errors` array containing
+  `line`, `column`, `message`, and `source_line` for agent self-correction.
+
+- **Embedded recipe templates**: `recipe` parameter on `run_slop` loads built-in
+  `.slop` templates. Use `recipe: "list"` to see available recipes. Ships with
+  `batch_collect`, `search_and_inspect`, and `transform_pipeline`.
+
+- **Pipe syntax examples**: Updated `run_slop` tool description with pipe
+  chaining, session memory, persistent memory, and recipe usage examples.
+
 ## [0.10.0] - 2026-02-14
 
 ### Added

@@ -57,6 +57,19 @@ Transform with builtins:
   names = map(repos, |r| r["name"])
   emit(join(names, "\n"))
 
+Pipe for chaining transforms (left value becomes first arg):
+  [1, 2, 3, 4, 5] | filter(|x| x > 2) | map(|x| x * 10)
+  data | json_stringify()
+
+Session memory persists across run_slop calls (thread-safe):
+  store_set("key", value)
+  prev = store_get("key")
+
+Persistent memory survives restarts (disk-backed):
+  mem_save("bank", "key", value)
+  data = mem_load("bank", "key")
+
+Use recipe parameter: recipe: "list" to see available templates, recipe: "<name>" to load one.
 Use slop_reference to browse built-in functions (map, filter, reduce, json_parse, regex_match, etc.).`,
 			InputSchema: runSlopInputSchema,
 		},

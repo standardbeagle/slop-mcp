@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -12,6 +14,7 @@ import (
 	"github.com/standardbeagle/slop-mcp/internal/builtins"
 	"github.com/standardbeagle/slop-mcp/internal/cli"
 	"github.com/standardbeagle/slop-mcp/internal/config"
+	"github.com/standardbeagle/slop-mcp/internal/recipes"
 	"github.com/standardbeagle/slop-mcp/internal/registry"
 	"github.com/standardbeagle/slop/pkg/slop"
 )
@@ -154,6 +157,7 @@ func (s *Server) handleExecuteTool(
 type RunSlopInput struct {
 	Script   string `json:"script,omitempty" jsonschema:"Inline SLOP script to execute"`
 	FilePath string `json:"file_path,omitempty" jsonschema:"Path to a .slop file to execute"`
+	Recipe   string `json:"recipe,omitempty" jsonschema:"Load embedded recipe: 'list' for available, or recipe name"`
 }
 
 // RunSlopOutput is the output for the run_slop tool.
@@ -167,8 +171,27 @@ func (s *Server) handleRunSlop(
 	req *mcp.CallToolRequest,
 	input RunSlopInput,
 ) (*mcp.CallToolResult, RunSlopOutput, error) {
+	// Handle recipe parameter
+	if input.Recipe != "" {
+		if input.Recipe == "list" {
+			return nil, RunSlopOutput{
+				Result: valueToAny(recipesToAny(recipes.List())),
+			}, nil
+		}
+		content, err := recipes.Load(input.Recipe)
+		if err != nil {
+			return nil, RunSlopOutput{}, err
+		}
+		// Recipe becomes the script (can be combined with inline script as preamble)
+		if input.Script != "" {
+			input.Script = input.Script + "\n" + content
+		} else {
+			input.Script = content
+		}
+	}
+
 	if input.Script == "" && input.FilePath == "" {
-		return nil, RunSlopOutput{}, fmt.Errorf("either script or file_path is required")
+		return nil, RunSlopOutput{}, fmt.Errorf("either script, file_path, or recipe is required")
 	}
 
 	script := input.Script
@@ -189,6 +212,16 @@ func (s *Server) handleRunSlop(
 	builtins.RegisterSlopSearch(rt)
 	builtins.RegisterJWT(rt)
 	builtins.RegisterTemplate(rt)
+
+	// Register thread-safe session store (overrides SLOP's default store_*)
+	if s.sessionStore != nil {
+		builtins.RegisterSession(rt, s.sessionStore)
+	}
+
+	// Register persistent memory functions
+	if s.memoryStore != nil {
+		builtins.RegisterMemory(rt, s.memoryStore)
+	}
 
 	// Connect all MCP services to the slop runtime
 	for _, cfg := range s.registry.GetConfigs() {
@@ -221,7 +254,7 @@ func (s *Server) handleRunSlop(
 	// Execute script
 	result, err := rt.Execute(script)
 	if err != nil {
-		return nil, RunSlopOutput{}, fmt.Errorf("script execution error: %w", err)
+		return nil, RunSlopOutput{}, parseSlopError(script, err)
 	}
 
 	// Collect emitted values
@@ -234,6 +267,79 @@ func (s *Server) handleRunSlop(
 		Result:  valueToAny(result),
 		Emitted: emitted,
 	}, nil
+}
+
+// recipesToAny converts recipe list to a serializable format.
+func recipesToAny(recs []recipes.Recipe) []any {
+	result := make([]any, len(recs))
+	for i, r := range recs {
+		result[i] = map[string]any{
+			"name":        r.Name,
+			"description": r.Description,
+		}
+	}
+	return result
+}
+
+// slopErrorRegex matches SLOP parser error format: "parse error at LINE:COL: MESSAGE"
+var slopErrorRegex = regexp.MustCompile(`(?i)(?:parse error|error) at (\d+):(\d+):\s*(.*)`)
+
+// parseSlopError converts a SLOP execution error into a structured error
+// with line/column info and source context for agent self-correction.
+func parseSlopError(script string, err error) error {
+	msg := err.Error()
+	matches := slopErrorRegex.FindStringSubmatch(msg)
+
+	if matches == nil {
+		// Runtime error without line info
+		return &slopError{
+			Type:    "runtime",
+			Message: msg,
+			Errors:  []slopErrorDetail{{Message: msg}},
+		}
+	}
+
+	line, _ := strconv.Atoi(matches[1])
+	col, _ := strconv.Atoi(matches[2])
+	detail := slopErrorDetail{
+		Line:    line,
+		Column:  col,
+		Message: matches[3],
+	}
+
+	// Extract the failing source line
+	lines := strings.Split(script, "\n")
+	if line > 0 && line <= len(lines) {
+		detail.SourceLine = lines[line-1]
+	}
+
+	return &slopError{
+		Type:    "parse",
+		Message: msg,
+		Errors:  []slopErrorDetail{detail},
+	}
+}
+
+// slopError provides structured error info for agent self-correction.
+type slopError struct {
+	Type    string            `json:"type"` // "parse" or "runtime"
+	Message string            `json:"message"`
+	Errors  []slopErrorDetail `json:"errors"`
+}
+
+type slopErrorDetail struct {
+	Line       int    `json:"line,omitempty"`
+	Column     int    `json:"column,omitempty"`
+	Message    string `json:"message"`
+	SourceLine string `json:"source_line,omitempty"`
+}
+
+func (e *slopError) Error() string {
+	data, err := json.Marshal(e)
+	if err != nil {
+		return e.Message
+	}
+	return string(data)
 }
 
 // ManageMCPsInput is the input for the manage_mcps tool.

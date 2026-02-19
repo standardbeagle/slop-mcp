@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/standardbeagle/slop-mcp/internal/builtins"
 	"github.com/standardbeagle/slop-mcp/internal/cli"
 	"github.com/standardbeagle/slop-mcp/internal/config"
 	"github.com/standardbeagle/slop-mcp/internal/logging"
@@ -21,20 +22,24 @@ const (
 
 // Server is the slop-mcp server.
 type Server struct {
-	mcpServer   *mcp.Server
-	registry    *registry.Registry
-	cliRegistry *cli.Registry
-	config      *config.Config
-	logger      logging.Logger
+	mcpServer    *mcp.Server
+	registry     *registry.Registry
+	cliRegistry  *cli.Registry
+	config       *config.Config
+	logger       logging.Logger
+	sessionStore *builtins.SessionStore
+	memoryStore  *builtins.MemoryStore
 }
 
 // New creates a new Server with the given config.
 func New(ctx context.Context, mcps []config.MCPConfig) (*Server, error) {
 	s := &Server{
-		registry:    registry.New(),
-		cliRegistry: cli.NewRegistry(),
-		config:      config.NewConfig(),
-		logger:      logging.Default(),
+		registry:     registry.New(),
+		cliRegistry:  cli.NewRegistry(),
+		config:       config.NewConfig(),
+		logger:       logging.Default(),
+		sessionStore: builtins.NewSessionStore(),
+		memoryStore:  builtins.NewMemoryStore(),
 	}
 
 	// Create MCP server
@@ -67,10 +72,12 @@ func New(ctx context.Context, mcps []config.MCPConfig) (*Server, error) {
 // NewFromConfig creates a new Server from a config struct.
 func NewFromConfig(cfg *config.Config) (*Server, error) {
 	s := &Server{
-		registry:    registry.New(),
-		cliRegistry: cli.NewRegistry(),
-		config:      cfg,
-		logger:      logging.Default(),
+		registry:     registry.New(),
+		cliRegistry:  cli.NewRegistry(),
+		config:       cfg,
+		logger:       logging.Default(),
+		sessionStore: builtins.NewSessionStore(),
+		memoryStore:  builtins.NewMemoryStore(),
 	}
 
 	// Create MCP server
@@ -216,6 +223,7 @@ func (s *Server) CallTool(ctx context.Context, toolName string, args map[string]
 		input := RunSlopInput{
 			Script:   getStringArg(args, "script"),
 			FilePath: getStringArg(args, "file_path"),
+			Recipe:   getStringArg(args, "recipe"),
 		}
 		_, result, err := s.handleRunSlop(ctx, nil, input)
 		return result, err

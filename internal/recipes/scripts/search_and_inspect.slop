@@ -1,0 +1,16 @@
+// search_and_inspect: Search tools, then get full metadata for matches.
+// Parameters (set before loading):
+//   query - Search query string
+//
+// Example usage:
+//   store_set("query", "file")
+
+query = store_get("query")
+if query == none:
+    query = ""
+
+// Search for matching tools
+matches = slop_search(query)
+names = map(matches, |m| m["name"] + " (" + m["category"] + ")")
+
+emit(tools: matches, summary: join(names, "\n"), count: len(matches))
