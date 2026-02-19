@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,9 +34,12 @@ type memoryBankMeta struct {
 }
 
 type memoryEntry struct {
-	Value     any       `json:"value"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Value       any       `json:"value"`
+	Description string    `json:"description,omitempty"`
+	Schema      any       `json:"schema,omitempty"`
+	Size        int       `json:"size,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // NewMemoryStore creates a MemoryStore using the default directory.
@@ -131,9 +136,29 @@ func RegisterMemory(rt *slop.Runtime, store *MemoryStore) {
 		}
 		if existing != nil {
 			entry.CreatedAt = existing.CreatedAt
+			// Preserve existing metadata if not provided in kwargs
+			entry.Description = existing.Description
+			entry.Schema = existing.Schema
 		} else {
 			entry.CreatedAt = now
 		}
+
+		// Apply kwargs: description
+		if v, ok := kwargs["description"]; ok {
+			if sv, ok := v.(*slop.StringValue); ok {
+				entry.Description = sv.Value
+			}
+		}
+		// Apply kwargs: schema
+		if v, ok := kwargs["schema"]; ok {
+			entry.Schema = slop.ValueToGo(v)
+		}
+
+		// Auto-compute size from serialized value
+		if valBytes, err := json.Marshal(value); err == nil {
+			entry.Size = len(valBytes)
+		}
+
 		b.Entries[key.Value] = entry
 		b.Meta.UpdatedAt = now
 
@@ -262,5 +287,194 @@ func RegisterMemory(rt *slop.Runtime, store *MemoryStore) {
 			banks = append(banks, name)
 		}
 		return slop.GoToValue(banks), nil
+	})
+
+	rt.RegisterBuiltin("mem_info", func(args []slop.Value, kwargs map[string]slop.Value) (slop.Value, error) {
+		if len(args) < 2 {
+			return nil, fmt.Errorf("mem_info: requires bank, key arguments")
+		}
+		bankName, ok := args[0].(*slop.StringValue)
+		if !ok {
+			return nil, fmt.Errorf("mem_info: bank must be a string")
+		}
+		key, ok := args[1].(*slop.StringValue)
+		if !ok {
+			return nil, fmt.Errorf("mem_info: key must be a string")
+		}
+
+		store.mu.Lock()
+		b, err := store.loadBank(bankName.Value)
+		store.mu.Unlock()
+
+		if err != nil {
+			return nil, fmt.Errorf("mem_info: %w", err)
+		}
+		if b == nil {
+			return slop.NewNullValue(), nil
+		}
+
+		entry, exists := b.Entries[key.Value]
+		if !exists {
+			return slop.NewNullValue(), nil
+		}
+
+		result := map[string]any{
+			"key":        key.Value,
+			"description": entry.Description,
+			"size":       entry.Size,
+			"created_at": entry.CreatedAt.Format(time.RFC3339),
+			"updated_at": entry.UpdatedAt.Format(time.RFC3339),
+		}
+		if entry.Schema != nil {
+			result["schema"] = entry.Schema
+		}
+		return slop.GoToValue(result), nil
+	})
+
+	rt.RegisterBuiltin("mem_list", func(args []slop.Value, kwargs map[string]slop.Value) (slop.Value, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("mem_list: requires bank argument")
+		}
+		bankName, ok := args[0].(*slop.StringValue)
+		if !ok {
+			return nil, fmt.Errorf("mem_list: bank must be a string")
+		}
+
+		pattern := ""
+		if v, ok := kwargs["pattern"]; ok {
+			if sv, ok := v.(*slop.StringValue); ok {
+				pattern = sv.Value
+			}
+		}
+
+		store.mu.Lock()
+		b, err := store.loadBank(bankName.Value)
+		store.mu.Unlock()
+
+		if err != nil {
+			return nil, fmt.Errorf("mem_list: %w", err)
+		}
+		if b == nil {
+			return slop.GoToValue([]any{}), nil
+		}
+
+		// Collect and sort keys for stable output
+		keys := make([]string, 0, len(b.Entries))
+		for k := range b.Entries {
+			if pattern != "" {
+				matched, _ := filepath.Match(pattern, k)
+				if !matched {
+					continue
+				}
+			}
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+
+		results := make([]any, 0, len(keys))
+		for _, k := range keys {
+			e := b.Entries[k]
+			results = append(results, map[string]any{
+				"key":         k,
+				"description": e.Description,
+				"size":        e.Size,
+				"updated_at":  e.UpdatedAt.Format(time.RFC3339),
+			})
+		}
+		return slop.GoToValue(results), nil
+	})
+
+	rt.RegisterBuiltin("mem_search", func(args []slop.Value, kwargs map[string]slop.Value) (slop.Value, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("mem_search: requires query argument")
+		}
+		querySV, ok := args[0].(*slop.StringValue)
+		if !ok {
+			return nil, fmt.Errorf("mem_search: query must be a string")
+		}
+		query := strings.ToLower(querySV.Value)
+
+		bankFilter := ""
+		if v, ok := kwargs["bank"]; ok {
+			if sv, ok := v.(*slop.StringValue); ok {
+				bankFilter = sv.Value
+			}
+		}
+
+		includeValues := false
+		if v, ok := kwargs["include_values"]; ok {
+			if bv, ok := v.(*slop.BoolValue); ok {
+				includeValues = bv.Value
+			}
+		}
+
+		store.mu.Lock()
+		defer store.mu.Unlock()
+
+		// Determine which banks to search
+		var bankNames []string
+		if bankFilter != "" {
+			bankNames = []string{bankFilter}
+		} else {
+			entries, err := os.ReadDir(store.baseDir)
+			if err != nil {
+				if os.IsNotExist(err) {
+					return slop.GoToValue([]any{}), nil
+				}
+				return nil, fmt.Errorf("mem_search: %w", err)
+			}
+			for _, entry := range entries {
+				if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+					continue
+				}
+				bankNames = append(bankNames, entry.Name()[:len(entry.Name())-5])
+			}
+		}
+		sort.Strings(bankNames)
+
+		var results []any
+		for _, bn := range bankNames {
+			b, err := store.loadBank(bn)
+			if err != nil || b == nil {
+				continue
+			}
+
+			for key, entry := range b.Entries {
+				matched := false
+
+				// Match key name
+				if strings.Contains(strings.ToLower(key), query) {
+					matched = true
+				}
+
+				// Match description
+				if !matched && strings.Contains(strings.ToLower(entry.Description), query) {
+					matched = true
+				}
+
+				// Match serialized value if include_values
+				if !matched && includeValues {
+					if valBytes, err := json.Marshal(entry.Value); err == nil {
+						if strings.Contains(strings.ToLower(string(valBytes)), query) {
+							matched = true
+						}
+					}
+				}
+
+				if matched {
+					m := map[string]any{
+						"bank":        bn,
+						"key":         key,
+						"description": entry.Description,
+						"size":        entry.Size,
+					}
+					if includeValues {
+						m["value"] = entry.Value
+					}
+					results = append(results, m)
+				}
+			}
+		}
+		return slop.GoToValue(results), nil
 	})
 }

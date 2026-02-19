@@ -27,10 +27,13 @@ type BankMeta struct {
 
 // Entry represents a single memory entry.
 type Entry struct {
-	Value     any       `json:"value"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	TTL       *int64    `json:"ttl,omitempty"` // seconds, nil = no expiry
+	Value       any       `json:"value"`
+	Description string    `json:"description,omitempty"`
+	Schema      any       `json:"schema,omitempty"`
+	Size        int       `json:"size,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+	TTL         *int64    `json:"ttl,omitempty"` // seconds, nil = no expiry
 }
 
 // IsExpired checks if the entry has expired.
@@ -84,9 +87,11 @@ type BankInfo struct {
 }
 
 type KeyInfo struct {
-	Key       string `json:"key"`
-	UpdatedAt string `json:"updated_at"`
-	TTL       *int64 `json:"ttl,omitempty"`
+	Key         string `json:"key"`
+	Description string `json:"description,omitempty"`
+	Size        int    `json:"size,omitempty"`
+	UpdatedAt   string `json:"updated_at"`
+	TTL         *int64 `json:"ttl,omitempty"`
 }
 
 type SearchResult struct {
@@ -95,10 +100,11 @@ type SearchResult struct {
 }
 
 type SearchMatch struct {
-	Bank  string `json:"bank"`
-	Key   string `json:"key"`
-	Scope string `json:"scope"`
-	Value any    `json:"value,omitempty"`
+	Bank        string `json:"bank"`
+	Key         string `json:"key"`
+	Description string `json:"description,omitempty"`
+	Scope       string `json:"scope"`
+	Value       any    `json:"value,omitempty"`
 }
 
 type ErrorResult struct {
@@ -484,9 +490,16 @@ func cmdWrite(args []string) error {
 		UpdatedAt: now,
 	}
 
-	// Preserve created_at if updating
+	// Auto-compute size
+	if valBytes, err := json.Marshal(value); err == nil {
+		entry.Size = len(valBytes)
+	}
+
+	// Preserve created_at and metadata if updating
 	if existing, ok := bank.Entries[key]; ok {
 		entry.CreatedAt = existing.CreatedAt
+		entry.Description = existing.Description
+		entry.Schema = existing.Schema
 	} else {
 		operation = "create"
 	}
@@ -609,9 +622,11 @@ func cmdList(args []string) error {
 		for k, e := range bank.Entries {
 			if !e.IsExpired() {
 				keys = append(keys, KeyInfo{
-					Key:       k,
-					UpdatedAt: e.UpdatedAt.Format(time.RFC3339),
-					TTL:       e.TTL,
+					Key:         k,
+					Description: e.Description,
+					Size:        e.Size,
+					UpdatedAt:   e.UpdatedAt.Format(time.RFC3339),
+					TTL:         e.TTL,
 				})
 			}
 		}
@@ -871,31 +886,37 @@ func cmdSearch(args []string) error {
 				continue
 			}
 
+			matched := false
+
 			// Match key name
 			if strings.Contains(strings.ToLower(key), pattern) {
+				matched = true
+			}
+
+			// Match description
+			if !matched && strings.Contains(strings.ToLower(entry.Description), pattern) {
+				matched = true
+			}
+
+			// Match value if requested
+			if !matched && searchValues {
+				valueJSON, _ := json.Marshal(entry.Value)
+				if strings.Contains(strings.ToLower(string(valueJSON)), pattern) {
+					matched = true
+				}
+			}
+
+			if matched {
 				match := SearchMatch{
-					Bank:  bankName,
-					Key:   key,
-					Scope: bankScope,
+					Bank:        bankName,
+					Key:         key,
+					Description: entry.Description,
+					Scope:       bankScope,
 				}
 				if searchValues {
 					match.Value = entry.Value
 				}
 				matches = append(matches, match)
-				continue
-			}
-
-			// Match value if requested
-			if searchValues {
-				valueJSON, _ := json.Marshal(entry.Value)
-				if strings.Contains(strings.ToLower(string(valueJSON)), pattern) {
-					matches = append(matches, SearchMatch{
-						Bank:  bankName,
-						Key:   key,
-						Scope: bankScope,
-						Value: entry.Value,
-					})
-				}
 			}
 		}
 	}

@@ -66,8 +66,10 @@ Session memory persists across run_slop calls (thread-safe):
   prev = store_get("key")
 
 Persistent memory survives restarts (disk-backed):
-  mem_save("bank", "key", value)
+  mem_save("bank", "key", value, description: "what this stores")
   data = mem_load("bank", "key")
+  entries = mem_list("bank")
+  matches = mem_search("query")
 
 Use recipe parameter: recipe: "list" to see available templates, recipe: "<name>" to load one.
 Use slop_reference to browse built-in functions (map, filter, reduce, json_parse, regex_match, etc.).`,

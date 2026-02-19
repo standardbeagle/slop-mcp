@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-02-19
+
+### Added
+
+- **Memory metadata and discovery**: `mem_save` now accepts optional `description:` and
+  `schema:` kwargs and auto-computes `size` (bytes of serialized value). Metadata is
+  preserved across re-saves when kwargs are omitted (non-destructive updates).
+
+- **`mem_info(bank, key)`**: Returns entry metadata map (description, schema, size,
+  created_at, updated_at) without loading the value — zero-cost discoverability.
+
+- **`mem_list(bank, pattern: "")`**: Lists all entries in a bank with metadata (no
+  values). Optional glob `pattern` kwarg filters by key name. Output is sorted by key
+  for stable results.
+
+- **`mem_search(query, bank: "", include_values: false)`**: Case-insensitive substring
+  search across key names and descriptions in all banks (or a single `bank`). Set
+  `include_values: true` to also search serialized value content and include values in
+  results.
+
+- **memory-cli interoperability**: `Entry`, `KeyInfo`, and `SearchMatch` structs updated
+  with `description`, `schema`, and `size` fields. `cmdWrite` auto-computes size and
+  preserves metadata on update. `cmdSearch` now matches on description text in addition
+  to key names.
+
 ## [0.11.0] - 2026-02-18
 
 ### Added
