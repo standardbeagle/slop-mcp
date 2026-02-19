@@ -36,8 +36,28 @@ func (s *Server) registerTools() {
 	// 3. run_slop - Execute a SLOP script
 	s.mcpServer.AddTool(
 		&mcp.Tool{
-			Name:        "run_slop",
-			Description: "Execute a SLOP script with access to all registered MCPs. Provide either an inline script or a file path. Returns the script's final expression value as text.",
+			Name: "run_slop",
+			Description: `Execute a SLOP script with access to all registered MCPs. Provide either an inline script or a file path. Returns the script's final expression value as text.
+
+Call MCP tools as mcp_name.tool_name(param: value). Example patterns:
+
+Chain results between tools:
+  data = api.fetch(id: 42)
+  summary = ai.summarize(text: data["content"])
+  emit(summary)
+
+Loop and collect:
+  results = []
+  for id in [1, 2, 3]:
+      results = results + [api.get(id: id)]
+  emit(items: results, count: len(results))
+
+Transform with builtins:
+  repos = github.search(query: "mcp")
+  names = map(repos, |r| r["name"])
+  emit(join(names, "\n"))
+
+Use slop_reference to browse built-in functions (map, filter, reduce, json_parse, regex_match, etc.).`,
 			InputSchema: runSlopInputSchema,
 		},
 		s.wrapRunSlop,
