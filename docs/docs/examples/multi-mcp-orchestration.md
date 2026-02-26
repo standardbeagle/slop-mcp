@@ -31,17 +31,16 @@ mcp "github" {
     url "https://mcp.github.com/mcp"
 }
 
-// Math & Data
-mcp "math-mcp" {
+// Search & Code Intelligence
+mcp "lci" {
     transport "stdio"
-    command "npx"
-    args "@andylbrummer/math-mcp"
+    command "lci-mcp"
 }
 
-mcp "statistics" {
+mcp "brave-search" {
     transport "stdio"
-    command "python"
-    args "-m" "stats_mcp"
+    command "npx"
+    args "@anthropic/mcp-brave-search"
 }
 
 // Design & Product
@@ -107,14 +106,11 @@ mcp "pagerduty" {
     url "https://mcp.pagerduty.com/mcp"
 }
 
-// Database
-mcp "postgres" {
+// Visualization
+mcp "banana" {
     transport "stdio"
     command "npx"
-    args "@anthropic/postgres-mcp"
-    env {
-        DATABASE_URL "${DATABASE_URL}"
-    }
+    args "@anthropic/mcp-banana"
 }
 ```
 
@@ -132,12 +128,12 @@ before you've said anything!
 ### With SLOP MCP
 
 ```
-6 SLOP meta-tools × ~65 tokens = 390 tokens
+8 SLOP meta-tools × ~65 tokens = ~520 tokens
 
-That's 0.2% of context - virtually nothing!
+That's 0.3% of context - virtually nothing!
 ```
 
-**Savings: 31,485 tokens (98.8%)**
+**Savings: ~31,355 tokens (98.4%)**
 
 ## Orchestration Patterns
 
@@ -185,36 +181,51 @@ Done! Created LIN-123, linked Figma mockup, notified #bugs channel.
 
 **Context used: Only the 4 specific tools needed, not 425 total tools.**
 
-### Pattern 2: Data Pipeline
+### Pattern 2: Changelog to Infographic
 
-Query database → Calculate statistics → Generate report → Email:
+Fetch release commits → Categorize → Generate chart → Post to Slack:
 
 ```
-User: Send me a weekly sales summary
+User: Create a visual release summary for v3.0.0
 
-Claude: I'll pull data, analyze it, and email the report.
+Claude: I'll categorize commits, chart them, and post the summary.
 
-> execute_tool mcp_name="postgres" tool_name="query"
+> execute_tool mcp_name="github" tool_name="compare_commits"
   parameters={
-    "sql": "SELECT * FROM sales WHERE date >= NOW() - INTERVAL '7 days'"
+    "repo": "org/app",
+    "base": "v2.9.0",
+    "head": "v3.0.0"
   }
-Result: [{ "product": "Widget", "revenue": 5000 }, ...]
+Result: {
+  "commits": [
+    {"message": "feat: add SSO login"},
+    {"message": "feat: webhook retry logic"},
+    {"message": "fix: timeout on /api/users"},
+    {"message": "fix: null check in billing"},
+    {"message": "chore: update dependencies"},
+    {"message": "docs: API reference"}
+  ]
+}
 
-> execute_tool mcp_name="statistics" tool_name="summarize"
+(Claude categorizes: 2 feat, 2 fix, 1 chore, 1 docs)
+
+> execute_tool mcp_name="banana" tool_name="generate_chart"
   parameters={
-    "data": [...],
-    "metrics": ["sum", "mean", "growth_rate"]
+    "type": "bar",
+    "title": "v3.0.0 Release Breakdown",
+    "labels": ["feat", "fix", "chore", "docs"],
+    "data": [2, 2, 1, 1]
   }
-Result: { "total": 127500, "average": 18214, "growth": 0.12 }
+Result: { "image_url": "https://banana.dev/charts/xyz789.png" }
 
-> execute_tool mcp_name="email" tool_name="send"
+> execute_tool mcp_name="slack" tool_name="post_message"
   parameters={
-    "to": "team@company.com",
-    "subject": "Weekly Sales Summary",
-    "body": "Total: $127,500 (+12% WoW)..."
+    "channel": "#releases",
+    "text": "v3.0.0 Released (6 commits)\n• 2 features: SSO login, webhook retries\n• 2 fixes: API timeout, billing null check\n• 1 chore, 1 docs",
+    "attachments": [{"image_url": "https://banana.dev/charts/xyz789.png"}]
   }
 
-Sent! Weekly summary: $127,500 total revenue, 12% growth.
+Done! Release chart generated and posted to #releases.
 ```
 
 ### Pattern 3: Incident Response
@@ -263,56 +274,43 @@ Root cause: Connection pool exhausted.
 
 For repeatable multi-MCP workflows, use SLOP scripts:
 
-```slop
+```python
 // scripts/deploy-and-notify.slop
-@name "deploy-and-notify"
-@description "Deploy to Kubernetes and notify team"
+version = store_get("VERSION")
 
-// Build
-@call docker.build {
-  context: "."
-  tag: "$VERSION"
-}
+// Build and push
+docker.build(context: ".", tag: format("myapp:{}", version))
+docker.push(image: format("myapp:{}", version))
 
-// Push
-@call docker.push {
-  image: "myapp:$VERSION"
-}
+// Deploy and wait
+kubernetes.apply(
+    manifest: "./k8s/deployment.yaml",
+    set: {"image.tag": version}
+)
+kubernetes.wait(
+    resource: "deployment/myapp",
+    condition: "available"
+)
 
-// Deploy
-@call kubernetes.apply {
-  manifest: "./k8s/deployment.yaml"
-  set: { "image.tag": "$VERSION" }
-}
+// Notify team
+slack.post_message(
+    channel: "#deployments",
+    text: format("Deployed myapp:{} to production", version)
+)
 
-// Wait for rollout
-@call kubernetes.wait {
-  resource: "deployment/myapp"
-  condition: "available"
-}
+// Create release
+github.create_release(
+    tag: format("v{}", version),
+    generate_notes: true
+)
 
-// Notify
-@call slack.post_message {
-  channel: "#deployments"
-  text: "Deployed myapp:$VERSION to production"
-}
-
-// Create release notes
-@call github.create_release {
-  tag: "v$VERSION"
-  generate_notes: true
-}
+emit(status: "deployed", version: version)
 ```
 
-Run with:
-```bash
-slop-mcp run scripts/deploy-and-notify.slop VERSION=1.2.3
+Run via `run_slop`:
 ```
-
-Or in Claude Code:
-```
+> run_slop script='store_set("VERSION", "1.2.3")'
 > run_slop file_path="scripts/deploy-and-notify.slop"
-  parameters={"VERSION": "1.2.3"}
 ```
 
 ## Best Practices
