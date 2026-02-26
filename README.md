@@ -203,7 +203,7 @@ Add to your Claude Desktop config:
 | Aspect | Code Execution (Article) | slop-mcp |
 |--------|-------------------------|----------|
 | Tool Discovery | Filesystem exploration | `search_tools` with fuzzy matching |
-| Context Cost | Minimal (code interpreter) | Constant (6 meta-tools) |
+| Context Cost | Minimal (code interpreter) | Constant (8 meta-tools) |
 | Data Processing | In-sandbox code | SLOP scripts via `run_slop` |
 | Infrastructure | Secure sandbox required | Standard MCP servers |
 | Flexibility | Full code execution | Structured tool orchestration |

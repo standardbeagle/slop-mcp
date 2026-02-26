@@ -1,7 +1,7 @@
 {
   "name": "@standardbeagle/slop-mcp",
   "version": "0.0.0",
-  "description": "MCP server for orchestrating multiple MCP servers with progressive tool discovery",
+  "description": "MCP orchestrator — connect unlimited Model Context Protocol servers through 8 meta-tools. Progressive tool discovery keeps your AI agent's context window small.",
   "main": "index.js",
   "bin": {
     "slop-mcp": "bin.js"
@@ -15,19 +15,29 @@
   },
   "keywords": [
     "mcp",
+    "mcp-server",
+    "mcp-orchestrator",
     "model-context-protocol",
     "ai",
+    "ai-agent",
+    "ai-tools",
     "llm",
-    "tools",
+    "tool-orchestration",
+    "context-window",
     "anthropic",
-    "claude"
+    "claude",
+    "claude-code",
+    "claude-desktop",
+    "cursor",
+    "copilot",
+    "gemini"
   ],
   "author": "StandardBeagle",
   "license": "MIT",
   "bugs": {
     "url": "https://github.com/standardbeagle/slop-mcp/issues"
   },
-  "homepage": "https://github.com/standardbeagle/slop-mcp#readme",
+  "homepage": "https://standardbeagle.github.io/slop-mcp/",
   "engines": {
     "node": ">=16"
   },
@@ -35,6 +45,7 @@
     "bin.js",
     "index.js",
     "install.js",
-    "binaries/*"
+    "binaries/*",
+    "README.md"
   ]
 }

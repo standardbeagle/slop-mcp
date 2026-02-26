@@ -44,22 +44,24 @@ That's 30,000 tokens gone before you've said "hello".
 
 ## The SLOP Solution
 
-SLOP MCP exposes exactly **6 meta-tools**, regardless of how many MCPs you connect:
+SLOP MCP exposes exactly **8 meta-tools**, regardless of how many MCPs you connect:
 
 ```
-┌────────────────────────────────────────────┐
-│ SLOP MCP Meta-Tools (~400 tokens total)    │
-├────────────────────────────────────────────┤
-│ 1. search_tools    - Find tools by query   │
-│ 2. execute_tool    - Run any MCP tool      │
-│ 3. manage_mcps     - Add/remove MCPs       │
-│ 4. auth_mcp        - OAuth authentication  │
-│ 5. get_metadata    - Fetch MCP details     │
-│ 6. run_slop        - Execute SLOP scripts  │
-└────────────────────────────────────────────┘
+┌──────────────────────────────────────────────┐
+│ SLOP MCP Meta-Tools (~500 tokens total)      │
+├──────────────────────────────────────────────┤
+│ 1. search_tools    - Find tools by query     │
+│ 2. execute_tool    - Run any MCP tool        │
+│ 3. manage_mcps     - Add/remove MCPs         │
+│ 4. auth_mcp        - OAuth authentication    │
+│ 5. get_metadata    - Fetch MCP details       │
+│ 6. run_slop        - Execute SLOP scripts    │
+│ 7. slop_reference  - Browse SLOP builtins    │
+│ 8. slop_help       - Get function details    │
+└──────────────────────────────────────────────┘
 ```
 
-**400 tokens. Always. Whether you have 3 MCPs or 300.**
+**~500 tokens. Always. Whether you have 3 MCPs or 300.**
 
 ## On-Demand Tool Loading
 
@@ -82,18 +84,18 @@ Claude: Uses math.calculate (but already loaded everything)
 
 ```
 Conversation Start:
-└── Load SLOP meta-tools → 400 tokens
+└── Load SLOP meta-tools → 500 tokens
 
 User: "What's 2 + 2?"
 Claude: search_tools query="calculate add"
 ├── Returns: math.calculate schema → 75 tokens
-└── Total loaded: 475 tokens
+└── Total loaded: 575 tokens
 
 Claude: execute_tool mcp="math" tool="calculate" ...
 Result: 4
 ```
 
-**Savings: 4,525 tokens** on a simple calculation.
+**Savings: 4,425 tokens** on a simple calculation.
 
 ## Real-World Impact
 
@@ -124,8 +126,8 @@ mcp "notion" { ... }        // 18 tools
 | Approach | Context Overhead |
 |----------|-----------------|
 | Traditional | ~30,000 tokens |
-| SLOP MCP | ~400 tokens |
-| **Savings** | **29,600 tokens (98.7%)** |
+| SLOP MCP | ~500 tokens |
+| **Savings** | **29,500 tokens (98.3%)** |
 
 ## Search Efficiency
 
@@ -219,8 +221,8 @@ Claude will search when needed. You don't have to preload anything.
 
 | Feature | Traditional MCP | SLOP MCP |
 |---------|----------------|----------|
-| 17 MCPs overhead | ~30,000 tokens | ~400 tokens |
-| Adding new MCP | +2,000 tokens | +0 tokens |
+| 17 MCPs overhead | ~30,000 tokens | ~500 tokens |
+| Adding new MCP | ~2,000 tokens | +0 tokens |
 | Tool loading | Eager (all upfront) | Lazy (on search) |
 | Skills overhead | N/A | Zero |
 

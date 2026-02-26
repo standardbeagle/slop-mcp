@@ -3,8 +3,8 @@ import {themes as prismThemes} from 'prism-react-renderer';
 
 /** @type {import('@docusaurus/types').Config} */
 const config = {
-  title: 'SLOP MCP',
-  tagline: 'Install 17 MCPs. Claude won\'t even notice.',
+  title: 'SLOP MCP — MCP Orchestrator for AI Agents',
+  tagline: 'Connect unlimited MCP servers through 8 meta-tools. Progressive tool discovery keeps your AI agent\'s context window small.',
   favicon: 'img/favicon.ico',
 
   url: 'https://standardbeagle.github.io',
@@ -15,6 +15,23 @@ const config = {
 
   onBrokenLinks: 'throw',
   onBrokenMarkdownLinks: 'warn',
+
+  headTags: [
+    {
+      tagName: 'meta',
+      attributes: {
+        name: 'description',
+        content: 'SLOP MCP is an MCP orchestrator that aggregates multiple Model Context Protocol servers behind 8 meta-tools. Progressive tool discovery for Claude, Cursor, Copilot, and Gemini.',
+      },
+    },
+    {
+      tagName: 'meta',
+      attributes: {
+        name: 'keywords',
+        content: 'MCP, Model Context Protocol, MCP orchestrator, MCP server, AI tools, Claude Code, Claude Desktop, Cursor, Copilot, Gemini, context window, tool discovery, SLOP, AI agent, LLM tools',
+      },
+    },
+  ],
 
   i18n: {
     defaultLocale: 'en',
@@ -104,7 +121,7 @@ const config = {
               },
               {
                 label: 'npm',
-                href: 'https://www.npmjs.com/package/slop-mcp',
+                href: 'https://www.npmjs.com/package/@standardbeagle/slop-mcp',
               },
             ],
           },

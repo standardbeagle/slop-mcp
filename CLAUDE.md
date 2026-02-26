@@ -8,7 +8,7 @@ This project must respect the cost to clients of output length and always use pr
 
 ## Project Overview
 
-slop-mcp is an MCP orchestrator that aggregates multiple MCP servers while exposing only 6 meta-tools to agents. This solves context window bloat: instead of 50 MCPs × 20 tools = 1000 tool definitions, agents see just 6 tools regardless of scale.
+slop-mcp is an MCP orchestrator that aggregates multiple MCP servers while exposing only 8 meta-tools to agents. This solves context window bloat: instead of 50 MCPs × 20 tools = 1000 tool definitions, agents see just 8 tools regardless of scale.
 
 ## Build & Development Commands
 

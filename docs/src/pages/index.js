@@ -41,7 +41,7 @@ function HomepageHeader() {
         <div className={styles.installHint}>
           <code>pip install slop-mcp</code>
           <span className={styles.separator}>or</span>
-          <code>npx slop-mcp</code>
+          <code>npx @standardbeagle/slop-mcp</code>
         </div>
       </div>
     </header>
@@ -162,7 +162,7 @@ const features = [
   {
     icon: '∞',
     title: 'Unlimited Scale',
-    description: 'Connect 17 MCPs or 170. Your context overhead stays constant at ~400 tokens.',
+    description: 'Connect 17 MCPs or 170. Your context overhead stays constant at ~500 tokens.',
   },
   {
     icon: '⚡',

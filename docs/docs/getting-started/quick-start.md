@@ -89,7 +89,7 @@ This opens your browser for authentication. Once complete, the MCP automatically
 
 ## That's It!
 
-You now have multiple MCPs connected through a single interface. Claude only sees 6 SLOP tools regardless of how many MCPs you add.
+You now have multiple MCPs connected through a single interface. Claude only sees 8 SLOP tools regardless of how many MCPs you add.
 
 ## Common Commands
 
@@ -105,6 +105,21 @@ slop-mcp mcp auth status figma
 
 # View full metadata
 slop-mcp mcp metadata
+```
+
+## Windows Troubleshooting
+
+If Claude Code on Windows corrupts the `@standardbeagle/slop-mcp` package name (converting `/` to `\`), use `cmd /c` to wrap the npx call in your MCP config:
+
+```json
+{
+  "mcpServers": {
+    "slop": {
+      "command": "cmd",
+      "args": ["/c", "npx", "-y", "@standardbeagle/slop-mcp@latest", "serve"]
+    }
+  }
+}
 ```
 
 ## Next Steps

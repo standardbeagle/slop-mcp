@@ -28,21 +28,21 @@ Without SLOP MCP:
 └─────────────────────────────────────────────┘
 ```
 
+As described in Anthropic's [Code Execution with MCP](https://www.anthropic.com/engineering/code-execution-with-mcp) article, this context overload is a fundamental challenge. SLOP MCP addresses it with progressive tool discovery and in-environment script execution via the [SLOP language](/docs/reference/slop-language).
+
 ## The Solution
 
-SLOP MCP exposes **just 6 meta-tools** regardless of how many MCPs you connect. Tool schemas are loaded on-demand when you search for them.
+SLOP MCP exposes **just 8 meta-tools** regardless of how many MCPs you connect. Tool schemas are loaded on-demand when you search for them.
 
 ```
 With SLOP MCP:
 ┌─────────────────────────────────────────────┐
 │ Context Window (200k tokens)                │
 ├─────────────────────────────────────────────┤
-│ 🔧 search_tools                             │
-│ 🔧 execute_tool                             │
-│ 🔧 manage_mcps                              │
-│ 🔧 auth_mcp                                 │
-│ 🔧 get_metadata                             │
-│ 🔧 run_slop                                 │
+│ 🔧 search_tools     🔧 execute_tool         │
+│ 🔧 manage_mcps      🔧 auth_mcp             │
+│ 🔧 get_metadata     🔧 run_slop             │
+│ 🔧 slop_reference   🔧 slop_help            │
 │ ─────────────────────────────────────────── │
 │ 📝 Your entire conversation fits here!      │
 │                                             │
@@ -54,7 +54,7 @@ With SLOP MCP:
 
 ### 🚀 Unlimited MCPs, Constant Context
 
-Connect 17 MCPs or 170. Your context overhead stays the same: 6 tool schemas.
+Connect 17 MCPs or 170. Your context overhead stays the same: 8 tool schemas.
 
 ### 🔍 On-Demand Tool Discovery
 

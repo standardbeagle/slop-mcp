@@ -15,6 +15,7 @@ const sidebars = {
       type: 'category',
       label: 'Core Concepts',
       items: [
+        'concepts/why-slop-mcp',
         'concepts/context-efficiency',
         'concepts/skills',
         'concepts/oauth',
@@ -35,6 +36,7 @@ const sidebars = {
       items: [
         'reference/cli',
         'reference/tools',
+        'reference/slop-language',
         'reference/kdl-config',
       ],
     },

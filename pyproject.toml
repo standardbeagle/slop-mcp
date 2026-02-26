@@ -5,14 +5,14 @@ build-backend = "hatchling.build"
 [project]
 name = "slop-mcp"
 version = "0.0.0"
-description = "MCP server for orchestrating multiple MCP servers with progressive tool discovery"
+description = "MCP orchestrator — connect unlimited Model Context Protocol servers through 8 meta-tools. Progressive tool discovery keeps your AI agent's context window small."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.8"
 authors = [
     { name = "StandardBeagle", email = "dev@standardbeagle.com" }
 ]
-keywords = ["mcp", "model-context-protocol", "ai", "llm", "tools"]
+keywords = ["mcp", "mcp-server", "mcp-orchestrator", "model-context-protocol", "ai", "ai-agent", "ai-tools", "llm", "tool-orchestration", "context-window", "claude", "claude-code", "claude-desktop", "cursor", "copilot", "gemini"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
@@ -32,7 +32,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/standardbeagle/slop-mcp"
+Homepage = "https://standardbeagle.github.io/slop-mcp/"
+Documentation = "https://standardbeagle.github.io/slop-mcp/"
 Repository = "https://github.com/standardbeagle/slop-mcp"
 Issues = "https://github.com/standardbeagle/slop-mcp/issues"
 

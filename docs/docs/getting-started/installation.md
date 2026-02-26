@@ -18,10 +18,10 @@ This installs the `slop-mcp` binary globally.
 
 ```bash
 # Run directly without installing
-npx slop-mcp
+npx @standardbeagle/slop-mcp serve
 
 # Or install globally
-npm install -g slop-mcp
+npm install -g @standardbeagle/slop-mcp
 ```
 
 ## Binary Download
@@ -93,7 +93,20 @@ Or if using npx:
   "mcpServers": {
     "slop-mcp": {
       "command": "npx",
-      "args": ["slop-mcp", "serve"]
+      "args": ["-y", "@standardbeagle/slop-mcp", "serve"]
+    }
+  }
+}
+```
+
+**Windows users:** Claude Code on Windows may corrupt scoped package names (converting `/` to `\`). Use `cmd /c` to wrap the npx call:
+
+```json
+{
+  "mcpServers": {
+    "slop-mcp": {
+      "command": "cmd",
+      "args": ["/c", "npx", "-y", "@standardbeagle/slop-mcp@latest", "serve"]
     }
   }
 }

@@ -4,7 +4,7 @@ sidebar_position: 2
 
 # Tools Reference
 
-SLOP MCP exposes 6 meta-tools that provide access to all connected MCPs.
+SLOP MCP exposes 8 meta-tools that provide access to all connected MCPs.
 
 ## search_tools
 
@@ -300,9 +300,8 @@ One of `script` or `file_path` is required.
 
 ```bash
 run_slop script='
-@call math-mcp.calculate {
-  expression: "100 * 1.15"
-}
+result = math.calculate(expression: "100 * 1.15")
+emit(result)
 '
 ```
 
@@ -312,31 +311,105 @@ run_slop script='
 run_slop file_path="scripts/deploy.slop"
 ```
 
+#### Recipes
+
+```bash
+run_slop recipe="list"
+run_slop recipe="batch_collect"
+```
+
 ### SLOP Script Syntax
 
-```slop
-// Variables
-@let tax_rate = 0.08
+```python
+# Variables
+tax_rate = 0.08
 
-// MCP calls
-@call math-mcp.calculate {
-  expression: "100 * (1 + $tax_rate)"
+# MCP calls
+result = math.calculate(expression: format("100 * (1 + {})", tax_rate))
+
+# Conditionals
+if result > 100 {
+    slack.post_message(channel: "#alerts", text: format("High value: {}", result))
 }
 
-// Conditionals
-@if result > 100 {
-  @call slack.post_message {
-    channel: "#alerts"
-    text: "High value: $result"
+# Loops
+for item in items {
+    processor.process(data: item)
+}
+
+# Pipes
+[1, 2, 3, 4, 5] | filter(|x| x > 2) | map(|x| x * 10)
+```
+
+See the [SLOP Language Reference](/docs/reference/slop-language) for full syntax documentation.
+
+---
+
+## Error Handling
+
+All tools return errors in a consistent format:
+
+```json
+{
+  "error": {
+    "code": "MCP_NOT_FOUND",
+    "message": "MCP 'unknown' not found",
+    "details": {
+      "available_mcps": ["math-mcp", "github", "figma"]
+    }
   }
 }
+```
 
-// Loops
-@each item in $items {
-  @call processor.process {
-    data: $item
-  }
-}
+---
+
+## slop_reference
+
+Search SLOP built-in functions by name, category, or description.
+
+### Parameters
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `query` | string | No | Search query for function names and descriptions |
+| `category` | string | No | Filter by category (math, string, list, map, etc.) |
+| `limit` | integer | No | Max results (default: 10) |
+| `verbose` | boolean | No | Include full details (default: false, compact mode) |
+| `list_categories` | boolean | No | Return category counts instead of functions |
+
+### Examples
+
+```bash
+# Search for string functions
+slop_reference query="string"
+
+# List all categories
+slop_reference list_categories=true
+
+# Get verbose details for math functions
+slop_reference category="math" verbose=true
+```
+
+---
+
+## slop_help
+
+Get full details for a specific SLOP built-in function.
+
+### Parameters
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `name` | string | Yes | Function name |
+
+### Examples
+
+```bash
+# Get help for the map function
+slop_help name="map"
+
+# Get help for mem_save
+slop_help name="mem_save"
 ```
 
 ---

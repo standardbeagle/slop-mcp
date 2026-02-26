@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-02-25
+
+### Added
+
+- **SLOP Language Reference** in docusaurus docs: full syntax documentation with pipe
+  operator, MCP tool calls, TypeScript/Python comparison, sandboxing model, and recipes.
+
+- **"Why SLOP MCP" concept page**: references Anthropic's "Code Execution with MCP"
+  article and explains how slop-mcp implements the code-execution-within-MCP pattern.
+
+### Fixed
+
+- **Windows quick start**: added `cmd /c` wrapper for npx calls to prevent Windows path
+  handling from corrupting the `@standardbeagle/slop-mcp` scoped package name.
+
+- **Stale npm references**: fixed `npx slop-mcp` → `npx @standardbeagle/slop-mcp` and
+  corrected JSON config args in installation docs.
+
+- **Incorrect SLOP syntax in tools.md**: replaced `@call`/`@let`/`@if`/`@each` pseudo-syntax
+  with actual SLOP syntax in the `run_slop` examples.
+
+- **Tool count references**: updated "6 meta-tools" → "8 meta-tools" across all docs,
+  README, and CLAUDE.md.
+
+### Changed
+
+- **SEO improvements**: added meta description/keywords to docusaurus config, expanded
+  npm/PyPI keywords and descriptions, fixed homepage URLs.
+
 ## [0.12.0] - 2026-02-19
 
 ### Added
