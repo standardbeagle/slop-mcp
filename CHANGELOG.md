@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-02-25
+
+### Changed
+
+- **npm and PyPI READMEs**: replaced generic examples with MCP-focused orchestration
+  patterns — creating Jira tasks from email queries, indexing codebase structure into
+  persistent memory via LCI, generating visual reports with Nano Banana MCP.
+
+- **PyPI README**: now uses a dedicated `PYPI_README.md` with uvx-focused install
+  instructions instead of the marketing-heavy root README.
+
 ## [0.12.1] - 2026-02-25
 
 ### Added

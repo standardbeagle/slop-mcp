@@ -1,6 +1,6 @@
 # slop-mcp
 
-[![npm version](https://img.shields.io/npm/v/@standardbeagle/slop-mcp)](https://www.npmjs.com/package/@standardbeagle/slop-mcp)
+[![PyPI version](https://img.shields.io/pypi/v/slop-mcp)](https://pypi.org/project/slop-mcp/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
 MCP orchestrator that aggregates multiple Model Context Protocol servers behind 8 meta-tools. Connect any number of MCPs without bloating your agent's context window.
@@ -13,16 +13,16 @@ With slop-mcp:     50 MCPs x 20 tools = 8 tool definitions in context
 ## Install
 
 ```bash
-npx @standardbeagle/slop-mcp serve
+uvx slop-mcp serve
 ```
 
 Or install globally:
 
 ```bash
-npm install -g @standardbeagle/slop-mcp
+pip install slop-mcp
 ```
 
-Also available via [PyPI](https://pypi.org/project/slop-mcp/) (`uvx slop-mcp`), [Go](https://pkg.go.dev/github.com/standardbeagle/slop-mcp), and [binary releases](https://github.com/standardbeagle/slop-mcp/releases).
+Also available via [npm](https://www.npmjs.com/package/@standardbeagle/slop-mcp) (`npx @standardbeagle/slop-mcp`), [Go](https://pkg.go.dev/github.com/standardbeagle/slop-mcp), and [binary releases](https://github.com/standardbeagle/slop-mcp/releases).
 
 ## Configure
 
@@ -32,8 +32,8 @@ Add to Claude Desktop:
 {
   "mcpServers": {
     "slop": {
-      "command": "npx",
-      "args": ["-y", "@standardbeagle/slop-mcp", "serve"]
+      "command": "uvx",
+      "args": ["slop-mcp", "serve"]
     }
   }
 }
@@ -42,17 +42,17 @@ Add to Claude Desktop:
 Add to Claude Code:
 
 ```bash
-claude mcp add slop-mcp -- npx -y @standardbeagle/slop-mcp serve
+claude mcp add slop-mcp -- uvx slop-mcp serve
 ```
 
-**Windows users:** Claude Code on Windows may corrupt the scoped package name. Use `cmd /c` to wrap the npx call:
+**Windows users:** Use `cmd /c` to wrap the command if path handling corrupts the args:
 
 ```json
 {
   "mcpServers": {
     "slop": {
       "command": "cmd",
-      "args": ["/c", "npx", "-y", "@standardbeagle/slop-mcp@latest", "serve"]
+      "args": ["/c", "uvx", "slop-mcp", "serve"]
     }
   }
 }

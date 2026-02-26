@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "slop-mcp"
 version = "0.0.0"
 description = "MCP orchestrator — connect unlimited Model Context Protocol servers through 8 meta-tools. Progressive tool discovery keeps your AI agent's context window small."
-readme = "README.md"
+readme = "PYPI_README.md"
 license = "MIT"
 requires-python = ">=3.8"
 authors = [
@@ -46,6 +46,6 @@ packages = ["src/slop_mcp"]
 [tool.hatch.build.targets.sdist]
 include = [
     "/src",
-    "/README.md",
+    "/PYPI_README.md",
     "/LICENSE",
 ]
