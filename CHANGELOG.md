@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-03-01
+
+### Changed
+
+- **SLOP language**: upgraded to slop v0.3.0 with context-aware hyphenated identifiers.
+  MCP server names with hyphens (e.g., `dart-query.search()`) now work naturally in
+  SLOP scripts without needing `execute_tool` workaround.
+
 ## [0.12.2] - 2026-02-25
 
 ### Changed
