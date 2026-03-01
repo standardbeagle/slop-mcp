@@ -19,3 +19,5 @@ require (
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace github.com/standardbeagle/slop => /home/beagle/work/core/slop
