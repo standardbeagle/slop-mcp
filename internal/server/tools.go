@@ -127,6 +127,18 @@ Use slop_reference to browse built-in functions (map, filter, reduce, json_parse
 		},
 		s.wrapSlopHelp,
 	)
+
+	// 9. agnt_watch - Build a shell command to stream agnt daemon events.
+	// Pairs with Claude Code's Monitor tool: take the returned `command`
+	// and run it as a persistent monitor source.
+	s.mcpServer.AddTool(
+		&mcp.Tool{
+			Name:        "agnt_watch",
+			Description: "Build a shell command that streams agnt daemon events (errors, interactions, process output) via `agnt monitor`. Returns a `command` string to run through Claude Code's Monitor tool or any shell runner. Filters: target (errors/interactions/process/all), proxy_id, process_id, severity, format.",
+			InputSchema: agntWatchInputSchema,
+		},
+		s.wrapAgntWatch,
+	)
 }
 
 // Wrapper handlers that parse JSON manually and call the typed handlers.
@@ -253,6 +265,23 @@ func (s *Server) wrapSlopHelp(ctx context.Context, req *mcp.CallToolRequest) (*m
 	}
 
 	_, output, err := s.handleSlopHelp(ctx, req, input)
+	if err != nil {
+		return errorResult(err), nil
+	}
+
+	return toCallToolResult(output)
+}
+
+func (s *Server) wrapAgntWatch(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	var input AgntWatchInput
+	if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
+		return errorResult(fmt.Errorf("invalid parameters: %w", err)), nil
+	}
+
+	// Protect against clients probing the internal override field.
+	input.AgntBinary = ""
+
+	_, output, err := s.handleAgntWatch(ctx, req, input)
 	if err != nil {
 		return errorResult(err), nil
 	}
