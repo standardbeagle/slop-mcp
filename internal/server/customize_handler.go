@@ -3,11 +3,57 @@ package server
 import (
 	"context"
 	"fmt"
+	"os"
+	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/standardbeagle/slop-mcp/internal/builtins"
 	"github.com/standardbeagle/slop-mcp/internal/overrides"
 )
+
+// customToolNameRE validates custom tool names: lowercase letter, then [a-z0-9_], max 64 chars total.
+var customToolNameRE = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
+
+// metaToolNames is the set of built-in slop-mcp meta-tools that cannot be shadowed.
+var metaToolNames = map[string]struct{}{
+	"search_tools":   {},
+	"execute_tool":   {},
+	"run_slop":       {},
+	"manage_mcps":    {},
+	"auth_mcp":       {},
+	"get_metadata":   {},
+	"slop_reference": {},
+	"slop_help":      {},
+	"agnt_watch":     {},
+	"customize_tools": {},
+}
+
+// bodyLimit returns the maximum allowed body size in bytes.
+// Reads SLOP_MAX_CUSTOM_BODY env var; defaults to 65536.
+func bodyLimit() int {
+	if v := os.Getenv("SLOP_MAX_CUSTOM_BODY"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 65536
+}
+
+// depScanRE matches mcp_name.tool_name( patterns for best-effort dependency extraction.
+var depScanRE = regexp.MustCompile(`\b([a-z_][a-z0-9_]*)\.([a-z_][a-z0-9_]*)\(`)
+
+// customToolEntry is the wire format for a single custom tool in list_custom responses.
+type customToolEntry struct {
+	Name      string               `json:"name"`
+	Scope     string               `json:"scope,omitempty"`
+	Description string             `json:"description,omitempty"`
+	DependsOn []overrides.Dependency `json:"depends_on,omitempty"`
+	Stale     bool                 `json:"stale,omitempty"`
+	StaleDeps []staleDep           `json:"stale_deps,omitempty"`
+}
 
 // CustomizeToolsInput is the input for the customize_tools tool.
 type CustomizeToolsInput struct {
@@ -38,12 +84,22 @@ type customizeOverrideEntry struct {
 	StaleSource map[string]any    `json:"stale_source,omitempty"`
 }
 
+// staleDep describes a single stale dependency on a custom tool.
+type staleDep struct {
+	MCP         string `json:"mcp"`
+	Tool        string `json:"tool"`
+	StoredHash  string `json:"stored_hash"`
+	CurrentHash string `json:"current_hash"`
+}
+
 // customizeToolsOutput is the wire format returned by customize_tools actions.
 type customizeToolsOutput struct {
-	OK      bool                     `json:"ok"`
-	Action  string                   `json:"action"`
-	Affected int                     `json:"affected"`
-	Entries []customizeOverrideEntry `json:"entries"`
+	OK               bool                     `json:"ok"`
+	Action           string                   `json:"action"`
+	Affected         int                      `json:"affected"`
+	Entries          []customizeOverrideEntry `json:"entries,omitempty"`
+	CustomEntries    []customToolEntry        `json:"custom_entries,omitempty"`
+	ShorthandSkipped []string                 `json:"shorthand_skipped,omitempty"`
 }
 
 func (s *Server) handleCustomizeTools(
@@ -61,7 +117,13 @@ func (s *Server) handleCustomizeTools(
 		return s.customizeRemoveOverride(ctx, in)
 	case "list_overrides":
 		return s.customizeListOverrides(ctx, in)
-	case "define_custom", "remove_custom", "list_custom", "export", "import":
+	case "define_custom":
+		return s.customizeDefineCustom(ctx, in)
+	case "remove_custom":
+		return s.customizeRemoveCustom(in)
+	case "list_custom":
+		return s.customizeListCustom(ctx, in)
+	case "export", "import":
 		return nil, customizeToolsOutput{}, fmt.Errorf("action %q not yet implemented (tasks 13-14)", in.Action)
 	default:
 		return nil, customizeToolsOutput{}, fmt.Errorf("unknown action: %q", in.Action)
@@ -232,6 +294,200 @@ func (s *Server) isStale(ctx context.Context, key, storedHash string) (bool, str
 	}
 	currentHash := overrides.ComputeHash(upstreamDesc, upstreamParams)
 	return currentHash != storedHash, upstreamDesc, upstreamParams
+}
+
+func (s *Server) customizeDefineCustom(_ context.Context, in CustomizeToolsInput) (*mcp.CallToolResult, customizeToolsOutput, error) {
+	if in.Name == "" {
+		return nil, customizeToolsOutput{}, fmt.Errorf("name is required for define_custom")
+	}
+	if in.Description == "" {
+		return nil, customizeToolsOutput{}, fmt.Errorf("description is required for define_custom")
+	}
+	if in.InputSchema == nil {
+		return nil, customizeToolsOutput{}, fmt.Errorf("inputSchema is required for define_custom")
+	}
+	if in.Body == "" {
+		return nil, customizeToolsOutput{}, fmt.Errorf("body is required for define_custom")
+	}
+
+	// Validate name format.
+	if !customToolNameRE.MatchString(in.Name) {
+		return nil, customizeToolsOutput{}, fmt.Errorf("invalid name %q: must match ^[a-z][a-z0-9_]{0,63}$", in.Name)
+	}
+
+	// Reject meta-tool collisions.
+	if _, ok := metaToolNames[in.Name]; ok {
+		return nil, customizeToolsOutput{}, fmt.Errorf("name %q collides with a built-in meta-tool", in.Name)
+	}
+
+	// Validate body size.
+	if len(in.Body) > bodyLimit() {
+		return nil, customizeToolsOutput{}, fmt.Errorf("body exceeds maximum size of %d bytes", bodyLimit())
+	}
+
+	// Validate InputSchema minimally.
+	if t, ok := in.InputSchema["type"]; ok {
+		if _, isStr := t.(string); !isStr {
+			return nil, customizeToolsOutput{}, fmt.Errorf("inputSchema.type must be a string")
+		}
+	}
+	if props, ok := in.InputSchema["properties"]; ok {
+		if _, isMap := props.(map[string]any); !isMap {
+			return nil, customizeToolsOutput{}, fmt.Errorf("inputSchema.properties must be an object")
+		}
+	}
+	if ref, ok := in.InputSchema["$ref"]; ok {
+		if refStr, isStr := ref.(string); isStr && !strings.HasPrefix(refStr, "#") {
+			return nil, customizeToolsOutput{}, fmt.Errorf("external $ref not allowed: %q", refStr)
+		}
+	}
+
+	// Detect shorthand collisions in property names.
+	var shorthandSkipped []string
+	if props, ok := in.InputSchema["properties"].(map[string]any); ok {
+		names := make([]string, 0, len(props))
+		for k := range props {
+			names = append(names, k)
+		}
+		sort.Strings(names)
+		for _, k := range names {
+			if builtins.IsReservedBuiltin(k) {
+				shorthandSkipped = append(shorthandSkipped, k)
+			}
+		}
+	}
+
+	// Best-effort dependency extraction: scan body for mcp.tool( patterns.
+	var deps []overrides.Dependency
+	matches := depScanRE.FindAllStringSubmatch(in.Body, -1)
+	seen := map[string]struct{}{}
+	for _, m := range matches {
+		mcpName, toolName := m[1], m[2]
+		key := mcpName + "." + toolName
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+		upDesc, upParams, err := s.upstreamToolInfo(mcpName, toolName)
+		if err != nil {
+			continue // tool not known — skip
+		}
+		deps = append(deps, overrides.Dependency{
+			MCP:  mcpName,
+			Tool: toolName,
+			Hash: overrides.ComputeHash(upDesc, upParams),
+		})
+	}
+
+	scope := overrides.Scope(in.Scope)
+	if scope == "" {
+		scope = overrides.ScopeUser
+	}
+
+	ct := overrides.CustomTool{
+		Description: in.Description,
+		InputSchema: in.InputSchema,
+		Body:        in.Body,
+		DependsOn:   deps,
+	}
+	if err := s.overrideStore.SetCustom(scope, in.Name, ct); err != nil {
+		return nil, customizeToolsOutput{}, fmt.Errorf("storing custom tool: %w", err)
+	}
+
+	s.rebuildOverrideIndex()
+
+	out := customizeToolsOutput{
+		OK:       true,
+		Action:   "define_custom",
+		Affected: 1,
+		CustomEntries: []customToolEntry{
+			{Name: in.Name, Scope: string(scope)},
+		},
+		ShorthandSkipped: shorthandSkipped,
+	}
+	return nil, out, nil
+}
+
+func (s *Server) customizeRemoveCustom(in CustomizeToolsInput) (*mcp.CallToolResult, customizeToolsOutput, error) {
+	if in.Name == "" {
+		return nil, customizeToolsOutput{}, fmt.Errorf("name is required for remove_custom")
+	}
+
+	n, err := s.overrideStore.RemoveCustom(overrides.Scope(in.Scope), in.Name)
+	if err != nil {
+		return nil, customizeToolsOutput{}, fmt.Errorf("removing custom tool: %w", err)
+	}
+
+	s.rebuildOverrideIndex()
+
+	out := customizeToolsOutput{
+		OK:       true,
+		Action:   "remove_custom",
+		Affected: n,
+	}
+	return nil, out, nil
+}
+
+func (s *Server) customizeListCustom(ctx context.Context, in CustomizeToolsInput) (*mcp.CallToolResult, customizeToolsOutput, error) {
+	all := s.overrideStore.ListCustom()
+
+	var entries []customToolEntry
+	for scope, m := range all {
+		if in.Scope != "" && string(scope) != in.Scope {
+			continue
+		}
+		names := make([]string, 0, len(m))
+		for name := range m {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			ct := m[name]
+			entry := customToolEntry{
+				Name:        name,
+				Scope:       string(scope),
+				Description: ct.Description,
+				DependsOn:   ct.DependsOn,
+			}
+
+			if in.StaleOnly || len(ct.DependsOn) > 0 {
+				var staleDeps []staleDep
+				for _, dep := range ct.DependsOn {
+					_ = s.registry.EnsureConnected(ctx, dep.MCP)
+					upDesc, upParams, err := s.upstreamToolInfo(dep.MCP, dep.Tool)
+					if err != nil {
+						continue
+					}
+					cur := overrides.ComputeHash(upDesc, upParams)
+					if cur != dep.Hash {
+						staleDeps = append(staleDeps, staleDep{
+							MCP:         dep.MCP,
+							Tool:        dep.Tool,
+							StoredHash:  dep.Hash,
+							CurrentHash: cur,
+						})
+					}
+				}
+				if len(staleDeps) > 0 {
+					entry.Stale = true
+					entry.StaleDeps = staleDeps
+				}
+			}
+
+			if in.StaleOnly && !entry.Stale {
+				continue
+			}
+			entries = append(entries, entry)
+		}
+	}
+
+	out := customizeToolsOutput{
+		OK:            true,
+		Action:        "list_custom",
+		Affected:      len(entries),
+		CustomEntries: entries,
+	}
+	return nil, out, nil
 }
 
 // rebuildOverrideIndex triggers a registry index rebuild so search_tools sees updated overrides.

@@ -69,11 +69,161 @@ func TestCustomizeTools_NotYetImplementedActions(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 	s.overrideStore = store
 
-	notImpl := []string{"define_custom", "remove_custom", "list_custom", "export", "import"}
+	notImpl := []string{"export", "import"}
 	for _, action := range notImpl {
 		_, _, err := s.handleCustomizeTools(context.Background(), nil, CustomizeToolsInput{Action: action})
 		require.Error(t, err, "action %s should return error", action)
 		require.Contains(t, err.Error(), "not yet implemented", "action %s: %v", action, err)
+	}
+}
+
+func TestCustomizeTools_DefineCustom_Persists(t *testing.T) {
+	s := newCustomizeTestServer(t)
+	dir := t.TempDir()
+	store, err := overrides.OpenStore(overrides.StoreOptions{UserRoot: dir})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	s.overrideStore = store
+
+	in := CustomizeToolsInput{
+		Action:      "define_custom",
+		Name:        "my_tool",
+		Description: "test",
+		InputSchema: map[string]any{"type": "object"},
+		Body:        `emit("ok")`,
+		Scope:       "user",
+	}
+	_, _, err = s.handleCustomizeTools(context.Background(), nil, in)
+	require.NoError(t, err)
+	ct, ok := store.GetCustom("my_tool")
+	if !ok || ct.Body != `emit("ok")` {
+		t.Fatalf("not persisted: %+v", ct)
+	}
+}
+
+func TestCustomizeTools_DefineCustom_RejectsInvalidName(t *testing.T) {
+	s := newCustomizeTestServer(t)
+	dir := t.TempDir()
+	store, err := overrides.OpenStore(overrides.StoreOptions{UserRoot: dir})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	s.overrideStore = store
+
+	cases := []string{"BadName", "1starts", "has-dash", "with space", "way_too_long_" + strings.Repeat("x", 80)}
+	for _, name := range cases {
+		in := CustomizeToolsInput{
+			Action: "define_custom", Name: name, Description: "t",
+			InputSchema: map[string]any{"type": "object"}, Body: "42",
+		}
+		_, _, err := s.handleCustomizeTools(context.Background(), nil, in)
+		if err == nil {
+			t.Errorf("expected rejection for %q", name)
+		}
+	}
+}
+
+func TestCustomizeTools_DefineCustom_RejectsMetaToolCollision(t *testing.T) {
+	s := newCustomizeTestServer(t)
+	dir := t.TempDir()
+	store, err := overrides.OpenStore(overrides.StoreOptions{UserRoot: dir})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	s.overrideStore = store
+
+	in := CustomizeToolsInput{
+		Action: "define_custom", Name: "search_tools",
+		Description: "x", InputSchema: map[string]any{"type": "object"}, Body: "1",
+	}
+	_, _, err = s.handleCustomizeTools(context.Background(), nil, in)
+	if err == nil {
+		t.Error("expected collision error for meta-tool name")
+	}
+}
+
+func TestCustomizeTools_DefineCustom_ReportsShorthandCollisions(t *testing.T) {
+	s := newCustomizeTestServer(t)
+	dir := t.TempDir()
+	store, err := overrides.OpenStore(overrides.StoreOptions{UserRoot: dir})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	s.overrideStore = store
+
+	in := CustomizeToolsInput{
+		Action: "define_custom", Name: "my_tool", Description: "t",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"mem_save": map[string]any{"type": "string"},
+				"safe_key": map[string]any{"type": "string"},
+			},
+		},
+		Body: "42",
+	}
+	_, out, err := s.handleCustomizeTools(context.Background(), nil, in)
+	require.NoError(t, err)
+	js := jsonStr(out)
+	if !strings.Contains(js, "shorthand_skipped") {
+		t.Errorf("expected shorthand_skipped field in response: %s", js)
+	}
+	if !strings.Contains(js, "mem_save") {
+		t.Errorf("mem_save should be listed as shorthand_skipped: %s", js)
+	}
+}
+
+func TestCustomizeTools_DefineCustom_RejectsOversizedBody(t *testing.T) {
+	t.Setenv("SLOP_MAX_CUSTOM_BODY", "64")
+	s := newCustomizeTestServer(t)
+	dir := t.TempDir()
+	store, err := overrides.OpenStore(overrides.StoreOptions{UserRoot: dir})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	s.overrideStore = store
+
+	big := strings.Repeat("x", 100)
+	in := CustomizeToolsInput{
+		Action: "define_custom", Name: "big", Description: "t",
+		InputSchema: map[string]any{"type": "object"}, Body: big,
+	}
+	_, _, err = s.handleCustomizeTools(context.Background(), nil, in)
+	if err == nil {
+		t.Error("expected body-size rejection")
+	}
+}
+
+func TestCustomizeTools_RemoveCustom(t *testing.T) {
+	s := newCustomizeTestServer(t)
+	dir := t.TempDir()
+	store, err := overrides.OpenStore(overrides.StoreOptions{UserRoot: dir})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	s.overrideStore = store
+
+	_ = store.SetCustom(overrides.ScopeUser, "x", overrides.CustomTool{Body: "1"})
+	in := CustomizeToolsInput{Action: "remove_custom", Name: "x"}
+	_, _, err = s.handleCustomizeTools(context.Background(), nil, in)
+	require.NoError(t, err)
+	if _, ok := store.GetCustom("x"); ok {
+		t.Error("custom tool should be removed")
+	}
+}
+
+func TestCustomizeTools_ListCustom(t *testing.T) {
+	s := newCustomizeTestServer(t)
+	dir := t.TempDir()
+	store, err := overrides.OpenStore(overrides.StoreOptions{UserRoot: dir})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	s.overrideStore = store
+
+	_ = store.SetCustom(overrides.ScopeUser, "alpha", overrides.CustomTool{Description: "a"})
+	_ = store.SetCustom(overrides.ScopeUser, "beta", overrides.CustomTool{Description: "b"})
+
+	in := CustomizeToolsInput{Action: "list_custom"}
+	_, out, err := s.handleCustomizeTools(context.Background(), nil, in)
+	require.NoError(t, err)
+	js := jsonStr(out)
+	if !strings.Contains(js, "alpha") || !strings.Contains(js, "beta") {
+		t.Errorf("expected both tools: %s", js)
 	}
 }
 
