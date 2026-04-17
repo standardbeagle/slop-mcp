@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-04-16
+
+### Added
+
+- **`customize_tools` meta-tool (9th meta-tool)**: Actions `set_override`, `remove_override`, `list_overrides`, `define_custom`, `remove_custom`, `list_custom`, `export`, `import`. Lets agents override tool descriptions and param docs, and define SLOP-backed custom tools.
+
+- **Three storage scopes for reserved `_slop.*` memory banks**: user (`~/.config/slop-mcp/memory/_slop/`), project (`<repo>/.slop-mcp/memory/_slop/`, committable), local (`<repo>/.slop-mcp/memory.local/_slop/`, gitignored). Merge precedence: local > project > user.
+
+- **Hash-tied staleness detection**: overrides flag `stale: true` when upstream descriptions change. `list_overrides stale_only:true` returns only mismatches; `manage_mcps list_stale_overrides` is an ergonomic shortcut.
+
+- **Custom tool execution through the SLOP runtime**: arg validation, `$args` + scalar shorthand bindings, recursion depth guard (default 16), and body size limit (`SLOP_MAX_CUSTOM_BODY`, default 64 KB).
+
+- **Pack-based import/export** (`schema_version: 1`) for sharing customizations across machines and teams.
+
+### Changed
+
+- **Meta-tool descriptions**: rewritten in caveman-style for token efficiency. See `docs/internal/description-style.md`.
+
+- **Registry ranking index**: now uses `atomic.Pointer` for lock-free reads during rebuilds.
+
+- **Memory access control**: `mem_save`, `mem_delete`, and `memory-cli` reject writes to banks prefixed with `_slop.`.
+
+- **Custom tool execution**: whole-number `float64` args now pass JSON Schema `"integer"` type checks (fixes the JSON-decoded-integer edge case).
+
+### Internal
+
+- **New `internal/overrides/` package**: entry types, canonical JSON + SHA-256 truncated hashing, scope resolution, scope-aware store, single-slot coalescing bank flusher (no locks held over I/O), and pack import/export.
+
+- **`registry.OverrideProvider` interface**: for injecting descriptions and custom tools into the ranking index.
+
 ## [0.13.1] - 2026-03-06
 
 ### Fixed

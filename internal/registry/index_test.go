@@ -790,3 +790,25 @@ func TestToolIndex_Search_MCPNameMatching(t *testing.T) {
 			results[0].MCPName, results[1].MCPName)
 	}
 }
+
+// TestIndex_AtomicSwapUnderLoad verifies that concurrent readers and writers
+// do not race when the atomic index is swapped during searches.
+func TestIndex_AtomicSwapUnderLoad(t *testing.T) {
+	reg := New()
+	reg.AddToolsForTesting("m", []ToolInfo{{Name: "a", Description: "alpha"}})
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 1000; i++ {
+			_ = reg.SearchTools("alp", "")
+		}
+	}()
+	for i := 0; i < 100; i++ {
+		reg.AddToolsForTesting("m", []ToolInfo{{
+			Name:        "a",
+			Description: fmt.Sprintf("alpha %d", i),
+		}})
+	}
+	<-done
+}

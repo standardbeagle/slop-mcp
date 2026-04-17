@@ -3,20 +3,19 @@ package registry
 import (
 	"sort"
 	"strings"
-	"sync"
 )
 
 // Search scoring constants - higher scores rank first
 const (
-	scoreExactToolName     = 1000 // query exactly matches tool name
-	scoreMCPNameMatch      = 800  // query matches MCP name (high priority - beats prefix+term combos)
-	scoreToolNamePrefix    = 300  // tool name starts with query
-	scoreAllTermsInName    = 200  // all query terms found in tool name
-	scoreAllTermsCrossed   = 150  // all terms found across MCP name + tool name
-	scoreAllTermsInDesc    = 100  // all query terms found in description
-	scorePartialTermName   = 50   // per term found in tool name
-	scorePartialTermDesc   = 25   // per term found in description
-	scoreFuzzyMatch        = 10   // fuzzy normalized match (fallback)
+	scoreExactToolName   = 1000 // query exactly matches tool name
+	scoreMCPNameMatch    = 800  // query matches MCP name (high priority - beats prefix+term combos)
+	scoreToolNamePrefix  = 300  // tool name starts with query
+	scoreAllTermsInName  = 200  // all query terms found in tool name
+	scoreAllTermsCrossed = 150  // all terms found across MCP name + tool name
+	scoreAllTermsInDesc  = 100  // all query terms found in description
+	scorePartialTermName = 50   // per term found in tool name
+	scorePartialTermDesc = 25   // per term found in description
+	scoreFuzzyMatch      = 10   // fuzzy normalized match (fallback)
 )
 
 // normalize converts a string to lowercase and normalizes separators
@@ -78,48 +77,100 @@ type scoredTool struct {
 	score int
 }
 
-// ToolIndex indexes tools for efficient searching.
+// ToolIndex is an immutable snapshot of indexed tools for lock-free searching.
+// Instances are built by buildIndex and swapped atomically via atomic.Pointer.
+// Never mutate a ToolIndex after construction.
 type ToolIndex struct {
-	// mcpName -> list of tools
+	// mcpName -> list of tools (read-only after construction)
 	byMCP map[string][]ToolInfo
-	mu    sync.RWMutex
 }
 
-// NewToolIndex creates a new ToolIndex.
-func NewToolIndex() *ToolIndex {
-	return &ToolIndex{
-		byMCP: make(map[string][]ToolInfo),
+// mutableIndex is a helper used in tests to build ToolIndex instances
+// incrementally. It is not used in production paths.
+type mutableIndex struct {
+	data map[string][]ToolInfo
+}
+
+// NewToolIndex returns a mutable builder for constructing ToolIndex snapshots.
+// Intended for use in tests only; production code uses buildIndex directly.
+func NewToolIndex() *mutableIndex {
+	return &mutableIndex{data: make(map[string][]ToolInfo)}
+}
+
+// Add adds or replaces tools for the named MCP.
+func (m *mutableIndex) Add(mcpName string, tools []ToolInfo) {
+	m.data[mcpName] = tools
+}
+
+// snapshot returns an immutable ToolIndex from the current state.
+func (m *mutableIndex) snapshot() *ToolIndex {
+	return buildIndex(m.data, nil)
+}
+
+// Search delegates to the current immutable snapshot.
+func (m *mutableIndex) Search(query, mcpName string) []ToolInfo {
+	return m.snapshot().Search(query, mcpName)
+}
+
+// GetTool delegates to the current immutable snapshot.
+func (m *mutableIndex) GetTool(mcpName, toolName string) *ToolInfo {
+	return m.snapshot().GetTool(mcpName, toolName)
+}
+
+// CountForMCP delegates to the current immutable snapshot.
+func (m *mutableIndex) CountForMCP(mcpName string) int {
+	return m.snapshot().CountForMCP(mcpName)
+}
+
+// buildIndex constructs a new immutable ToolIndex from the provided snapshot.
+// If provider is non-nil, description overrides are applied and custom tools
+// are appended under the synthetic "_custom" MCP key.
+// This function is safe to call concurrently with any number of readers.
+func buildIndex(snapshot map[string][]ToolInfo, provider OverrideProvider) *ToolIndex {
+	byMCP := make(map[string][]ToolInfo, len(snapshot))
+	for mcpName, tools := range snapshot {
+		copied := make([]ToolInfo, len(tools))
+		for i, t := range tools {
+			if provider != nil {
+				if desc, _, _, ok := provider.OverrideFor(mcpName, t.Name); ok {
+					t.Description = desc
+				}
+			}
+			copied[i] = t
+		}
+		byMCP[mcpName] = copied
 	}
-}
 
-// Add adds tools for an MCP.
-func (idx *ToolIndex) Add(mcpName string, tools []ToolInfo) {
-	idx.mu.Lock()
-	defer idx.mu.Unlock()
-	idx.byMCP[mcpName] = tools
-}
+	if provider != nil {
+		customs := provider.CustomTools()
+		if len(customs) > 0 {
+			customTools := make([]ToolInfo, len(customs))
+			for i, c := range customs {
+				customTools[i] = ToolInfo{
+					Name:        c.Name,
+					Description: c.Description,
+					MCPName:     "_custom",
+					InputSchema: c.InputSchema,
+				}
+			}
+			byMCP["_custom"] = customTools
+		}
+	}
 
-// Remove removes all tools for an MCP.
-func (idx *ToolIndex) Remove(mcpName string) {
-	idx.mu.Lock()
-	defer idx.mu.Unlock()
-	delete(idx.byMCP, mcpName)
+	return &ToolIndex{byMCP: byMCP}
 }
 
 // Search searches tools by query and optionally filters by MCP name.
 // Uses multiple ranking strategies to return the most relevant results first:
-//   1. Exact tool name match (highest priority)
-//   2. MCP name match
-//   3. Tool name prefix match
-//   4. All query terms in tool name
-//   5. All query terms across MCP name + tool name
-//   6. All query terms in description
-//   7. Partial term matches (scored by count)
-//   8. Fuzzy normalized match (fallback)
+//  1. Exact tool name match (highest priority)
+//  2. MCP name match
+//  3. Tool name prefix match
+//  4. All query terms in tool name
+//  5. All query terms across MCP name + tool name
+//  6. All query terms in description
+//  7. Partial term matches (scored by count)
+//  8. Fuzzy normalized match (fallback)
 func (idx *ToolIndex) Search(query, mcpName string) []ToolInfo {
-	idx.mu.RLock()
-	defer idx.mu.RUnlock()
-
 	// If no query, return all tools (optionally filtered by MCP)
 	if query == "" {
 		var results []ToolInfo
@@ -147,7 +198,7 @@ func (idx *ToolIndex) Search(query, mcpName string) []ToolInfo {
 		mcpLower := strings.ToLower(mcp)
 
 		for _, tool := range tools {
-			score := idx.scoreTool(tool, mcp, mcpLower, queryLower, queryNorm, queryTerms)
+			score := scoreTool(tool, mcp, mcpLower, queryLower, queryNorm, queryTerms)
 			if score > 0 {
 				scored = append(scored, scoredTool{tool: tool, score: score})
 			}
@@ -170,7 +221,7 @@ func (idx *ToolIndex) Search(query, mcpName string) []ToolInfo {
 
 // scoreTool calculates the relevance score for a tool given a query.
 // Returns 0 if the tool doesn't match at all.
-func (idx *ToolIndex) scoreTool(tool ToolInfo, mcpName, mcpLower, queryLower, queryNorm string, queryTerms []string) int {
+func scoreTool(tool ToolInfo, mcpName, mcpLower, queryLower, queryNorm string, queryTerms []string) int {
 	nameLower := strings.ToLower(tool.Name)
 	descLower := strings.ToLower(tool.Description)
 	nameNorm := normalize(tool.Name)
@@ -239,16 +290,11 @@ func (idx *ToolIndex) scoreTool(tool ToolInfo, mcpName, mcpLower, queryLower, qu
 
 // CountForMCP returns the number of tools for an MCP.
 func (idx *ToolIndex) CountForMCP(mcpName string) int {
-	idx.mu.RLock()
-	defer idx.mu.RUnlock()
 	return len(idx.byMCP[mcpName])
 }
 
 // ListForMCP returns tool names for an MCP.
 func (idx *ToolIndex) ListForMCP(mcpName string) []string {
-	idx.mu.RLock()
-	defer idx.mu.RUnlock()
-
 	tools := idx.byMCP[mcpName]
 	names := make([]string, len(tools))
 	for i, t := range tools {
@@ -259,9 +305,6 @@ func (idx *ToolIndex) ListForMCP(mcpName string) []string {
 
 // GetAllForMCP returns all tool info for an MCP.
 func (idx *ToolIndex) GetAllForMCP(mcpName string) []ToolInfo {
-	idx.mu.RLock()
-	defer idx.mu.RUnlock()
-
 	tools := idx.byMCP[mcpName]
 	result := make([]ToolInfo, len(tools))
 	copy(result, tools)
@@ -270,9 +313,6 @@ func (idx *ToolIndex) GetAllForMCP(mcpName string) []ToolInfo {
 
 // GetAll returns all indexed tools.
 func (idx *ToolIndex) GetAll() []ToolInfo {
-	idx.mu.RLock()
-	defer idx.mu.RUnlock()
-
 	var all []ToolInfo
 	for _, tools := range idx.byMCP {
 		all = append(all, tools...)
@@ -283,9 +323,6 @@ func (idx *ToolIndex) GetAll() []ToolInfo {
 // GetTool returns the ToolInfo for a specific tool on an MCP.
 // Returns nil if not found.
 func (idx *ToolIndex) GetTool(mcpName, toolName string) *ToolInfo {
-	idx.mu.RLock()
-	defer idx.mu.RUnlock()
-
 	tools, ok := idx.byMCP[mcpName]
 	if !ok {
 		return nil

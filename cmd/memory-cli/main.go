@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/standardbeagle/slop-mcp/internal/overrides"
 )
 
 var Version = "0.1.0"
@@ -435,6 +437,11 @@ func cmdWrite(args []string) error {
 		return err
 	}
 
+	if overrides.IsReservedBank(bankName) {
+		fmt.Fprintf(os.Stderr, "bank %q is reserved; use customize_tools via slop-mcp\n", bankName)
+		os.Exit(2)
+	}
+
 	// Get value from positional or stdin
 	var valueStr string
 	if flags["stdin"] == "true" {
@@ -539,6 +546,11 @@ func cmdDelete(args []string) error {
 	if err := validateBankName(bankName); err != nil {
 		printError("INVALID_BANK_NAME", err.Error(), bankName, "", "")
 		return err
+	}
+
+	if overrides.IsReservedBank(bankName) {
+		fmt.Fprintf(os.Stderr, "bank %q is reserved; use customize_tools via slop-mcp\n", bankName)
+		os.Exit(2)
 	}
 
 	scope := flags["scope"]

@@ -17,7 +17,7 @@ func (s *Server) registerTools() {
 	s.mcpServer.AddTool(
 		&mcp.Tool{
 			Name:        "search_tools",
-			Description: "Search and explore all registered MCP tools by name and description. Results are paginated (default: 20, max: 100). Use offset for subsequent pages. Response includes total count and has_more flag.",
+			Description: "Fuzzy search tools across connected MCPs. Ranked results. Paginated (default: 20, max: 100). Use offset for next page. Response includes total and has_more.",
 			InputSchema: searchToolsInputSchema,
 		},
 		s.wrapSearchTools,
@@ -27,7 +27,7 @@ func (s *Server) registerTools() {
 	s.mcpServer.AddTool(
 		&mcp.Tool{
 			Name:        "execute_tool",
-			Description: "Execute a tool on a specific MCP server. Pass through the tool name and parameters directly. Returns the underlying MCP tool's response as-is.",
+			Description: "Execute tool on MCP server. Passes parameters through. Returns underlying MCP response as-is.",
 			InputSchema: executeToolInputSchema,
 		},
 		s.wrapExecuteTool,
@@ -37,7 +37,7 @@ func (s *Server) registerTools() {
 	s.mcpServer.AddTool(
 		&mcp.Tool{
 			Name: "run_slop",
-			Description: `Execute a SLOP script with access to all registered MCPs. Provide either an inline script or a file path. Returns the script's final expression value as text.
+			Description: `Execute SLOP script with access to all registered MCPs. Inline script or file path. Returns final expression value as text.
 
 Call MCP tools as mcp_name.tool_name(param: value). Example patterns:
 
@@ -82,7 +82,7 @@ Use slop_reference to browse built-in functions (map, filter, reduce, json_parse
 	s.mcpServer.AddTool(
 		&mcp.Tool{
 			Name:        "manage_mcps",
-			Description: "Manage MCP server connections: register new servers, unregister existing ones, or list all registered servers. Returns text status by default.",
+			Description: "Manage MCP connections. Actions: register, unregister, reconnect, list, status. Returns text.",
 			InputSchema: manageMCPsInputSchema,
 		},
 		s.wrapManageMCPs,
@@ -92,7 +92,7 @@ Use slop_reference to browse built-in functions (map, filter, reduce, json_parse
 	s.mcpServer.AddTool(
 		&mcp.Tool{
 			Name:        "auth_mcp",
-			Description: "Authenticate with MCP servers using OAuth. Actions: login (initiate OAuth flow), logout (remove token), status (check auth status), list (show all authenticated MCPs). Returns text status.",
+			Description: "OAuth for MCP servers. Actions: login (start flow), logout (drop token), status (check), list (all authenticated). Returns text.",
 			InputSchema: authMCPInputSchema,
 		},
 		s.wrapAuthMCP,
@@ -102,7 +102,7 @@ Use slop_reference to browse built-in functions (map, filter, reduce, json_parse
 	s.mcpServer.AddTool(
 		&mcp.Tool{
 			Name:        "get_metadata",
-			Description: "Get metadata for connected MCP servers. Returns tool names and descriptions by default (compact). Use verbose=true for full schemas, or specify both mcp_name and tool_name to get schema for a specific tool.",
+			Description: "Metadata for connected MCPs. Compact by default (names+descriptions). verbose=true for full schemas. mcp_name+tool_name for single-tool schema.",
 			InputSchema: getMetadataInputSchema,
 		},
 		s.wrapGetMetadata,
@@ -112,7 +112,7 @@ Use slop_reference to browse built-in functions (map, filter, reduce, json_parse
 	s.mcpServer.AddTool(
 		&mcp.Tool{
 			Name:        "slop_reference",
-			Description: "Search SLOP built-in functions. Compact text output (name+signature) by default. Use verbose=true for full details, list_categories=true for category counts.",
+			Description: "Search SLOP built-in functions. Compact output (name+signature) by default. verbose=true for full details. list_categories=true for category counts.",
 			InputSchema: slopReferenceInputSchema,
 		},
 		s.wrapSlopReference,
@@ -122,7 +122,7 @@ Use slop_reference to browse built-in functions (map, filter, reduce, json_parse
 	s.mcpServer.AddTool(
 		&mcp.Tool{
 			Name:        "slop_help",
-			Description: "Get full details for a specific SLOP function by name. Returns formatted text.",
+			Description: "Full details for SLOP function by name. Returns formatted text.",
 			InputSchema: slopHelpInputSchema,
 		},
 		s.wrapSlopHelp,
@@ -134,10 +134,20 @@ Use slop_reference to browse built-in functions (map, filter, reduce, json_parse
 	s.mcpServer.AddTool(
 		&mcp.Tool{
 			Name:        "agnt_watch",
-			Description: "Build a shell command that streams agnt daemon events (errors, interactions, process output) via `agnt monitor`. Returns a `command` string to run through Claude Code's Monitor tool or any shell runner. Filters: target (errors/interactions/process/all), proxy_id, process_id, severity, format.",
+			Description: "Build shell command streaming agnt daemon events via `agnt monitor`. Returns `command` for Claude Code Monitor tool or any shell runner. Filters: target (errors/interactions/process/all), proxy_id, process_id, severity, format.",
 			InputSchema: agntWatchInputSchema,
 		},
 		s.wrapAgntWatch,
+	)
+
+	// 10. customize_tools - Override tool descriptions and define custom tools.
+	s.mcpServer.AddTool(
+		&mcp.Tool{
+			Name:        "customize_tools",
+			Description: "Override tool descriptions, define custom tools. Actions: set_override, remove_override, list_overrides, define_custom, remove_custom, list_custom, export, import.",
+			InputSchema: customizeToolsInputSchema,
+		},
+		s.wrapCustomizeTools,
 	)
 }
 
@@ -282,6 +292,20 @@ func (s *Server) wrapAgntWatch(ctx context.Context, req *mcp.CallToolRequest) (*
 	input.AgntBinary = ""
 
 	_, output, err := s.handleAgntWatch(ctx, req, input)
+	if err != nil {
+		return errorResult(err), nil
+	}
+
+	return toCallToolResult(output)
+}
+
+func (s *Server) wrapCustomizeTools(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	var input CustomizeToolsInput
+	if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
+		return errorResult(fmt.Errorf("invalid parameters: %w", err)), nil
+	}
+
+	_, output, err := s.handleCustomizeTools(ctx, req, input)
 	if err != nil {
 		return errorResult(err), nil
 	}

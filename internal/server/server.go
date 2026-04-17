@@ -12,34 +12,66 @@ import (
 	"github.com/standardbeagle/slop-mcp/internal/cli"
 	"github.com/standardbeagle/slop-mcp/internal/config"
 	"github.com/standardbeagle/slop-mcp/internal/logging"
+	"github.com/standardbeagle/slop-mcp/internal/overrides"
 	"github.com/standardbeagle/slop-mcp/internal/registry"
 )
 
 const (
 	serverName    = "slop-mcp"
-	serverVersion = "0.13.1"
+	serverVersion = "0.14.0"
 )
 
 // Server is the slop-mcp server.
 type Server struct {
-	mcpServer    *mcp.Server
-	registry     *registry.Registry
-	cliRegistry  *cli.Registry
-	config       *config.Config
-	logger       logging.Logger
-	sessionStore *builtins.SessionStore
-	memoryStore  *builtins.MemoryStore
+	mcpServer     *mcp.Server
+	registry      *registry.Registry
+	cliRegistry   *cli.Registry
+	config        *config.Config
+	logger        logging.Logger
+	sessionStore  *builtins.SessionStore
+	memoryStore   *builtins.MemoryStore
+	overrideStore *overrides.Store
+}
+
+// openOverrideStore builds and opens the overrides store using standard config paths,
+// then wires the registry override provider.
+func openOverrideStore(reg *registry.Registry) (*overrides.Store, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("user home: %w", err)
+	}
+	opts := overrides.StoreOptions{
+		UserRoot: filepath.Join(home, ".config", "slop-mcp", "memory", "_slop"),
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		if root, err := overrides.FindRepoRoot(cwd); err == nil {
+			opts.ProjectRoot = filepath.Join(root, ".slop-mcp", "memory", "_slop")
+			opts.LocalRoot = filepath.Join(root, ".slop-mcp", "memory.local", "_slop")
+		}
+	}
+	store, err := overrides.OpenStore(opts)
+	if err != nil {
+		return nil, fmt.Errorf("overrides store: %w", err)
+	}
+	reg.SetOverrideProvider(&storeOverrideProvider{store: store})
+	return store, nil
 }
 
 // New creates a new Server with the given config.
 func New(ctx context.Context, mcps []config.MCPConfig) (*Server, error) {
+	reg := registry.New()
+	store, err := openOverrideStore(reg)
+	if err != nil {
+		return nil, err
+	}
 	s := &Server{
-		registry:     registry.New(),
-		cliRegistry:  cli.NewRegistry(),
-		config:       config.NewConfig(),
-		logger:       logging.Default(),
-		sessionStore: builtins.NewSessionStore(),
-		memoryStore:  builtins.NewMemoryStore(),
+		registry:      reg,
+		cliRegistry:   cli.NewRegistry(),
+		config:        config.NewConfig(),
+		logger:        logging.Default(),
+		sessionStore:  builtins.NewSessionStore(),
+		memoryStore:   builtins.NewMemoryStore(),
+		overrideStore: store,
 	}
 
 	// Create MCP server
@@ -71,13 +103,19 @@ func New(ctx context.Context, mcps []config.MCPConfig) (*Server, error) {
 
 // NewFromConfig creates a new Server from a config struct.
 func NewFromConfig(cfg *config.Config) (*Server, error) {
+	reg := registry.New()
+	store, err := openOverrideStore(reg)
+	if err != nil {
+		return nil, err
+	}
 	s := &Server{
-		registry:     registry.New(),
-		cliRegistry:  cli.NewRegistry(),
-		config:       cfg,
-		logger:       logging.Default(),
-		sessionStore: builtins.NewSessionStore(),
-		memoryStore:  builtins.NewMemoryStore(),
+		registry:      reg,
+		cliRegistry:   cli.NewRegistry(),
+		config:        cfg,
+		logger:        logging.Default(),
+		sessionStore:  builtins.NewSessionStore(),
+		memoryStore:   builtins.NewMemoryStore(),
+		overrideStore: store,
 	}
 
 	// Create MCP server
@@ -184,9 +222,22 @@ func (s *Server) RunHTTP(ctx context.Context, port int) error {
 	return http.ListenAndServe(addr, mux)
 }
 
-// Close closes all MCP connections.
+// Close closes all MCP connections and the override store.
 func (s *Server) Close() error {
+	if s.overrideStore != nil {
+		_ = s.overrideStore.Close()
+	}
 	return s.registry.Close()
+}
+
+// SetOverrideStoreForTesting replaces the override store (closing any existing one)
+// and re-registers the registry provider. For use in tests only.
+func (s *Server) SetOverrideStoreForTesting(store *overrides.Store) {
+	if s.overrideStore != nil {
+		_ = s.overrideStore.Close()
+	}
+	s.overrideStore = store
+	s.registry.SetOverrideProvider(&storeOverrideProvider{store: store})
 }
 
 // Registry returns the underlying registry.
