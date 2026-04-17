@@ -18,7 +18,7 @@ import (
 
 const (
 	serverName    = "slop-mcp"
-	serverVersion = "0.13.1"
+	serverVersion = "0.14.0"
 )
 
 // Server is the slop-mcp server.
