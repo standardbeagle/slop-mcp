@@ -62,20 +62,6 @@ func TestCustomizeTools_UnknownAction(t *testing.T) {
 	require.Contains(t, err.Error(), "unknown action")
 }
 
-func TestCustomizeTools_NotYetImplementedActions(t *testing.T) {
-	s := newCustomizeTestServer(t)
-	store, err := overrides.OpenStore(overrides.StoreOptions{UserRoot: t.TempDir()})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = store.Close() })
-	s.overrideStore = store
-
-	notImpl := []string{"export", "import"}
-	for _, action := range notImpl {
-		_, _, err := s.handleCustomizeTools(context.Background(), nil, CustomizeToolsInput{Action: action})
-		require.Error(t, err, "action %s should return error", action)
-		require.Contains(t, err.Error(), "not yet implemented", "action %s: %v", action, err)
-	}
-}
 
 func TestCustomizeTools_DefineCustom_Persists(t *testing.T) {
 	s := newCustomizeTestServer(t)
@@ -374,6 +360,85 @@ func TestCustomizeTools_ListOverrides_FilterByMCP(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, out.Affected)
 	require.Equal(t, "mcp-x.tool_a", out.Entries[0].Key)
+}
+
+func TestCustomizeTools_Export_Import_RoundTrip(t *testing.T) {
+	s := newCustomizeTestServer(t)
+	store, err := overrides.OpenStore(overrides.StoreOptions{UserRoot: t.TempDir()})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	s.overrideStore = store
+
+	// Set an override directly.
+	require.NoError(t, store.SetOverride(overrides.ScopeUser, "mock.tool_one", overrides.OverrideEntry{
+		Description: "exported desc", SourceHash: "abc",
+	}))
+
+	// Export.
+	_, exportOut, err := s.handleCustomizeTools(context.Background(), nil, CustomizeToolsInput{
+		Action: "export",
+	})
+	require.NoError(t, err)
+	require.True(t, exportOut.OK)
+	require.Equal(t, "export", exportOut.Action)
+	require.Equal(t, 1, exportOut.Affected)
+	require.NotNil(t, exportOut.Pack)
+	require.Len(t, exportOut.Pack.Overrides, 1)
+	require.Equal(t, "mock.tool_one", exportOut.Pack.Overrides[0].Key)
+
+	// Serialise pack to JSON (simulates wire transfer).
+	packJSON, err := json.Marshal(exportOut.Pack)
+	require.NoError(t, err)
+
+	// Import into a fresh store on the same server.
+	store2, err := overrides.OpenStore(overrides.StoreOptions{UserRoot: t.TempDir()})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store2.Close() })
+	s.overrideStore = store2
+
+	_, importOut, err := s.handleCustomizeTools(context.Background(), nil, CustomizeToolsInput{
+		Action: "import",
+		Data:   string(packJSON),
+	})
+	require.NoError(t, err)
+	require.True(t, importOut.OK)
+	require.Equal(t, "import", importOut.Action)
+	require.Equal(t, 1, importOut.Affected)
+	require.NotNil(t, importOut.ImportReport)
+	require.Equal(t, 1, importOut.ImportReport.ImportedOverrides)
+
+	got, ok := store2.GetOverride("mock.tool_one")
+	require.True(t, ok)
+	require.Equal(t, "exported desc", got.Description)
+}
+
+func TestCustomizeTools_Import_MissingData(t *testing.T) {
+	s := newCustomizeTestServer(t)
+	store, err := overrides.OpenStore(overrides.StoreOptions{UserRoot: t.TempDir()})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	s.overrideStore = store
+
+	_, _, err = s.handleCustomizeTools(context.Background(), nil, CustomizeToolsInput{
+		Action: "import",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "data is required")
+}
+
+func TestCustomizeTools_Import_BadSchemaVersion(t *testing.T) {
+	s := newCustomizeTestServer(t)
+	store, err := overrides.OpenStore(overrides.StoreOptions{UserRoot: t.TempDir()})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	s.overrideStore = store
+
+	_, _, err = s.handleCustomizeTools(context.Background(), nil, CustomizeToolsInput{
+		Action: "import",
+		Data:   `{"schema_version":999}`,
+	})
+	require.Error(t, err)
+	require.Contains(t, strings.ToLower(err.Error()), "schema")
 }
 
 func TestCustomizeTools_WrapperUnmarshal(t *testing.T) {

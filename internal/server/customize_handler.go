@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"regexp"
@@ -100,6 +101,8 @@ type customizeToolsOutput struct {
 	Entries          []customizeOverrideEntry `json:"entries,omitempty"`
 	CustomEntries    []customToolEntry        `json:"custom_entries,omitempty"`
 	ShorthandSkipped []string                 `json:"shorthand_skipped,omitempty"`
+	Pack             *overrides.Pack          `json:"pack,omitempty"`
+	ImportReport     *overrides.ImportReport  `json:"import_report,omitempty"`
 }
 
 func (s *Server) handleCustomizeTools(
@@ -123,8 +126,10 @@ func (s *Server) handleCustomizeTools(
 		return s.customizeRemoveCustom(in)
 	case "list_custom":
 		return s.customizeListCustom(ctx, in)
-	case "export", "import":
-		return nil, customizeToolsOutput{}, fmt.Errorf("action %q not yet implemented (tasks 13-14)", in.Action)
+	case "export":
+		return s.customizeExport(in)
+	case "import":
+		return s.customizeImport(in)
 	default:
 		return nil, customizeToolsOutput{}, fmt.Errorf("unknown action: %q", in.Action)
 	}
@@ -486,6 +491,52 @@ func (s *Server) customizeListCustom(ctx context.Context, in CustomizeToolsInput
 		Action:        "list_custom",
 		Affected:      len(entries),
 		CustomEntries: entries,
+	}
+	return nil, out, nil
+}
+
+func (s *Server) customizeExport(in CustomizeToolsInput) (*mcp.CallToolResult, customizeToolsOutput, error) {
+	sel := overrides.Selector{
+		MCP:           in.MCP,
+		Keys:          in.Keys,
+		IncludeCustom: in.IncludeCustom,
+		Scope:         overrides.Scope(in.Scope),
+	}
+	pack, err := s.overrideStore.Export(sel)
+	if err != nil {
+		return nil, customizeToolsOutput{}, err
+	}
+	out := customizeToolsOutput{
+		OK:       true,
+		Action:   "export",
+		Affected: len(pack.Overrides) + len(pack.CustomTools),
+		Pack:     &pack,
+	}
+	return nil, out, nil
+}
+
+func (s *Server) customizeImport(in CustomizeToolsInput) (*mcp.CallToolResult, customizeToolsOutput, error) {
+	if in.Data == "" {
+		return nil, customizeToolsOutput{}, fmt.Errorf("data is required for import (JSON pack)")
+	}
+	var pack overrides.Pack
+	if err := json.Unmarshal([]byte(in.Data), &pack); err != nil {
+		return nil, customizeToolsOutput{}, fmt.Errorf("invalid pack JSON: %w", err)
+	}
+	scope := overrides.Scope(in.Scope)
+	if scope == "" {
+		scope = overrides.ScopeUser
+	}
+	rep, err := s.overrideStore.Import(pack, scope, in.Overwrite)
+	if err != nil {
+		return nil, customizeToolsOutput{}, err
+	}
+	s.rebuildOverrideIndex()
+	out := customizeToolsOutput{
+		OK:           true,
+		Action:       "import",
+		Affected:     rep.ImportedOverrides + rep.ImportedCustom,
+		ImportReport: &rep,
 	}
 	return nil, out, nil
 }
