@@ -47,6 +47,28 @@ Monitor({
 
 See the [Monitoring Guide](https://standardbeagle.github.io/slop-mcp/docs/concepts/monitoring) for git hook templates, build wrappers, and SLOP polling scripts.
 
+## Caveman Your MCPs
+
+Third-party MCPs are written for everybody. They ship 400-token marketing-prose descriptions, deprecation caveats, twelve optional parameters you'll never set, and SDK history nobody asked for. Multiply across a dozen MCPs and that's your whole context budget — burned before the first user turn.
+
+slop-mcp lets you **rewrite any MCP's metadata** to match what your project actually needs:
+
+```
+Before:  generate_image  →  420-token description, 14 params, 6 enums
+After:   generate_image  →   30-token description, "use defaults" hints
+Custom:  thumbnail       →   12-token description, 1 param (prompt)
+```
+
+Three progression levels:
+
+1. **Caveman the descriptions** — replace verbose vendor prose with terse agent-friendly text. Original tool unchanged, agent sees only your version.
+2. **Document hardcoded values** — for params your project never varies, the override description says "always pass X" instead of explaining the full enum.
+3. **Wrap with a custom SLOP tool** — define a brand-new tool with a minimal schema (e.g. just `prompt`) that calls the underlying MCP with all the boilerplate baked in.
+
+Customizations live at user, project, or local scope and can be exported as portable JSON packs and committed to git — your team gets the same compressed interface on clone.
+
+See the [Customization Guide](https://standardbeagle.github.io/slop-mcp/docs/concepts/customization) for the full image-MCP walkthrough and the `customize_tools` reference.
+
 ## The Problem
 
 As described in Anthropic's article [Code Execution with MCP](https://www.anthropic.com/engineering/code-execution-with-mcp), current MCP implementations face two critical challenges:

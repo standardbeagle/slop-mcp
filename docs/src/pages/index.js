@@ -185,6 +185,11 @@ const features = [
     description: 'One execute_tool pattern for every MCP. Chain database → math → slack in one workflow.',
   },
   {
+    icon: '✂',
+    title: 'Caveman Your MCPs',
+    description: 'Rewrite verbose vendor descriptions, hardcode unused params, or wrap MCPs in custom SLOP tools with minimal schemas. Share via git.',
+  },
+  {
     icon: '📡',
     title: 'Event Monitoring',
     description: 'Stream git hooks, builds, tests, and CI into Claude Code notifications. One command: slop-mcp message.',

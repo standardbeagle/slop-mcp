@@ -306,3 +306,136 @@ After pulling, each teammate reads `.slop-mcp-packs/figma.json` and runs:
 ```
 
 From this point, every agent in the repo sees the compressed Figma tool descriptions and the `figma_page_names` custom tool, without any per-user setup.
+
+## Example: Caveman an Image-Generation MCP
+
+Image-generation MCPs are some of the worst offenders for context bloat. A typical `generate_image` tool ships with marketing-prose descriptions, fifteen optional knobs (sampler, scheduler, cfg_scale, clip_skip, controlnet, lora_weights, ...), enums of every supported model, and parameter docs that explain Stable Diffusion's history.
+
+Most projects use **one model, one resolution, one sampler** — and only ever care about the prompt. Three-stage compression turns a 420-token tool into a 12-token custom tool.
+
+### The starting point
+
+Assume an `imagegen` MCP exposes a `generate_image` tool with this description:
+
+> Generate an image from a text prompt using a configurable diffusion pipeline. Supports SDXL, SD 1.5, SD 3.0, FLUX.1-dev, FLUX.1-schnell, and any HuggingFace-compatible checkpoint. Parameters control resolution, denoising steps, classifier-free guidance scale, sampler selection (Euler, Euler-a, DPM++ 2M, DPM++ SDE, UniPC, ...), scheduler (karras, exponential, normal), random seed for reproducibility, optional negative prompt for excluded concepts, optional LoRA weights, optional ControlNet conditioning images, optional IP-Adapter reference images, output format (png, jpeg, webp), and quality settings... [continues for 300 more tokens]
+
+Schema has 14 parameters, 11 of them optional. Your project always uses FLUX.1-schnell at 1024×1024, 4 steps, default seed.
+
+### Stage 1 — Caveman the description
+
+Replace the marketing description with one terse line. Replace each parameter description with what your project actually wants:
+
+```json
+{
+  "action": "set_override",
+  "mcp": "imagegen",
+  "tool": "generate_image",
+  "description": "Generate image from prompt. Returns PNG bytes.",
+  "params": {
+    "prompt": "Image description.",
+    "negative_prompt": "What to avoid (optional, leave empty).",
+    "model": "Always pass \"flux-schnell\".",
+    "width": "Always pass 1024.",
+    "height": "Always pass 1024.",
+    "steps": "Always pass 4.",
+    "cfg_scale": "Leave unset (uses default 1.0).",
+    "sampler": "Leave unset.",
+    "scheduler": "Leave unset.",
+    "seed": "Leave unset for random.",
+    "lora_weights": "Leave unset.",
+    "controlnet": "Leave unset.",
+    "ip_adapter": "Leave unset.",
+    "output_format": "Always pass \"png\"."
+  },
+  "scope": "project"
+}
+```
+
+The agent now sees a tight description and per-parameter hints that say exactly what to do. The 14-param schema is still there (overrides don't drop fields from JSON Schema — they only change descriptive text), but the prose around it shrank by ~85%.
+
+### Stage 2 — Document hardcoded values for the general endpoint
+
+Some agents will still pass every documented parameter "to be safe." If your project genuinely never varies the optional knobs, push the message harder in the description itself:
+
+```json
+{
+  "action": "set_override",
+  "mcp": "imagegen",
+  "tool": "generate_image",
+  "description": "Generate 1024×1024 PNG from prompt. Pass only `prompt`. Server defaults handle model (flux-schnell), steps (4), and sampler.",
+  "params": {
+    "prompt": "Image description (required).",
+    "negative_prompt": "DO NOT SET — project policy.",
+    "model": "DO NOT SET — server uses flux-schnell.",
+    "width": "DO NOT SET — server uses 1024.",
+    "height": "DO NOT SET — server uses 1024.",
+    "steps": "DO NOT SET — server uses 4.",
+    "cfg_scale": "DO NOT SET.",
+    "sampler": "DO NOT SET.",
+    "scheduler": "DO NOT SET.",
+    "seed": "DO NOT SET.",
+    "lora_weights": "DO NOT SET.",
+    "controlnet": "DO NOT SET.",
+    "ip_adapter": "DO NOT SET.",
+    "output_format": "DO NOT SET — server returns PNG."
+  },
+  "scope": "project"
+}
+```
+
+This step is about **agent compliance**, not schema compression. Either rely on MCP-server-side defaults to fire when the field is absent, or accept that some agents will dutifully echo your policy back as a confirmation step (still cheaper than ten probabilistic samplings of "should I set cfg_scale?").
+
+### Stage 3 — Wrap with a custom SLOP tool
+
+For the truly minimal interface, define a brand-new tool with a one-field schema. The body calls the underlying MCP with all the hardcoded boilerplate — the agent never sees the 14 parameters at all.
+
+```json
+{
+  "action": "define_custom",
+  "name": "thumbnail",
+  "description": "Generate 1024×1024 thumbnail PNG from a prompt.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "prompt": {"type": "string", "description": "Image description."}
+    },
+    "required": ["prompt"]
+  },
+  "body": "execute_tool(\"imagegen\", \"generate_image\", {prompt: args[\"prompt\"], model: \"flux-schnell\", width: 1024, height: 1024, steps: 4, output_format: \"png\"})",
+  "scope": "project"
+}
+```
+
+What `search_tools` returns now:
+
+```
+thumbnail
+  Generate 1024×1024 thumbnail PNG from a prompt.
+  Input: {prompt: string}
+```
+
+Twelve tokens of description, one parameter, no enums, no optional knobs. The original `generate_image` is still callable for the rare case you need a different model or resolution — the custom tool is purely additive.
+
+### Tiered exposure pattern
+
+You don't have to commit to one stage. Stack them: keep `generate_image` available with a Stage-2 override for advanced cases, **and** define `thumbnail` as the default path. Agents pick the cheaper tool by default and fall back to the verbose one only when the simple wrapper isn't enough.
+
+```
+search_tools("image")
+  → thumbnail              (cheap, one param, 12 tokens)
+  → product_hero_image     (1920×1080 wrapper, 18 tokens)
+  → social_card            (1200×630 wrapper, 18 tokens)
+  → generate_image         (Stage-2 override, full control if needed)
+```
+
+A custom-tool zoo plus a hardened override is often the right answer: 90% of calls hit a tiny custom tool, the long tail still has the full MCP.
+
+### Bundling and sharing
+
+Once the overrides + custom tools are validated, export them as a pack:
+
+```json
+{ "action": "export", "mcp": "imagegen", "scope": "project" }
+```
+
+The response includes any custom tools that reference the `imagegen` MCP via `execute_tool` calls in their bodies, so `thumbnail` ships with the pack. Save the pack to `.slop-mcp-packs/imagegen.json`, commit it, and the rest of the team gets the same compressed image-generation interface on `git pull` + `import`.

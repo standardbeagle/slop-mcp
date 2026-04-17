@@ -90,6 +90,17 @@ slop-mcp mcp auth login figma
 # MCP reconnects automatically with new credentials
 ```
 
+### ✂ Caveman Your MCPs
+
+Third-party MCPs ship verbose, generic descriptions written for everybody. [Rewrite any tool's metadata](/docs/concepts/customization) to match what your project actually uses — replace the description, document hardcoded parameter values, or wrap the whole thing in a custom SLOP tool with a minimal schema:
+
+```bash
+# Burn 420 tokens just describing one generate_image call?
+# Override it with 30. Or wrap it in a custom thumbnail tool with one param.
+```
+
+Customizations stay at user, project, or local scope. Export as portable packs, commit to git, share with the team.
+
 ### 📡 Event Monitoring
 
 Stream events from git hooks, builds, tests, CI, and MCP polling into Claude Code's [Monitor tool](/docs/concepts/monitoring):
