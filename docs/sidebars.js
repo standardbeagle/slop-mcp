@@ -19,6 +19,7 @@ const sidebars = {
         'concepts/context-efficiency',
         'concepts/skills',
         'concepts/oauth',
+        'concepts/customization',
       ],
     },
     {
