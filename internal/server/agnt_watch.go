@@ -51,15 +51,15 @@ var agntWatchInputSchema = json.RawMessage(`{
 	"properties": {
 		"target": {
 			"type": "string",
-			"description": "What to watch: errors, interactions, process, or all (default: all)"
+			"description": "Event filter: errors, interactions, process, or all (default: all)"
 		},
 		"proxy_id": {
 			"type": "string",
-			"description": "Filter events to a specific agnt proxy"
+			"description": "Limit to one agnt proxy"
 		},
 		"process_id": {
 			"type": "string",
-			"description": "Filter events to a specific agnt-managed process (required when target is process)"
+			"description": "Limit to one process (required when target=process)"
 		},
 		"severity": {
 			"type": "string",
@@ -67,7 +67,7 @@ var agntWatchInputSchema = json.RawMessage(`{
 		},
 		"format": {
 			"type": "string",
-			"description": "Output format: compact (default) or json"
+			"description": "Format: compact (default) or json"
 		}
 	},
 	"additionalProperties": false

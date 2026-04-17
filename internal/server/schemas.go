@@ -12,19 +12,19 @@ var searchToolsInputSchema = json.RawMessage(`{
 	"properties": {
 		"query": {
 			"type": "string",
-			"description": "Search query for tool names and descriptions"
+			"description": "Search query matched against tool names and descriptions"
 		},
 		"mcp_name": {
 			"type": "string",
-			"description": "Filter to a specific MCP server"
+			"description": "Limit results to one MCP"
 		},
 		"limit": {
 			"type": "integer",
-			"description": "Maximum number of results to return (default: 20, max: 100)"
+			"description": "Max results (default: 20, max: 100)"
 		},
 		"offset": {
 			"type": "integer",
-			"description": "Number of results to skip for pagination (default: 0)"
+			"description": "Results to skip for pagination (default: 0)"
 		}
 	},
 	"additionalProperties": false
@@ -36,15 +36,15 @@ var executeToolInputSchema = json.RawMessage(`{
 	"properties": {
 		"mcp_name": {
 			"type": "string",
-			"description": "Target MCP server name"
+			"description": "Target MCP name"
 		},
 		"tool_name": {
 			"type": "string",
-			"description": "Tool to execute on the MCP server"
+			"description": "Tool to execute"
 		},
 		"parameters": {
 			"type": "object",
-			"description": "Tool parameters to pass through",
+			"description": "Parameters passed to tool verbatim",
 			"additionalProperties": true
 		}
 	},
@@ -58,15 +58,15 @@ var runSlopInputSchema = json.RawMessage(`{
 	"properties": {
 		"script": {
 			"type": "string",
-			"description": "Inline SLOP script to execute"
+			"description": "Inline SLOP script"
 		},
 		"file_path": {
 			"type": "string",
-			"description": "Path to a .slop file to execute"
+			"description": "Path to .slop file"
 		},
 		"recipe": {
 			"type": "string",
-			"description": "Load embedded recipe: 'list' for available, or recipe name to load"
+			"description": "Embedded recipe: 'list' to enumerate, or recipe name to load"
 		}
 	},
 	"additionalProperties": false
@@ -78,19 +78,19 @@ var manageMCPsInputSchema = json.RawMessage(`{
 	"properties": {
 		"action": {
 			"type": "string",
-			"description": "Action to perform: register, unregister, reconnect, list, or status"
+			"description": "Action: register, unregister, reconnect, list, or status"
 		},
 		"name": {
 			"type": "string",
-			"description": "MCP server name (required for register/unregister/reconnect)"
+			"description": "MCP name (required for register/unregister/reconnect)"
 		},
 		"type": {
 			"type": "string",
-			"description": "Transport type: command (default), sse, or streamable"
+			"description": "Transport: command (default), sse, or streamable"
 		},
 		"command": {
 			"type": "string",
-			"description": "Command executable for command transport"
+			"description": "Executable for command transport"
 		},
 		"args": {
 			"type": "array",
@@ -104,20 +104,20 @@ var manageMCPsInputSchema = json.RawMessage(`{
 		},
 		"url": {
 			"type": "string",
-			"description": "Server URL for HTTP transports"
+			"description": "Server URL (HTTP transports)"
 		},
 		"headers": {
 			"type": "object",
-			"description": "HTTP headers for HTTP transports",
+			"description": "HTTP headers (HTTP transports)",
 			"additionalProperties": {"type": "string"}
 		},
 		"scope": {
 			"type": "string",
-			"description": "Where to save: memory (default, runtime only), user (~/.config/slop-mcp/config.kdl), or project (.slop-mcp.kdl)"
+			"description": "Persistence: memory (default, runtime only), user (~/.config/slop-mcp/config.kdl), project (.slop-mcp.kdl)"
 		},
 		"dynamic": {
 			"type": "boolean",
-			"description": "Mark MCP as dynamic (always re-fetch tool list, never cache)"
+			"description": "Always re-fetch tool list, skip cache"
 		}
 	},
 	"required": ["action"],
@@ -130,11 +130,11 @@ var authMCPInputSchema = json.RawMessage(`{
 	"properties": {
 		"action": {
 			"type": "string",
-			"description": "Action to perform: login, logout, status, or list"
+			"description": "Action: login, logout, status, or list"
 		},
 		"name": {
 			"type": "string",
-			"description": "MCP server name (required for login/logout/status)"
+			"description": "MCP name (required for login/logout/status)"
 		}
 	},
 	"required": ["action"],
@@ -147,19 +147,19 @@ var getMetadataInputSchema = json.RawMessage(`{
 	"properties": {
 		"mcp_name": {
 			"type": "string",
-			"description": "Filter to a specific MCP server (optional)"
+			"description": "Limit to one MCP"
 		},
 		"tool_name": {
 			"type": "string",
-			"description": "Filter to a specific tool by name (optional)"
+			"description": "Limit to one tool (use with mcp_name)"
 		},
 		"file_path": {
 			"type": "string",
-			"description": "Path to write metadata to (optional)"
+			"description": "Write metadata to file"
 		},
 		"verbose": {
 			"type": "boolean",
-			"description": "Include full input schemas for all tools (default: false, schemas only included when querying specific mcp_name + tool_name)"
+			"description": "Include full input schemas (default: false; always included for mcp_name+tool_name queries)"
 		}
 	},
 	"additionalProperties": false
@@ -171,11 +171,11 @@ var slopReferenceInputSchema = json.RawMessage(`{
 	"properties": {
 		"query": {
 			"type": "string",
-			"description": "Search query (matches name, signature, description)"
+			"description": "Matches name, signature, description"
 		},
 		"category": {
 			"type": "string",
-			"description": "Filter by category: math, string, list, map, random, type, json, regex, time, encoding, functional, crypto, slop"
+			"description": "Filter: math, string, list, map, random, type, json, regex, time, encoding, functional, crypto, slop"
 		},
 		"limit": {
 			"type": "integer",
@@ -183,7 +183,7 @@ var slopReferenceInputSchema = json.RawMessage(`{
 		},
 		"verbose": {
 			"type": "boolean",
-			"description": "Include description, example, returns (default: false, compact mode shows name+signature only)"
+			"description": "Include description, example, returns (default: false, compact shows name+signature)"
 		},
 		"list_categories": {
 			"type": "boolean",
@@ -199,7 +199,7 @@ var slopHelpInputSchema = json.RawMessage(`{
 	"properties": {
 		"name": {
 			"type": "string",
-			"description": "Function name"
+			"description": "SLOP function name"
 		}
 	},
 	"required": ["name"],
@@ -222,7 +222,7 @@ var customizeToolsInputSchema = json.RawMessage(`{
 				"export",
 				"import"
 			],
-			"description": "Action to perform. See slop-mcp docs for per-action args."
+			"description": "Action. Per-action args listed in slop-mcp docs."
 		},
 		"mcp": {
 			"type": "string",
@@ -230,7 +230,7 @@ var customizeToolsInputSchema = json.RawMessage(`{
 		},
 		"tool": {
 			"type": "string",
-			"description": "Tool name within the MCP (set_override, remove_override)"
+			"description": "Tool name in MCP (set_override, remove_override)"
 		},
 		"description": {
 			"type": "string",
@@ -239,24 +239,24 @@ var customizeToolsInputSchema = json.RawMessage(`{
 		"params": {
 			"type": "object",
 			"additionalProperties": {"type": "string"},
-			"description": "Per-parameter description overrides, keyed by property name (set_override)"
+			"description": "Per-param description overrides keyed by property name (set_override)"
 		},
 		"scope": {
 			"type": "string",
 			"enum": ["user", "project", "local"],
-			"description": "Target scope (user, project, local). Default: user for set/define, all for remove."
+			"description": "Scope: user, project, local. Default: user for set/define, all for remove."
 		},
 		"stale_only": {
 			"type": "boolean",
-			"description": "Return only stale entries whose stored SourceHash differs from current upstream (list_overrides, list_custom)"
+			"description": "Only entries whose SourceHash differs from upstream (list_overrides, list_custom)"
 		},
 		"name": {
 			"type": "string",
-			"description": "Custom tool name, must match ^[a-z][a-z0-9_]{0,63}$ (define_custom, remove_custom)"
+			"description": "Custom tool name matching ^[a-z][a-z0-9_]{0,63}$ (define_custom, remove_custom)"
 		},
 		"inputSchema": {
 			"type": "object",
-			"description": "JSON Schema draft-07 subset for custom tool arguments (define_custom)"
+			"description": "JSON Schema draft-07 subset for tool arguments (define_custom)"
 		},
 		"body": {
 			"type": "string",
@@ -273,7 +273,7 @@ var customizeToolsInputSchema = json.RawMessage(`{
 		},
 		"data": {
 			"type": "string",
-			"description": "Import pack JSON as string"
+			"description": "Import pack as JSON string"
 		},
 		"overwrite": {
 			"type": "boolean",
