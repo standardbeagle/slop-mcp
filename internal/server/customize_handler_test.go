@@ -55,7 +55,7 @@ func TestCustomizeTools_UnknownAction(t *testing.T) {
 	store, err := overrides.OpenStore(overrides.StoreOptions{UserRoot: t.TempDir()})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
-	s.overrideStore = store
+	s.SetOverrideStoreForTesting(store)
 
 	_, _, err = s.handleCustomizeTools(context.Background(), nil, CustomizeToolsInput{Action: "bogus"})
 	require.Error(t, err)
@@ -69,7 +69,7 @@ func TestCustomizeTools_DefineCustom_Persists(t *testing.T) {
 	store, err := overrides.OpenStore(overrides.StoreOptions{UserRoot: dir})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
-	s.overrideStore = store
+	s.SetOverrideStoreForTesting(store)
 
 	in := CustomizeToolsInput{
 		Action:      "define_custom",
@@ -93,7 +93,7 @@ func TestCustomizeTools_DefineCustom_RejectsInvalidName(t *testing.T) {
 	store, err := overrides.OpenStore(overrides.StoreOptions{UserRoot: dir})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
-	s.overrideStore = store
+	s.SetOverrideStoreForTesting(store)
 
 	cases := []string{"BadName", "1starts", "has-dash", "with space", "way_too_long_" + strings.Repeat("x", 80)}
 	for _, name := range cases {
@@ -114,7 +114,7 @@ func TestCustomizeTools_DefineCustom_RejectsMetaToolCollision(t *testing.T) {
 	store, err := overrides.OpenStore(overrides.StoreOptions{UserRoot: dir})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
-	s.overrideStore = store
+	s.SetOverrideStoreForTesting(store)
 
 	in := CustomizeToolsInput{
 		Action: "define_custom", Name: "search_tools",
@@ -132,7 +132,7 @@ func TestCustomizeTools_DefineCustom_ReportsShorthandCollisions(t *testing.T) {
 	store, err := overrides.OpenStore(overrides.StoreOptions{UserRoot: dir})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
-	s.overrideStore = store
+	s.SetOverrideStoreForTesting(store)
 
 	in := CustomizeToolsInput{
 		Action: "define_custom", Name: "my_tool", Description: "t",
@@ -163,7 +163,7 @@ func TestCustomizeTools_DefineCustom_RejectsOversizedBody(t *testing.T) {
 	store, err := overrides.OpenStore(overrides.StoreOptions{UserRoot: dir})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
-	s.overrideStore = store
+	s.SetOverrideStoreForTesting(store)
 
 	big := strings.Repeat("x", 100)
 	in := CustomizeToolsInput{
@@ -182,7 +182,7 @@ func TestCustomizeTools_RemoveCustom(t *testing.T) {
 	store, err := overrides.OpenStore(overrides.StoreOptions{UserRoot: dir})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
-	s.overrideStore = store
+	s.SetOverrideStoreForTesting(store)
 
 	_ = store.SetCustom(overrides.ScopeUser, "x", overrides.CustomTool{Body: "1"})
 	in := CustomizeToolsInput{Action: "remove_custom", Name: "x"}
@@ -199,7 +199,7 @@ func TestCustomizeTools_ListCustom(t *testing.T) {
 	store, err := overrides.OpenStore(overrides.StoreOptions{UserRoot: dir})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
-	s.overrideStore = store
+	s.SetOverrideStoreForTesting(store)
 
 	_ = store.SetCustom(overrides.ScopeUser, "alpha", overrides.CustomTool{Description: "a"})
 	_ = store.SetCustom(overrides.ScopeUser, "beta", overrides.CustomTool{Description: "b"})
@@ -218,7 +218,7 @@ func TestCustomizeTools_SetOverride_Persists(t *testing.T) {
 	store, err := overrides.OpenStore(overrides.StoreOptions{UserRoot: t.TempDir()})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
-	s.overrideStore = store
+	s.SetOverrideStoreForTesting(store)
 
 	in := CustomizeToolsInput{
 		Action:      "set_override",
@@ -249,7 +249,7 @@ func TestCustomizeTools_SetOverride_MissingFields(t *testing.T) {
 	store, err := overrides.OpenStore(overrides.StoreOptions{UserRoot: t.TempDir()})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
-	s.overrideStore = store
+	s.SetOverrideStoreForTesting(store)
 
 	cases := []CustomizeToolsInput{
 		{Action: "set_override", Tool: "tool_one", Description: "x"},          // missing mcp
@@ -267,7 +267,7 @@ func TestCustomizeTools_RemoveOverride_AllScopes(t *testing.T) {
 	store, err := overrides.OpenStore(overrides.StoreOptions{UserRoot: t.TempDir()})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
-	s.overrideStore = store
+	s.SetOverrideStoreForTesting(store)
 
 	// Pre-populate
 	require.NoError(t, store.SetOverride(overrides.ScopeUser, "mock.tool_one", overrides.OverrideEntry{Description: "x"}))
@@ -286,7 +286,7 @@ func TestCustomizeTools_RemoveOverride_MissingFields(t *testing.T) {
 	store, err := overrides.OpenStore(overrides.StoreOptions{UserRoot: t.TempDir()})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
-	s.overrideStore = store
+	s.SetOverrideStoreForTesting(store)
 
 	_, _, err = s.handleCustomizeTools(context.Background(), nil, CustomizeToolsInput{
 		Action: "remove_override", Tool: "tool_one",
@@ -299,7 +299,7 @@ func TestCustomizeTools_ListOverrides_Basic(t *testing.T) {
 	store, err := overrides.OpenStore(overrides.StoreOptions{UserRoot: t.TempDir()})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
-	s.overrideStore = store
+	s.SetOverrideStoreForTesting(store)
 
 	require.NoError(t, store.SetOverride(overrides.ScopeUser, "mock.tool_one", overrides.OverrideEntry{
 		Description: "override desc",
@@ -320,7 +320,7 @@ func TestCustomizeTools_ListOverrides_StaleOnly(t *testing.T) {
 	store, err := overrides.OpenStore(overrides.StoreOptions{UserRoot: t.TempDir()})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
-	s.overrideStore = store
+	s.SetOverrideStoreForTesting(store)
 
 	require.NoError(t, store.SetOverride(overrides.ScopeUser, "mock.tool_one", overrides.OverrideEntry{
 		Description: "override",
@@ -349,7 +349,7 @@ func TestCustomizeTools_ListOverrides_FilterByMCP(t *testing.T) {
 	store, err := overrides.OpenStore(overrides.StoreOptions{UserRoot: t.TempDir()})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
-	s.overrideStore = store
+	s.SetOverrideStoreForTesting(store)
 
 	require.NoError(t, store.SetOverride(overrides.ScopeUser, "mcp-x.tool_a", overrides.OverrideEntry{Description: "ov-a"}))
 	require.NoError(t, store.SetOverride(overrides.ScopeUser, "mcp-y.tool_b", overrides.OverrideEntry{Description: "ov-b"}))
@@ -367,7 +367,7 @@ func TestCustomizeTools_Export_Import_RoundTrip(t *testing.T) {
 	store, err := overrides.OpenStore(overrides.StoreOptions{UserRoot: t.TempDir()})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
-	s.overrideStore = store
+	s.SetOverrideStoreForTesting(store)
 
 	// Set an override directly.
 	require.NoError(t, store.SetOverride(overrides.ScopeUser, "mock.tool_one", overrides.OverrideEntry{
@@ -394,7 +394,7 @@ func TestCustomizeTools_Export_Import_RoundTrip(t *testing.T) {
 	store2, err := overrides.OpenStore(overrides.StoreOptions{UserRoot: t.TempDir()})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store2.Close() })
-	s.overrideStore = store2
+	s.SetOverrideStoreForTesting(store2)
 
 	_, importOut, err := s.handleCustomizeTools(context.Background(), nil, CustomizeToolsInput{
 		Action: "import",
@@ -417,7 +417,7 @@ func TestCustomizeTools_Import_MissingData(t *testing.T) {
 	store, err := overrides.OpenStore(overrides.StoreOptions{UserRoot: t.TempDir()})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
-	s.overrideStore = store
+	s.SetOverrideStoreForTesting(store)
 
 	_, _, err = s.handleCustomizeTools(context.Background(), nil, CustomizeToolsInput{
 		Action: "import",
@@ -431,7 +431,7 @@ func TestCustomizeTools_Import_BadSchemaVersion(t *testing.T) {
 	store, err := overrides.OpenStore(overrides.StoreOptions{UserRoot: t.TempDir()})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
-	s.overrideStore = store
+	s.SetOverrideStoreForTesting(store)
 
 	_, _, err = s.handleCustomizeTools(context.Background(), nil, CustomizeToolsInput{
 		Action: "import",
@@ -446,7 +446,7 @@ func TestCustomizeTools_WrapperUnmarshal(t *testing.T) {
 	store, err := overrides.OpenStore(overrides.StoreOptions{UserRoot: t.TempDir()})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
-	s.overrideStore = store
+	s.SetOverrideStoreForTesting(store)
 
 	args, _ := json.Marshal(map[string]any{
 		"action": "list_overrides",

@@ -19,7 +19,7 @@ func newCustomTestServer(t *testing.T) (*Server, *overrides.Store) {
 	t.Cleanup(func() { store.Close() })
 
 	s := mockServer(nil)
-	s.overrideStore = store
+	s.SetOverrideStoreForTesting(store)
 	return s, store
 }
 

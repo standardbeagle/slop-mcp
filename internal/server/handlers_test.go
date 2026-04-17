@@ -1924,7 +1924,7 @@ func TestManageMCPs_ListStaleOverrides_DelegatesCorrectly(t *testing.T) {
 	store, err := overrides.OpenStore(overrides.StoreOptions{UserRoot: t.TempDir()})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
-	s.overrideStore = store
+	s.SetOverrideStoreForTesting(store)
 
 	// Set an override with a stale hash (won't match upstream).
 	require.NoError(t, store.SetOverride(overrides.ScopeUser, "mock.tool_one", overrides.OverrideEntry{
@@ -2228,7 +2228,7 @@ func TestSearchTools_AppliesOverride(t *testing.T) {
 	store, err := overrides.OpenStore(overrides.StoreOptions{UserRoot: t.TempDir()})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
-	s.overrideStore = store
+	s.SetOverrideStoreForTesting(store)
 
 	// Set override with matching hash so not stale.
 	hash := overrides.ComputeHash(upstreamDesc, nil)
@@ -2270,7 +2270,7 @@ func TestGetMetadata_FlagsStaleOverride(t *testing.T) {
 	store, err := overrides.OpenStore(overrides.StoreOptions{UserRoot: t.TempDir()})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
-	s.overrideStore = store
+	s.SetOverrideStoreForTesting(store)
 
 	// Set a stale override: SourceHash does NOT match current upstream.
 	err = store.SetOverride(overrides.ScopeUser, "test-mcp.tool_one", overrides.OverrideEntry{
