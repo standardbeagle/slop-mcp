@@ -139,6 +139,16 @@ Use slop_reference to browse built-in functions (map, filter, reduce, json_parse
 		},
 		s.wrapAgntWatch,
 	)
+
+	// 10. customize_tools - Override tool descriptions and define custom tools.
+	s.mcpServer.AddTool(
+		&mcp.Tool{
+			Name:        "customize_tools",
+			Description: "Override tool descriptions and define custom tools. Actions: set_override, remove_override, list_overrides, define_custom, remove_custom, list_custom, export, import.",
+			InputSchema: customizeToolsInputSchema,
+		},
+		s.wrapCustomizeTools,
+	)
 }
 
 // Wrapper handlers that parse JSON manually and call the typed handlers.
@@ -282,6 +292,20 @@ func (s *Server) wrapAgntWatch(ctx context.Context, req *mcp.CallToolRequest) (*
 	input.AgntBinary = ""
 
 	_, output, err := s.handleAgntWatch(ctx, req, input)
+	if err != nil {
+		return errorResult(err), nil
+	}
+
+	return toCallToolResult(output)
+}
+
+func (s *Server) wrapCustomizeTools(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	var input CustomizeToolsInput
+	if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
+		return errorResult(fmt.Errorf("invalid parameters: %w", err)), nil
+	}
+
+	_, output, err := s.handleCustomizeTools(ctx, req, input)
 	if err != nil {
 		return errorResult(err), nil
 	}
