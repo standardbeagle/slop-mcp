@@ -271,14 +271,6 @@ func (r *Registry) rebuildIndex() {
 	r.indexPtr.Store(idx)
 }
 
-// rebuildIndexLocked is like rebuildIndex but called when the caller already
-// holds mu (read or write). It snapshots from the existing r.tools copy that
-// the caller has already taken, bypassing the lock.
-func (r *Registry) rebuildIndexFromSnapshot(snapshot map[string][]ToolInfo, provider OverrideProvider) {
-	idx := buildIndex(snapshot, provider)
-	r.indexPtr.Store(idx)
-}
-
 // SetOverrideProvider registers an OverrideProvider and triggers a rebuild.
 // Pass nil to clear the provider.
 func (r *Registry) SetOverrideProvider(p OverrideProvider) {
