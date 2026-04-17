@@ -28,31 +28,6 @@ func customDepth(ctx context.Context) int {
 	return 0
 }
 
-// reservedShorthandNames lists names that must not be bound as $<name> shorthands
-// because they collide with SLOP builtins or slop-mcp injected functions.
-// TODO(task-10): replace with builtins.IsReservedBuiltin once that package ships.
-var reservedShorthandNames = map[string]bool{
-	"args":           true,
-	"mem_save":       true,
-	"mem_load":       true,
-	"mem_list":       true,
-	"mem_search":     true,
-	"mem_info":       true,
-	"mem_delete":     true,
-	"store_set":      true,
-	"store_get":      true,
-	"store_list":     true,
-	"execute_tool":   true,
-	"emit":           true,
-	"map":            true,
-	"filter":         true,
-	"reduce":         true,
-	"len":            true,
-	"json_parse":     true,
-	"json_stringify": true,
-	"http_get":       true,
-	"http_post":      true,
-}
 
 // validateArgsAgainstSchema performs minimal validation: required fields present
 // and top-level type checks where schema.type is provided.
@@ -189,7 +164,7 @@ func (s *Server) executeCustomTool(ctx context.Context, ct overrides.CustomTool,
 	globals := rt.Context().Globals
 	globals.Set("args", slop.GoToValue(args))
 	for k, v := range args {
-		if !reservedShorthandNames[k] {
+		if !builtins.IsReservedBuiltin(k) {
 			globals.Set(k, slop.GoToValue(v))
 		}
 	}
