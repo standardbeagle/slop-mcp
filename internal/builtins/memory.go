@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/standardbeagle/slop-mcp/internal/overrides"
 	"github.com/standardbeagle/slop/pkg/slop"
 )
 
@@ -102,6 +103,9 @@ func RegisterMemory(rt *slop.Runtime, store *MemoryStore) {
 		bankName, ok := args[0].(*slop.StringValue)
 		if !ok {
 			return nil, fmt.Errorf("mem_save: bank must be a string")
+		}
+		if overrides.IsReservedBank(bankName.Value) {
+			return nil, fmt.Errorf("mem_save: bank %q is reserved; use customize_tools", bankName.Value)
 		}
 		key, ok := args[1].(*slop.StringValue)
 		if !ok {
@@ -213,6 +217,9 @@ func RegisterMemory(rt *slop.Runtime, store *MemoryStore) {
 		bankName, ok := args[0].(*slop.StringValue)
 		if !ok {
 			return nil, fmt.Errorf("mem_delete: bank must be a string")
+		}
+		if overrides.IsReservedBank(bankName.Value) {
+			return nil, fmt.Errorf("mem_delete: bank %q is reserved; use customize_tools", bankName.Value)
 		}
 		key, ok := args[1].(*slop.StringValue)
 		if !ok {

@@ -435,6 +435,11 @@ func cmdWrite(args []string) error {
 		return err
 	}
 
+	if strings.HasPrefix(bankName, "_slop.") {
+		fmt.Fprintf(os.Stderr, "bank %q is reserved; use customize_tools via slop-mcp\n", bankName)
+		os.Exit(2)
+	}
+
 	// Get value from positional or stdin
 	var valueStr string
 	if flags["stdin"] == "true" {
@@ -539,6 +544,11 @@ func cmdDelete(args []string) error {
 	if err := validateBankName(bankName); err != nil {
 		printError("INVALID_BANK_NAME", err.Error(), bankName, "", "")
 		return err
+	}
+
+	if strings.HasPrefix(bankName, "_slop.") {
+		fmt.Fprintf(os.Stderr, "bank %q is reserved; use customize_tools via slop-mcp\n", bankName)
+		os.Exit(2)
 	}
 
 	scope := flags["scope"]
