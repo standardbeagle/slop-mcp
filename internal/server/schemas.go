@@ -206,3 +206,81 @@ var slopHelpInputSchema = json.RawMessage(`{
 	"additionalProperties": false
 }`)
 
+// customizeToolsInputSchema is the input schema for customize_tools.
+var customizeToolsInputSchema = json.RawMessage(`{
+	"type": "object",
+	"properties": {
+		"action": {
+			"type": "string",
+			"enum": [
+				"set_override",
+				"remove_override",
+				"list_overrides",
+				"define_custom",
+				"remove_custom",
+				"list_custom",
+				"export",
+				"import"
+			],
+			"description": "Action to perform. See slop-mcp docs for per-action args."
+		},
+		"mcp": {
+			"type": "string",
+			"description": "MCP name (set_override, remove_override, list_overrides, export)"
+		},
+		"tool": {
+			"type": "string",
+			"description": "Tool name within the MCP (set_override, remove_override)"
+		},
+		"description": {
+			"type": "string",
+			"description": "Override description text (set_override, define_custom)"
+		},
+		"params": {
+			"type": "object",
+			"additionalProperties": {"type": "string"},
+			"description": "Per-parameter description overrides, keyed by property name (set_override)"
+		},
+		"scope": {
+			"type": "string",
+			"enum": ["user", "project", "local"],
+			"description": "Target scope (user, project, local). Default: user for set/define, all for remove."
+		},
+		"stale_only": {
+			"type": "boolean",
+			"description": "Return only stale entries whose stored SourceHash differs from current upstream (list_overrides, list_custom)"
+		},
+		"name": {
+			"type": "string",
+			"description": "Custom tool name, must match ^[a-z][a-z0-9_]{0,63}$ (define_custom, remove_custom)"
+		},
+		"inputSchema": {
+			"type": "object",
+			"description": "JSON Schema draft-07 subset for custom tool arguments (define_custom)"
+		},
+		"body": {
+			"type": "string",
+			"description": "SLOP script body (define_custom)"
+		},
+		"keys": {
+			"type": "array",
+			"items": {"type": "string"},
+			"description": "Glob patterns selecting keys to export"
+		},
+		"include_custom": {
+			"type": "boolean",
+			"description": "Include custom tools in export (default true)"
+		},
+		"data": {
+			"type": "string",
+			"description": "Import pack JSON as string"
+		},
+		"overwrite": {
+			"type": "boolean",
+			"description": "Overwrite existing keys on import (default false)"
+		}
+	},
+	"required": ["action"],
+	"additionalProperties": false
+}`)
+
