@@ -17,3 +17,6 @@ coverage.out
 .vscode/
 *.swp
 *.swo
+
+# Brainstorm session artifacts
+.superpowers/
