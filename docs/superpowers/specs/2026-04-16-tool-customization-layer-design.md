@@ -81,7 +81,7 @@ The repo root is detected by walking up to `.git` or a marker file (`.slop-mcp.k
 - Writes land in that scope's root using the existing atomic-write pattern.
 - Deletes remove only from the specified scope.
 
-The `.slop-mcp/memory/` and `.slop-mcp/memory.local/` directories are auto-created on first write. If the project scope is used and a `.gitignore` exists, `memory.local/` is appended to it.
+The `.slop-mcp/memory/` and `.slop-mcp/memory.local/` directories are auto-created on first write. If the project scope is used and a `.gitignore` exists at the repo root, the exact line `.slop-mcp/memory.local/` is appended, preceded by a blank line and a `# slop-mcp` comment. The append is idempotent — skipped if the line is already present.
 
 ## 4. The `customize_tools` Meta-Tool
 
@@ -90,7 +90,7 @@ A single new meta-tool. Total meta-tool count rises from 8 to 9. Actions dispatc
 | Action            | Required args                                   | Optional args                                                      |
 |-------------------|-------------------------------------------------|--------------------------------------------------------------------|
 | `set_override`    | `mcp`, `tool`, `description`                    | `params` (map), `scope` (default `user`)                           |
-| `remove_override` | `mcp`, `tool`                                   | `scope` (default all)                                              |
+| `remove_override` | `mcp`, `tool`                                   | `scope` (default: all scopes — see note below)                     |
 | `list_overrides`  | —                                               | `mcp`, `scope`, `stale_only` (bool)                                |
 | `define_custom`   | `name`, `description`, `inputSchema`, `body`    | `scope`                                                            |
 | `remove_custom`   | `name`                                          | `scope`                                                            |
@@ -107,6 +107,10 @@ Always structured JSON: `{ok: true, action, affected: N, entries: [...]}` on suc
 `set_override` computes `source_hash` server-side by fetching the current upstream description and params. If the upstream MCP is not connected, the existing lazy-connect flow (cached-MCP) triggers. If the upstream is unreachable, the override is not saved and an error is returned.
 
 `list_overrides` with `stale_only: true` recomputes upstream hashes and returns only entries whose stored hash differs, with both override and upstream text included so the agent can reconcile.
+
+### Delete-default rationale
+
+`remove_override` and `remove_custom` default `scope` to **all scopes**, diverging from the `user` default used by set/define actions. Rationale: removal is typically intent to fully clear a customization, and requiring the agent to enumerate scopes is ergonomically worse. Set/define are targeted writes, so they default to the least-surprising single scope (`user`). This asymmetry is intentional.
 
 ## 5. Integration With Existing Meta-Tools
 
@@ -129,6 +133,10 @@ Always structured JSON: `{ok: true, action, affected: N, entries: [...]}` on suc
 1. If the requested `tool` name matches a custom tool (after scope merge), route to the SLOP engine. Args are validated against `inputSchema` first, then bound per Section 8.
 2. Otherwise native MCP path, unchanged.
 3. Custom tools that call themselves directly or transitively are bounded by a depth guard (default 16). Overflow returns a recursion error.
+
+### Late-collision handling
+
+When an MCP connects *after* a custom tool was defined and a native `<mcp>.<tool>` now matches a custom tool name, the custom tool takes precedence on `execute_tool` routing (custom tools resolve first). `search_tools` and `get_metadata` surface both, with the native entry flagged `shadowed_by_custom: "<name>"` so the agent can reconcile. Custom tool creation (`define_custom`) still rejects names matching *currently-connected* MCP tools at definition time — the shadowing path only fires when the collision arises later.
 
 ### `manage_mcps`
 
@@ -206,6 +214,7 @@ A new `docs/internal/description-style.md` captures the rules as a developer ref
    - `$args` holds the full args map.
    - For each top-level arg key, if the name does not collide with a SLOP builtin, bind `$<key>` as a shorthand.
    - The builtin collision list lives in a new `internal/builtins/reserved.go`.
+   - `define_custom` surfaces collisions up-front: any `inputSchema` property name that would collide with a builtin is reported in the response as `shorthand_skipped: ["mem_save", ...]` with a note that the field is still accessible via `$args.<name>`. Creation is not blocked.
 4. Pass to the run_slop engine with a recursion guard (depth counter threaded through context).
 
 ### Runtime context
@@ -245,7 +254,8 @@ Mutexes guard in-memory state only. I/O and external calls happen without locks 
 ### Per-bank flusher
 
 - One goroutine per loaded bank, spawned on first write.
-- An unbuffered channel signals "dirty"; bursts are coalesced (drain before snapshot).
+- A buffered channel of capacity 1 signals "dirty". Writers perform a non-blocking send; if the channel is already full, the dirty state is already pending and the send is dropped. This is the standard single-slot coalescing pattern.
+- The flusher reads one signal, takes a brief mutex to snapshot the map, releases, then writes and renames.
 - Atomic rename is the OS-level sync primitive — the file on disk is always coherent.
 - On shutdown, pending writes flush.
 
@@ -278,7 +288,7 @@ Mutexes guard in-memory state only. I/O and external calls happen without locks 
 
 - `define_custom` validates the supplied `inputSchema` is a well-formed JSON Schema (the draft-07 subset already supported).
 - `$ref` values pointing outside self are rejected (no remote refs).
-- Body size limit: 64 KB, configurable via `SLOP_MAX_CUSTOM_BODY`.
+- Body size limit: 64 KB. Configurable via the `SLOP_MAX_CUSTOM_BODY` environment variable rather than KDL, deliberately — this is a safety ceiling, not a normal tuning knob, and env-var scoping keeps it out of shared project configs.
 
 ### Name collision rules
 
