@@ -90,6 +90,20 @@ slop-mcp mcp auth login figma
 # MCP reconnects automatically with new credentials
 ```
 
+### 📡 Event Monitoring
+
+Stream events from git hooks, builds, tests, CI, and MCP polling into Claude Code's [Monitor tool](/docs/concepts/monitoring):
+
+```bash
+# Start watching
+slop-mcp monitor &
+
+# Any script, hook, or tool can send events
+slop-mcp message "commit a1b2c3f: fix auth flow"
+slop-mcp message "tests: 43 passed in 1.2s"
+make build && slop-mcp message "build ok"
+```
+
 ### 📦 Flexible Configuration
 
 Define MCPs at project, user, or local scope using KDL config files:

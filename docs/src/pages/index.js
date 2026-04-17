@@ -185,9 +185,9 @@ const features = [
     description: 'One execute_tool pattern for every MCP. Chain database → math → slack in one workflow.',
   },
   {
-    icon: '◫',
-    title: 'KDL Config',
-    description: 'Clean, readable config files. Project, user, or local scope. Version control friendly.',
+    icon: '📡',
+    title: 'Event Monitoring',
+    description: 'Stream git hooks, builds, tests, and CI into Claude Code notifications. One command: slop-mcp message.',
   },
 ];
 

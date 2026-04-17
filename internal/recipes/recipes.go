@@ -56,14 +56,22 @@ func extractDescription(name string) string {
 		return ""
 	}
 	lines := strings.SplitN(string(data), "\n", 2)
-	if len(lines) > 0 && strings.HasPrefix(lines[0], "//") {
-		desc := strings.TrimPrefix(lines[0], "//")
-		desc = strings.TrimSpace(desc)
-		// Strip "name:" prefix if present
-		if idx := strings.Index(desc, ":"); idx > 0 && idx < 30 {
-			desc = strings.TrimSpace(desc[idx+1:])
-		}
-		return desc
+	if len(lines) == 0 {
+		return ""
 	}
-	return ""
+	var desc string
+	switch {
+	case strings.HasPrefix(lines[0], "//"):
+		desc = strings.TrimPrefix(lines[0], "//")
+	case strings.HasPrefix(lines[0], "#"):
+		desc = strings.TrimPrefix(lines[0], "#")
+	default:
+		return ""
+	}
+	desc = strings.TrimSpace(desc)
+	// Strip "name:" prefix if present
+	if idx := strings.Index(desc, ":"); idx > 0 && idx < 30 {
+		desc = strings.TrimSpace(desc[idx+1:])
+	}
+	return desc
 }

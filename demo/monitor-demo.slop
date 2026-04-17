@@ -1,0 +1,13 @@
+# Monitor demo: polls event-server for changes
+print("Monitoring events...")
+for i in range(5):
+    deploy = events.get_deploy_status()
+    if changed("deploy", deploy):
+        print("[deploy] " + str(deploy["version"]) + " " + str(deploy["status"]))
+    health = events.get_service_health()
+    if changed("health", health):
+        print("[health] " + str(health["status"]))
+    counter = events.get_counter()
+    print("[counter] " + counter)
+    sleep(2000)
+print("Done.")

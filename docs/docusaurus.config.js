@@ -28,7 +28,7 @@ const config = {
       tagName: 'meta',
       attributes: {
         name: 'keywords',
-        content: 'MCP, Model Context Protocol, MCP orchestrator, MCP server, AI tools, Claude Code, Claude Desktop, Cursor, Copilot, Gemini, context window, tool discovery, SLOP, AI agent, LLM tools',
+        content: 'MCP, Model Context Protocol, MCP orchestrator, MCP server, AI tools, Claude Code, Claude Desktop, Cursor, Copilot, Gemini, context window, tool discovery, SLOP, AI agent, LLM tools, event monitoring, Monitor tool, git hooks, CI notifications',
       },
     },
   ],

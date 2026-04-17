@@ -16,6 +16,37 @@ With slop-mcp:     50 MCPs × 20 tools = 8 tool definitions in context
 - **[KDL Configuration](https://standardbeagle.github.io/slop-mcp/docs/reference/kdl-config)** - Configuration reference
 - **[CLI Reference](https://standardbeagle.github.io/slop-mcp/docs/reference/cli)** - Command-line options
 
+## Event Monitoring
+
+slop-mcp integrates with [Claude Code's Monitor tool](https://docs.claude.ai/en/docs/claude-code/cli-usage#monitor) to stream events from any source — git hooks, build tools, CI pipelines, file watchers, or MCP servers.
+
+![slop-mcp monitor demo](demo/monitor-demo.gif)
+
+```bash
+# Start watching for events (runs until killed)
+slop-mcp monitor &
+
+# Send events from anywhere — shell scripts, git hooks, CI, cron
+slop-mcp message "commit a1b2c3f: fix auth token refresh"
+slop-mcp message "build failed: src/auth.ts(42): TypeError"
+slop-mcp message "tests: 43 passed in 1.2s"
+slop-mcp message "deploy v0.14.0 → staging (healthy)"
+
+# Or poll MCPs with a SLOP script
+slop-mcp monitor watch-deploy.slop
+```
+
+Use with Claude Code:
+```javascript
+Monitor({
+  command: "slop-mcp monitor",
+  description: "build events",
+  persistent: true
+})
+```
+
+See the [Monitoring Guide](https://standardbeagle.github.io/slop-mcp/docs/concepts/monitoring) for git hook templates, build wrappers, and SLOP polling scripts.
+
 ## The Problem
 
 As described in Anthropic's article [Code Execution with MCP](https://www.anthropic.com/engineering/code-execution-with-mcp), current MCP implementations face two critical challenges:

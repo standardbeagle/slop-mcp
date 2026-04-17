@@ -1,0 +1,31 @@
+# monitor_multi_check: Check multiple MCP tools and report changes.
+# Demonstrates persistent state with mem_save/mem_load for surviving restarts.
+# Parameters (set before loading):
+#   checks   - List of {mcp, tool, params, label} maps
+#   interval - Poll interval in milliseconds (default: 60000)
+#
+# Example usage:
+#   store_set("checks", [
+#     {mcp: "github", tool: "list_issues", params: {state: "open"}, label: "open issues"},
+#     {mcp: "ci", tool: "get_status", params: {branch: "main"}, label: "CI status"}
+#   ])
+
+checks = store_get("checks")
+if checks == none:
+    print("Error: set 'checks' parameter")
+    return
+
+interval = store_get("interval")
+if interval == none:
+    interval = 60000
+
+for _ in range(999999999):
+    for check in checks:
+        result = call_tool(check["mcp"], check["tool"], check["params"])
+        key = check["label"]
+        prev = mem_load("monitor", key, none)
+        current = str(result)
+        if prev != current:
+            print(key + ": " + current)
+            mem_save("monitor", key, current, description: "Last seen value for " + key)
+    sleep(interval)

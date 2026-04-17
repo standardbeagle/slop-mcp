@@ -1,0 +1,5 @@
+#!/bin/sh
+# Git post-commit hook → slop-mcp monitor
+MSG=$(git log -1 --pretty=format:'%s')
+HASH=$(git log -1 --pretty=format:'%h')
+slop-mcp message "commit $HASH: $MSG"

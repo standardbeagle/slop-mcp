@@ -1,0 +1,5 @@
+#!/bin/sh
+# Git pre-push hook → slop-mcp monitor
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+COUNT=$(git log --oneline @{u}..HEAD 2>/dev/null | wc -l)
+slop-mcp message "pushing $COUNT commits on $BRANCH"

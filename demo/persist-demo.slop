@@ -1,0 +1,14 @@
+# Persistent monitor: remembers state across restarts
+last_id = mem_load("demo", "last_deploy", 0)
+print("Last known deploy: #" + str(last_id))
+for i in range(3):
+    deploy = events.get_deploy_status()
+    id = deploy["deploy_id"]
+    if id != last_id:
+        print("NEW deploy #" + str(id) + " " + str(deploy["version"]))
+        last_id = id
+        mem_save("demo", "last_deploy", id)
+    else:
+        print("No new deploys")
+    sleep(2000)
+print("State saved. Run again to see persistence.")

@@ -229,6 +229,68 @@ Remove a skill:
 slop-mcp skill remove <name>
 ```
 
+### monitor
+
+Run a SLOP script as a Claude Code Monitor event source. Each `print()` call in the script becomes a Monitor notification. Also watches for messages sent via `slop-mcp message`.
+
+```bash
+slop-mcp monitor [script.slop]
+slop-mcp monitor -e '<script>'
+slop-mcp monitor                   # Watch for messages only
+
+Options:
+  -e '<script>'        Execute inline script
+  --timeout=<secs>     Stop after N seconds (default: no timeout)
+```
+
+Without a script, the monitor just watches for incoming messages — perfect for aggregating events from git hooks, build scripts, and CI pipelines.
+
+**Built-in functions** (in addition to standard SLOP):
+
+| Function | Description |
+|----------|-------------|
+| `changed(key, value)` | Returns `true` if value differs from last call with same key |
+| `mem_save` / `mem_load` | Persistent memory across restarts (standard SLOP) |
+
+**Examples:**
+
+```bash
+# Watch for messages only
+slop-mcp monitor --timeout=300 &
+slop-mcp message "deploy started"
+
+# Poll an MCP for changes
+slop-mcp monitor -e '
+  for _ in range(999999999):
+      health = myapi.get_health()
+      if changed("health", health):
+          print("health: " + str(health))
+      sleep(30000)
+'
+
+# Use with Claude Code Monitor tool
+# Monitor({ command: "slop-mcp monitor", persistent: true })
+```
+
+### message
+
+Send a message to a running `slop-mcp monitor`. The message appears as a line on the monitor's stdout, becoming a Claude Code Monitor notification.
+
+```bash
+slop-mcp message <text...>
+
+Examples:
+  slop-mcp message "deploy started"
+  slop-mcp message "build failed: exit code 1"
+
+  # Chain with any command
+  make build && slop-mcp message "build ok" || slop-mcp message "build failed"
+
+  # Use in git hooks
+  echo 'slop-mcp message "commit $(git log -1 --format=%h): $(git log -1 --format=%s)"' \
+    >> .git/hooks/post-commit
+```
+
 ### run
 
 Execute a SLOP script:

@@ -19,6 +19,10 @@ func main() {
 		cmdServe(os.Args[2:])
 	case "run":
 		cmdRun(os.Args[2:])
+	case "monitor":
+		cmdMonitor(os.Args[2:])
+	case "message":
+		cmdMessage(os.Args[2:])
 	case "mcp":
 		if len(os.Args) < 3 {
 			printMCPUsage()
@@ -75,6 +79,8 @@ Usage:
 Commands:
   serve                        Start the MCP server
   run                          Execute a SLOP script
+  monitor                      Run a SLOP script as a Claude Code Monitor source
+  message                      Send a message to a running monitor
   mcp add                      Register an MCP server
   mcp add-json                 Register an MCP server from JSON config
   mcp add-from-claude-desktop  Import MCPs from Claude Desktop

@@ -1,0 +1,28 @@
+# monitor_poll_delta: Poll an MCP tool at an interval and print when results change.
+# Parameters (set before loading):
+#   mcp_name  - MCP server name
+#   tool_name - Tool to call
+#   params    - Tool parameters (map)
+#   interval  - Poll interval in milliseconds (default: 30000)
+#
+# Example usage:
+#   store_set("mcp_name", "github")
+#   store_set("tool_name", "list_issues")
+#   store_set("params", {state: "open", per_page: 5})
+#   store_set("interval", 30000)
+
+mcp = store_get("mcp_name")
+tool = store_get("tool_name")
+params = store_get("params")
+if params == none:
+    params = {}
+
+interval = store_get("interval")
+if interval == none:
+    interval = 30000
+
+for _ in range(999999999):
+    result = call_tool(mcp, tool, params)
+    if changed("poll_result", result):
+        print(str(result))
+    sleep(interval)
