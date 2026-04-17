@@ -1900,6 +1900,55 @@ func TestManageMCPsInputActionDocumentation(t *testing.T) {
 	assert.Equal(t, "health_check", input.Action)
 }
 
+// TestManageMCPs_ListStaleOverrides_DelegatesCorrectly verifies that list_stale_overrides
+// delegates to customizeListOverrides with StaleOnly=true and returns stale entries.
+func TestManageMCPs_ListStaleOverrides_DelegatesCorrectly(t *testing.T) {
+	// Set up server with mock tools to mimic customize_handler tests.
+	tools := []registry.ToolInfo{
+		{
+			MCPName:     "mock",
+			Name:        "tool_one",
+			Description: "Upstream description for tool_one",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"query": map[string]any{"description": "search query"},
+				},
+			},
+		},
+	}
+	s := mockServer(nil)
+	s.registry.AddToolsForTesting("mock", tools)
+
+	// Set up override store with a forced-stale override.
+	store, err := overrides.OpenStore(overrides.StoreOptions{UserRoot: t.TempDir()})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	s.overrideStore = store
+
+	// Set an override with a stale hash (won't match upstream).
+	require.NoError(t, store.SetOverride(overrides.ScopeUser, "mock.tool_one", overrides.OverrideEntry{
+		Description: "override",
+		SourceHash:  "forced_stale_hash",
+	}))
+
+	// Call manage_mcps list_stale_overrides action.
+	ctx := context.Background()
+	input := ManageMCPsInput{Action: "list_stale_overrides"}
+	_, output, err := s.handleManageMCPs(ctx, nil, input)
+	require.NoError(t, err)
+
+	// Verify output contains the stale entry.
+	assert.Equal(t, 1, output.Affected)
+	require.Len(t, output.Entries, 1)
+
+	// Verify the entry is marked as stale by converting to JSON.
+	outJSON, err := json.Marshal(output)
+	require.NoError(t, err)
+	outStr := string(outJSON)
+	require.Contains(t, outStr, `"stale":true`, "expected stale entry in output")
+}
+
 // TestHandleSlopReference tests the slop_reference MCP tool.
 func TestHandleSlopReference(t *testing.T) {
 	s := mockServer([]registry.ToolInfo{})

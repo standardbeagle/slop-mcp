@@ -422,7 +422,7 @@ func (e *slopError) Error() string {
 
 // ManageMCPsInput is the input for the manage_mcps tool.
 type ManageMCPsInput struct {
-	Action  string            `json:"action" jsonschema:"Action to perform: register, unregister, reconnect, list, status, or health_check"`
+	Action  string            `json:"action" jsonschema:"Action to perform: register, unregister, reconnect, list, status, health_check, or list_stale_overrides"`
 	Name    string            `json:"name,omitempty" jsonschema:"MCP server name (required for register/unregister/reconnect, optional for health_check)"`
 	Type    string            `json:"type,omitempty" jsonschema:"Transport type: command (default), sse, or streamable"`
 	Command string            `json:"command,omitempty" jsonschema:"Command executable for command transport"`
@@ -440,6 +440,8 @@ type ManageMCPsOutput struct {
 	MCPs         []registry.MCPStatus          `json:"mcps,omitempty"`
 	Status       []registry.MCPFullStatus      `json:"status,omitempty"`
 	HealthChecks []registry.HealthCheckResult  `json:"health_checks,omitempty"`
+	Affected     int                           `json:"affected,omitempty"`
+	Entries      []any                         `json:"entries,omitempty"`
 }
 
 func (s *Server) handleManageMCPs(
@@ -581,8 +583,27 @@ func (s *Server) handleManageMCPs(
 			HealthChecks: results,
 		}, nil
 
+	case "list_stale_overrides":
+		// Delegate to customize_tools list_overrides with stale_only:true
+		_, out, err := s.customizeListOverrides(ctx, CustomizeToolsInput{
+			Action:    "list_overrides",
+			StaleOnly: true,
+		})
+		if err != nil {
+			return nil, ManageMCPsOutput{}, fmt.Errorf("failed to list stale overrides: %w", err)
+		}
+		// Convert customize output to manage_mcps output format
+		entries := make([]any, len(out.Entries))
+		for i, e := range out.Entries {
+			entries[i] = e
+		}
+		return nil, ManageMCPsOutput{
+			Affected: out.Affected,
+			Entries:  entries,
+		}, nil
+
 	default:
-		return nil, ManageMCPsOutput{}, fmt.Errorf("invalid action: %s (must be register, unregister, reconnect, list, status, or health_check)", input.Action)
+		return nil, ManageMCPsOutput{}, fmt.Errorf("invalid action: %s (must be register, unregister, reconnect, list, status, health_check, or list_stale_overrides)", input.Action)
 	}
 }
 
