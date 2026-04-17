@@ -615,9 +615,15 @@ if overrides.IsReservedBank(bankName.Value) {
 }
 ```
 
-Apply the same pattern to any other write-path builtins in the file (search for `mem_delete`, `mem_clear`, `store.saveBank` call sites). For each mutation site add an equivalent error-return.
+**Discovery step first:** grep for existing mutating builtins so the guard goes on every one that exists and not on ones that don't.
 
-Mirror the guard in `cmd/memory-cli/main.go` on any subcommand that writes (save/delete/clear): early-return with exit code 2 and the same error text.
+```bash
+grep -n 'RegisterBuiltin("mem_\|RegisterBuiltin("store_set' internal/builtins/memory.go internal/builtins/session.go
+```
+
+Expected hits: `mem_save`, `mem_delete` (add guard). If `mem_clear` shows up, guard it too; otherwise skip. Skip read-only builtins (`mem_load`, `mem_list`, `mem_search`, `mem_info`).
+
+Mirror the guard in `cmd/memory-cli/main.go`. Run `grep -n 'func.*[Cc]md' cmd/memory-cli/main.go` to enumerate subcommands, then guard only the write subcommands (whatever they are named — likely `save`, `delete`) with an exit code 2 and the same error text.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -1128,6 +1134,9 @@ git commit -m "feat(overrides): add scope-aware store with background flush"
 
 ```go
 // internal/registry/index_test.go — append
+// Match the existing SearchTools signature in registry.go — currently
+//   SearchTools(query, mcpName string) []ToolInfo
+// If the signature has changed, adjust accordingly.
 func TestIndex_AtomicSwapUnderLoad(t *testing.T) {
 	reg := New()
 	reg.AddToolsForTesting("m", []ToolInfo{{Name: "a", Description: "alpha"}})
@@ -1136,17 +1145,21 @@ func TestIndex_AtomicSwapUnderLoad(t *testing.T) {
 	go func() {
 		defer close(done)
 		for i := 0; i < 1000; i++ {
-			_ = reg.SearchTools("alp", 10, 0)
+			_ = reg.SearchTools("alp", "")
 		}
 	}()
 	for i := 0; i < 100; i++ {
-		reg.AddToolsForTesting("m", []ToolInfo{{Name: "a", Description: "alpha", Version: i}})
+		// Rewrite tools repeatedly to force index rebuilds.
+		reg.AddToolsForTesting("m", []ToolInfo{{
+			Name:        "a",
+			Description: fmt.Sprintf("alpha %d", i),
+		}})
 	}
 	<-done
 }
 ```
 
-(Add `Version int` to `ToolInfo` only if one doesn't already exist; otherwise adjust test.)
+The race detector catches concurrent map writes / torn pointer reads.
 
 - [ ] **Step 2: Run to verify failure**
 
@@ -1508,7 +1521,7 @@ func (s *Server) handleCustomizeTools(ctx context.Context, req *mcp.CallToolRequ
 
 `setOverride`:
 1. Require `mcp`, `tool`, `description`.
-2. Ensure upstream connected (`s.registry.EnsureConnected(mcp)`).
+2. Ensure upstream connected: `s.registry.EnsureConnected(ctx, mcp)` — match the existing signature in `internal/registry/registry.go` which takes `context.Context` first.
 3. Look up upstream tool to get current description + param descriptions.
 4. `hash := overrides.ComputeHash(upstreamDesc, upstreamParams)`.
 5. `s.overrideStore.SetOverride(scope, mcp+"."+tool, OverrideEntry{Description: desc, Params: params, SourceHash: hash})`.
