@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/standardbeagle/slop-mcp/internal/overrides"
 )
 
 var Version = "0.1.0"
@@ -435,7 +437,7 @@ func cmdWrite(args []string) error {
 		return err
 	}
 
-	if strings.HasPrefix(bankName, "_slop.") {
+	if overrides.IsReservedBank(bankName) {
 		fmt.Fprintf(os.Stderr, "bank %q is reserved; use customize_tools via slop-mcp\n", bankName)
 		os.Exit(2)
 	}
@@ -546,7 +548,7 @@ func cmdDelete(args []string) error {
 		return err
 	}
 
-	if strings.HasPrefix(bankName, "_slop.") {
+	if overrides.IsReservedBank(bankName) {
 		fmt.Fprintf(os.Stderr, "bank %q is reserved; use customize_tools via slop-mcp\n", bankName)
 		os.Exit(2)
 	}
