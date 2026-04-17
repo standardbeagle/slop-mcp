@@ -14,6 +14,8 @@ import (
 	"github.com/standardbeagle/slop-mcp/internal/builtins"
 	"github.com/standardbeagle/slop-mcp/internal/cli"
 	"github.com/standardbeagle/slop-mcp/internal/config"
+	"github.com/standardbeagle/slop-mcp/internal/logging"
+	"github.com/standardbeagle/slop-mcp/internal/overrides"
 	"github.com/standardbeagle/slop-mcp/internal/registry"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -2163,4 +2165,81 @@ func TestHandleRunSlop_Recipe_NotFound(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
+}
+
+func TestSearchTools_AppliesOverride(t *testing.T) {
+	upstreamDesc := "Original upstream description"
+	tool := registry.ToolInfo{
+		Name:        "tool_one",
+		Description: upstreamDesc,
+		MCPName:     "test-mcp",
+	}
+	s := mockServer([]registry.ToolInfo{tool})
+
+	store, err := overrides.OpenStore(overrides.StoreOptions{UserRoot: t.TempDir()})
+	require.NoError(t, err)
+	s.overrideStore = store
+
+	// Set override with matching hash so not stale.
+	hash := overrides.ComputeHash(upstreamDesc, nil)
+	err = store.SetOverride(overrides.ScopeUser, "test-mcp.tool_one", overrides.OverrideEntry{
+		Description: "SHORT DESC",
+		SourceHash:  hash,
+	})
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	_, output, err := s.handleSearchTools(ctx, &mcp.CallToolRequest{}, SearchToolsInput{})
+	require.NoError(t, err)
+
+	require.Len(t, output.Tools, 1)
+	assert.Equal(t, "SHORT DESC", output.Tools[0].Description)
+	assert.False(t, output.Tools[0].Stale)
+}
+
+func TestGetMetadata_FlagsStaleOverride(t *testing.T) {
+	upstreamDesc := "Original description"
+	tool := registry.ToolInfo{
+		Name:        "tool_one",
+		Description: upstreamDesc,
+		MCPName:     "test-mcp",
+		InputSchema: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		},
+	}
+	// Use SetCached so the state is visible to GetMetadata.
+	reg := registry.New()
+	reg.SetCached(config.MCPConfig{Name: "test-mcp", Type: "command"}, []registry.ToolInfo{tool})
+	s := &Server{
+		registry:    reg,
+		cliRegistry: cli.NewRegistry(),
+		logger:      logging.Default(),
+	}
+
+	store, err := overrides.OpenStore(overrides.StoreOptions{UserRoot: t.TempDir()})
+	require.NoError(t, err)
+	s.overrideStore = store
+
+	// Set a stale override: SourceHash does NOT match current upstream.
+	err = store.SetOverride(overrides.ScopeUser, "test-mcp.tool_one", overrides.OverrideEntry{
+		Description: "NEW DESC",
+		SourceHash:  "deadbeef00000000", // deliberate mismatch
+	})
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	// Don't pass MCPName so EnsureConnected is not triggered (which would set state=error).
+	_, output, err := s.handleGetMetadata(ctx, &mcp.CallToolRequest{}, GetMetadataInput{
+		Verbose: true,
+	})
+	require.NoError(t, err)
+
+	require.Len(t, output.Metadata, 1)
+	require.Len(t, output.Metadata[0].Tools, 1)
+	got := output.Metadata[0].Tools[0]
+	assert.Equal(t, "NEW DESC", got.Description)
+	assert.True(t, got.Stale, "stale flag should be set")
+	assert.NotNil(t, got.StaleSource, "stale_source should be present")
+	assert.Equal(t, upstreamDesc, got.StaleSource["description"])
 }

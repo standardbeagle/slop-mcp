@@ -12,6 +12,7 @@ import (
 	"github.com/standardbeagle/slop-mcp/internal/cli"
 	"github.com/standardbeagle/slop-mcp/internal/config"
 	"github.com/standardbeagle/slop-mcp/internal/logging"
+	"github.com/standardbeagle/slop-mcp/internal/overrides"
 	"github.com/standardbeagle/slop-mcp/internal/registry"
 )
 
@@ -27,8 +28,9 @@ type Server struct {
 	cliRegistry  *cli.Registry
 	config       *config.Config
 	logger       logging.Logger
-	sessionStore *builtins.SessionStore
-	memoryStore  *builtins.MemoryStore
+	sessionStore  *builtins.SessionStore
+	memoryStore   *builtins.MemoryStore
+	overrideStore *overrides.Store // nil until Task 16 wires it up
 }
 
 // New creates a new Server with the given config.

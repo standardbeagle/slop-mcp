@@ -71,6 +71,12 @@ type ToolInfo struct {
 	Description string         `json:"description"`
 	MCPName     string         `json:"mcp_name"`
 	InputSchema map[string]any `json:"input_schema,omitempty"`
+	// Override metadata (omitted when no override is active)
+	Stale         bool           `json:"stale,omitempty"`
+	StaleHint     string         `json:"stale_hint,omitempty"`
+	OverrideScope string         `json:"override_scope,omitempty"`
+	OverrideHash  string         `json:"override_hash,omitempty"`
+	StaleSource   map[string]any `json:"stale_source,omitempty"`
 }
 
 // PromptInfo represents a prompt from an MCP.

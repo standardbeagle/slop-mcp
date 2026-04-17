@@ -14,6 +14,7 @@ import (
 	"github.com/standardbeagle/slop-mcp/internal/builtins"
 	"github.com/standardbeagle/slop-mcp/internal/cli"
 	"github.com/standardbeagle/slop-mcp/internal/config"
+	"github.com/standardbeagle/slop-mcp/internal/overrides"
 	"github.com/standardbeagle/slop-mcp/internal/recipes"
 	"github.com/standardbeagle/slop-mcp/internal/registry"
 	"github.com/standardbeagle/slop/pkg/slop"
@@ -42,6 +43,57 @@ type SearchToolsOutput struct {
 	HasMore bool                `json:"has_more"` // True if more results available
 }
 
+// overrideView carries the resolved override state for a single tool.
+type overrideView struct {
+	Description string
+	Params      map[string]string
+	Scope       overrides.Scope
+	Hash        string
+	Stale       bool
+	HasOverride bool
+}
+
+// overrideFor returns the resolved override (if any) and stale status for a tool.
+// upstreamParams should be the property-level descriptions from the input schema.
+func (s *Server) overrideFor(mcpName, toolName, upstreamDesc string, upstreamParams map[string]string) overrideView {
+	if s.overrideStore == nil {
+		return overrideView{}
+	}
+	entry, ok := s.overrideStore.GetOverride(mcpName + "." + toolName)
+	if !ok {
+		return overrideView{}
+	}
+	currentHash := overrides.ComputeHash(upstreamDesc, upstreamParams)
+	return overrideView{
+		Description: entry.Description,
+		Params:      entry.Params,
+		Scope:       entry.Scope,
+		Hash:        entry.SourceHash,
+		Stale:       entry.SourceHash != currentHash,
+		HasOverride: true,
+	}
+}
+
+// extractParamDescs builds a map of param name → description from an input schema.
+func extractParamDescs(inputSchema map[string]any) map[string]string {
+	if inputSchema == nil {
+		return nil
+	}
+	props, ok := inputSchema["properties"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	out := make(map[string]string, len(props))
+	for name, raw := range props {
+		if prop, ok := raw.(map[string]any); ok {
+			if desc, ok := prop["description"].(string); ok {
+				out[name] = desc
+			}
+		}
+	}
+	return out
+}
+
 func (s *Server) handleSearchTools(
 	ctx context.Context,
 	req *mcp.CallToolRequest,
@@ -63,6 +115,21 @@ func (s *Server) handleSearchTools(
 				MCPName:     cliTool.MCPName,
 				InputSchema: cliTool.InputSchema,
 			})
+		}
+	}
+
+	// Apply overrides to tool descriptions / stale flags.
+	if s.overrideStore != nil {
+		for i, t := range tools {
+			upstreamParams := extractParamDescs(t.InputSchema)
+			ov := s.overrideFor(t.MCPName, t.Name, t.Description, upstreamParams)
+			if ov.HasOverride {
+				tools[i].Description = ov.Description
+				if ov.Stale {
+					tools[i].Stale = true
+					tools[i].StaleHint = "override predates upstream change"
+				}
+			}
 		}
 	}
 
@@ -766,6 +833,44 @@ func (s *Server) handleGetMetadata(
 				}
 			}
 			metadata[i].Tools = strippedTools
+		}
+	}
+
+	// Apply overrides: swap descriptions, merge param descs, flag stale.
+	if s.overrideStore != nil {
+		for i := range metadata {
+			for j, tool := range metadata[i].Tools {
+				// Use the InputSchema still on the tool (may be stripped above for non-verbose).
+				// For stale detection we need the upstream description before swapping.
+				upstreamDesc := tool.Description
+				upstreamParams := extractParamDescs(tool.InputSchema)
+				ov := s.overrideFor(metadata[i].Name, tool.Name, upstreamDesc, upstreamParams)
+				if !ov.HasOverride {
+					continue
+				}
+				metadata[i].Tools[j].Description = ov.Description
+				metadata[i].Tools[j].OverrideScope = string(ov.Scope)
+				metadata[i].Tools[j].OverrideHash = ov.Hash
+				if ov.Stale {
+					metadata[i].Tools[j].Stale = true
+					metadata[i].Tools[j].StaleHint = "override predates upstream change"
+					metadata[i].Tools[j].StaleSource = map[string]any{
+						"description": upstreamDesc,
+						"params":      upstreamParams,
+					}
+				}
+				// Merge param descriptions into InputSchema properties if schema present.
+				if ov.Params != nil && metadata[i].Tools[j].InputSchema != nil {
+					props, ok := metadata[i].Tools[j].InputSchema["properties"].(map[string]any)
+					if ok {
+						for paramName, paramDesc := range ov.Params {
+							if prop, ok := props[paramName].(map[string]any); ok {
+								prop["description"] = paramDesc
+							}
+						}
+					}
+				}
+			}
 		}
 	}
 
