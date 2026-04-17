@@ -196,6 +196,17 @@ func (s *Server) handleExecuteTool(
 		return nil, nil, fmt.Errorf("tool_name is required")
 	}
 
+	// Custom tool routing: check override store before CLI and native MCP paths.
+	if s.overrideStore != nil && (input.MCPName == "_custom" || input.MCPName == "") {
+		if ct, ok := s.overrideStore.GetCustom(input.ToolName); ok {
+			result, err := s.executeCustomTool(ctx, ct, input.Parameters)
+			if err != nil {
+				return errorResult(err), nil, nil
+			}
+			return nil, result, nil
+		}
+	}
+
 	// Handle CLI tools (mcp_name is "cli" or tool_name has cli_ prefix)
 	if input.MCPName == "cli" || cli.IsCLITool(input.ToolName) {
 		toolName := input.ToolName
