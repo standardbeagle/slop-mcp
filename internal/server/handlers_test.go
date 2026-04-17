@@ -2178,6 +2178,7 @@ func TestSearchTools_AppliesOverride(t *testing.T) {
 
 	store, err := overrides.OpenStore(overrides.StoreOptions{UserRoot: t.TempDir()})
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
 	s.overrideStore = store
 
 	// Set override with matching hash so not stale.
@@ -2219,6 +2220,7 @@ func TestGetMetadata_FlagsStaleOverride(t *testing.T) {
 
 	store, err := overrides.OpenStore(overrides.StoreOptions{UserRoot: t.TempDir()})
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
 	s.overrideStore = store
 
 	// Set a stale override: SourceHash does NOT match current upstream.
