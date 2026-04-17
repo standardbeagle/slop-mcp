@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-04-17
+
+### Added
+
+- **`monitor` subcommand**: runs a SLOP script as a Claude Code Monitor event source. Each `print()` call becomes a notification line on stdout. Supports inline scripts (`-e`), script files, and `--timeout`. Includes a `changed(key, value)` builtin for delta detection across poll cycles.
+- **`message` subcommand**: appends a one-line event to a shared file the running monitor tails. Lets git hooks, build scripts, CI, and file watchers push events into a live monitor session.
+- **Recipe scripts**: `monitor_poll_delta` (single-tool polling with delta detection) and `monitor_multi_check` (multi-MCP polling with persistent state via `mem_save`).
+- **Monitoring docs**: full concepts page with git hook templates, build wrappers, file watcher patterns, and SLOP polling examples.
+- **Image-MCP customization walkthrough**: three-stage compression example in the customization docs (caveman descriptions → hardcoded-value param docs → custom SLOP wrapper with minimal schema).
+
+### Changed
+
+- **Recipe descriptions**: `extractDescription` now parses `#` comment headers in addition to `//`, so SLOP-comment-style recipes pick up their first-line description.
+- **Marketing surface**: README, intro, and feature grid now promote tool customization (`customize_tools`) and event monitoring as top-line selling points.
+
 ## [0.14.0] - 2026-04-16
 
 ### Added
