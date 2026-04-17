@@ -140,3 +140,45 @@ func TestExecuteTool_CustomTool_UnknownNameFallsThrough(t *testing.T) {
 	assert.Error(t, err)
 	assert.NotErrorIs(t, err, ErrCustomToolRecursion)
 }
+
+func TestExecuteCustomTool_AcceptsJSONInteger(t *testing.T) {
+	s, store := newCustomTestServer(t)
+
+	// Create a custom tool requiring an integer parameter
+	err := store.SetCustom(overrides.ScopeUser, "increment", overrides.CustomTool{
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"count": map[string]any{"type": "integer"},
+			},
+			"required": []any{"count"},
+		},
+		Body: `count + 1`,
+	})
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	// Test: float64(5) (as from JSON) should be accepted and compute 5 + 1 = 6
+	_, out, err := s.handleExecuteTool(ctx, nil, ExecuteToolInput{
+		MCPName:    "_custom",
+		ToolName:   "increment",
+		Parameters: map[string]any{"count": float64(5)},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, float64(6), out)
+
+	// Test: fractional float64(3.14) should be rejected
+	result, out, err := s.handleExecuteTool(ctx, nil, ExecuteToolInput{
+		MCPName:    "_custom",
+		ToolName:   "increment",
+		Parameters: map[string]any{"count": float64(3.14)},
+	})
+	require.NoError(t, err) // Protocol error is nil; error routed through errorResult
+	assert.Nil(t, out)
+	require.NotNil(t, result)
+	assert.True(t, result.IsError)
+	require.NotEmpty(t, result.Content)
+	text := result.Content[0].(*mcp.TextContent).Text
+	assert.Contains(t, text, "integer")
+}

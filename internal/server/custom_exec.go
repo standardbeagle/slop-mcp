@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 
 	"github.com/standardbeagle/slop-mcp/internal/builtins"
 	"github.com/standardbeagle/slop-mcp/internal/cli"
@@ -110,9 +111,12 @@ func checkType(name string, val any, expectedType string) error {
 			ok = true
 		}
 	case "integer":
-		switch val.(type) {
+		switch v := val.(type) {
 		case int, int32, int64:
 			ok = true
+		case float64:
+			// Accept whole numbers from JSON (which unmarshals integers as float64)
+			ok = v == math.Trunc(v) && !math.IsInf(v, 0)
 		}
 	case "boolean":
 		_, ok = val.(bool)
