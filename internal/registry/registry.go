@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -17,6 +18,25 @@ import (
 	"github.com/standardbeagle/slop-mcp/internal/config"
 	"github.com/standardbeagle/slop-mcp/internal/logging"
 )
+
+// OverrideProvider supplies per-tool description overrides and custom tool
+// declarations that are injected into the search index at rebuild time.
+// Implementations must be safe for concurrent use.
+type OverrideProvider interface {
+	// OverrideFor returns an overridden description and parameter hints for the
+	// named tool on the named MCP. ok=false means no override is registered.
+	OverrideFor(mcpName, toolName string) (description string, params map[string]string, sourceHash string, ok bool)
+	// CustomTools returns synthetic tool declarations appended to the index
+	// under the reserved "_custom" MCP key.
+	CustomTools() []CustomToolDecl
+}
+
+// CustomToolDecl describes a synthetic tool injected by an OverrideProvider.
+type CustomToolDecl struct {
+	Name        string
+	Description string
+	InputSchema map[string]any
+}
 
 // DefaultConnectionTimeout is the default timeout for connecting to an MCP server.
 const DefaultConnectionTimeout = 30 * time.Second
@@ -179,49 +199,108 @@ type mcpConnection struct {
 // Registry manages multiple MCP connections.
 type Registry struct {
 	connections       map[string]*mcpConnection
-	states            map[string]*mcpState // tracks all configured MCPs and their states
-	toolIndex         *ToolIndex
+	states            map[string]*mcpState   // tracks all configured MCPs and their states
+	tools             map[string][]ToolInfo  // mutable source of truth for tool lists (guarded by mu)
+	indexPtr          atomic.Pointer[ToolIndex] // immutable search snapshot, swapped on rebuild
+	overrides         OverrideProvider          // optional; injected via SetOverrideProvider
 	logger            logging.Logger
 	mu                sync.RWMutex
-	healthCheckCancel context.CancelFunc    // cancels background health check goroutine
-	cache             *cache.Store          // disk cache for tool metadata
+	healthCheckCancel context.CancelFunc     // cancels background health check goroutine
+	cache             *cache.Store           // disk cache for tool metadata
 	connectMu         map[string]*sync.Mutex // per-MCP mutex for serializing lazy-connect
+}
+
+// newRegistry initialises a Registry and seeds the atomic index pointer.
+func newRegistry(r *Registry) *Registry {
+	r.indexPtr.Store(buildIndex(nil, nil))
+	return r
 }
 
 // New creates a new Registry.
 func New() *Registry {
-	return &Registry{
+	return newRegistry(&Registry{
 		connections: make(map[string]*mcpConnection),
 		states:      make(map[string]*mcpState),
-		toolIndex:   NewToolIndex(),
+		tools:       make(map[string][]ToolInfo),
 		logger:      logging.Default(),
 		cache:       cache.NewStore(),
 		connectMu:   make(map[string]*sync.Mutex),
-	}
+	})
 }
 
 // NewWithLogger creates a new Registry with a custom logger.
 func NewWithLogger(logger logging.Logger) *Registry {
-	return &Registry{
+	return newRegistry(&Registry{
 		connections: make(map[string]*mcpConnection),
 		states:      make(map[string]*mcpState),
-		toolIndex:   NewToolIndex(),
+		tools:       make(map[string][]ToolInfo),
 		logger:      logger,
 		cache:       cache.NewStore(),
 		connectMu:   make(map[string]*sync.Mutex),
-	}
+	})
 }
 
 // NewWithCache creates a new Registry with a custom cache store (for testing).
 func NewWithCache(logger logging.Logger, cacheStore *cache.Store) *Registry {
-	return &Registry{
+	return newRegistry(&Registry{
 		connections: make(map[string]*mcpConnection),
 		states:      make(map[string]*mcpState),
-		toolIndex:   NewToolIndex(),
+		tools:       make(map[string][]ToolInfo),
 		logger:      logger,
 		cache:       cacheStore,
 		connectMu:   make(map[string]*sync.Mutex),
+	})
+}
+
+// rebuildIndex snapshots the tool map under RLock, releases the lock, builds a
+// new immutable ToolIndex (applying any registered OverrideProvider), and
+// atomically stores it. Safe to call from any goroutine while mu is NOT held by
+// the caller — it acquires RLock internally.
+func (r *Registry) rebuildIndex() {
+	r.mu.RLock()
+	snapshot := make(map[string][]ToolInfo, len(r.tools))
+	for k, v := range r.tools {
+		cp := make([]ToolInfo, len(v))
+		copy(cp, v)
+		snapshot[k] = cp
 	}
+	provider := r.overrides
+	r.mu.RUnlock()
+
+	idx := buildIndex(snapshot, provider)
+	r.indexPtr.Store(idx)
+}
+
+// rebuildIndexLocked is like rebuildIndex but called when the caller already
+// holds mu (read or write). It snapshots from the existing r.tools copy that
+// the caller has already taken, bypassing the lock.
+func (r *Registry) rebuildIndexFromSnapshot(snapshot map[string][]ToolInfo, provider OverrideProvider) {
+	idx := buildIndex(snapshot, provider)
+	r.indexPtr.Store(idx)
+}
+
+// SetOverrideProvider registers an OverrideProvider and triggers a rebuild.
+// Pass nil to clear the provider.
+func (r *Registry) SetOverrideProvider(p OverrideProvider) {
+	r.mu.Lock()
+	r.overrides = p
+	// Take snapshot while holding write lock so we can release before CPU work.
+	snapshot := make(map[string][]ToolInfo, len(r.tools))
+	for k, v := range r.tools {
+		cp := make([]ToolInfo, len(v))
+		copy(cp, v)
+		snapshot[k] = cp
+	}
+	r.mu.Unlock()
+
+	idx := buildIndex(snapshot, p)
+	r.indexPtr.Store(idx)
+}
+
+// loadIndex returns the current immutable search index.
+// Callers must not cache the returned pointer across mutations.
+func (r *Registry) loadIndex() *ToolIndex {
+	return r.indexPtr.Load()
 }
 
 // SetConfigured registers an MCP as configured but not yet connected.
@@ -253,18 +332,20 @@ func (r *Registry) GetState(name string) MCPState {
 // Sets the MCP state to StateCached and initializes the per-MCP connect mutex.
 func (r *Registry) SetCached(cfg config.MCPConfig, tools []ToolInfo) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 
 	r.states[cfg.Name] = &mcpState{
 		config: cfg,
 		state:  StateCached,
 	}
 
-	r.toolIndex.Add(cfg.Name, tools)
+	r.tools[cfg.Name] = tools
 
 	if _, ok := r.connectMu[cfg.Name]; !ok {
 		r.connectMu[cfg.Name] = &sync.Mutex{}
 	}
+
+	r.mu.Unlock()
+	r.rebuildIndex()
 }
 
 // LoadCache loads cached tool metadata for all non-dynamic MCPs with valid cache entries.
@@ -382,7 +463,7 @@ func (r *Registry) updateCache(mcpName string) {
 		return
 	}
 	cfg := state.config
-	tools := r.toolIndex.GetAllForMCP(mcpName)
+	tools := r.loadIndex().GetAllForMCP(mcpName)
 	r.mu.RUnlock()
 
 	// Extract server info from the session
@@ -434,7 +515,7 @@ func (r *Registry) Status() []MCPFullStatus {
 
 		// Add tool count if connected or cached
 		if state.state == StateConnected || state.state == StateCached {
-			status.ToolCount = r.toolIndex.CountForMCP(name)
+			status.ToolCount = r.loadIndex().CountForMCP(name)
 		}
 
 		// Add error message if in error state
@@ -565,11 +646,12 @@ func (r *Registry) Connect(ctx context.Context, cfg config.MCPConfig) error {
 		r.logger.Warn("failed to index tools", "mcp_name", cfg.Name, "error", err)
 	}
 
-	toolCount := r.toolIndex.CountForMCP(cfg.Name)
-	r.logger.Info("connected to MCP", "mcp_name", cfg.Name, "type", cfg.Type, "tool_count", toolCount)
-
-	// Release lock before disk I/O for cache update
+	// Release lock before CPU-intensive index rebuild and disk I/O for cache update
 	r.mu.Unlock()
+	r.rebuildIndex()
+
+	toolCount := r.loadIndex().CountForMCP(cfg.Name)
+	r.logger.Info("connected to MCP", "mcp_name", cfg.Name, "type", cfg.Type, "tool_count", toolCount)
 
 	return nil
 }
@@ -577,10 +659,10 @@ func (r *Registry) Connect(ctx context.Context, cfg config.MCPConfig) error {
 // Disconnect disconnects an MCP server.
 func (r *Registry) Disconnect(name string) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 
 	conn, ok := r.connections[name]
 	if !ok {
+		r.mu.Unlock()
 		return fmt.Errorf("MCP not found: %s", name)
 	}
 
@@ -600,7 +682,10 @@ func (r *Registry) Disconnect(name string) error {
 	}
 
 	delete(r.connections, name)
-	r.toolIndex.Remove(name)
+	delete(r.tools, name)
+
+	r.mu.Unlock()
+	r.rebuildIndex()
 
 	return nil
 }
@@ -929,7 +1014,7 @@ func (r *Registry) List() []MCPStatus {
 
 		// Add tool count if connected or cached
 		if status.Connected || state.state == StateCached {
-			status.ToolCount = r.toolIndex.CountForMCP(name)
+			status.ToolCount = r.loadIndex().CountForMCP(name)
 		}
 
 		// Add error message if in error state
@@ -969,11 +1054,9 @@ func (r *Registry) HasMCP(name string) bool {
 }
 
 // SearchTools searches tools by query and/or MCP name.
+// Lock-free: reads from the atomic index snapshot.
 func (r *Registry) SearchTools(query, mcpName string) []ToolInfo {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	return r.toolIndex.Search(query, mcpName)
+	return r.loadIndex().Search(query, mcpName)
 }
 
 // GetMetadata returns full metadata for all connected MCPs.
@@ -993,7 +1076,7 @@ func (r *Registry) GetMetadata(ctx context.Context) []MCPMetadata {
 
 		// For cached MCPs, return tools from index (without connecting)
 		if state.state == StateCached {
-			metadata.Tools = r.toolIndex.GetAllForMCP(name)
+			metadata.Tools = r.loadIndex().GetAllForMCP(name)
 		}
 
 		// If connected, fetch full metadata
@@ -1108,7 +1191,7 @@ func (r *Registry) ExecuteTool(ctx context.Context, mcpName, toolName string, pa
 	if err != nil {
 		// Check for tool not found errors
 		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "unknown") {
-			availableTools := r.toolIndex.ListForMCP(mcpName)
+			availableTools := r.loadIndex().ListForMCP(mcpName)
 			return nil, &ToolNotFoundError{
 				MCPName:        mcpName,
 				ToolName:       toolName,
@@ -1180,7 +1263,7 @@ func (r *Registry) ExecuteToolRaw(ctx context.Context, mcpName, toolName string,
 	if err != nil {
 		// Check for tool not found errors
 		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "unknown") {
-			availableTools := r.toolIndex.ListForMCP(mcpName)
+			availableTools := r.loadIndex().ListForMCP(mcpName)
 			return nil, &ToolNotFoundError{
 				MCPName:        mcpName,
 				ToolName:       toolName,
@@ -1226,7 +1309,7 @@ func isParameterError(errMsg string) bool {
 // createParameterError creates an enhanced error with parameter suggestions.
 func (r *Registry) createParameterError(mcpName, toolName, originalError string, params map[string]any) error {
 	// Get the tool info to access its schema
-	toolInfo := r.toolIndex.GetTool(mcpName, toolName)
+	toolInfo := r.loadIndex().GetTool(mcpName, toolName)
 
 	// Collect provided parameter names
 	providedParams := make([]string, 0, len(params))
@@ -1358,7 +1441,7 @@ func (r *Registry) indexTools(ctx context.Context, mcpName string, session *mcp.
 			InputSchema: inputSchema,
 		})
 	}
-	r.toolIndex.Add(mcpName, tools)
+	r.tools[mcpName] = tools
 
 	return nil
 }
@@ -1840,7 +1923,10 @@ func (r *Registry) ConnectFromConfig(ctx context.Context, cfg *config.Config) er
 // AddToolsForTesting adds tools to the index for testing purposes.
 // This bypasses the normal connection flow and directly populates the index.
 func (r *Registry) AddToolsForTesting(mcpName string, tools []ToolInfo) {
-	r.toolIndex.Add(mcpName, tools)
+	r.mu.Lock()
+	r.tools[mcpName] = tools
+	r.mu.Unlock()
+	r.rebuildIndex()
 }
 
 // getValidToken retrieves a stored token and refreshes it if expired.
