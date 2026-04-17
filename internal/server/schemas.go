@@ -78,7 +78,7 @@ var manageMCPsInputSchema = json.RawMessage(`{
 	"properties": {
 		"action": {
 			"type": "string",
-			"description": "Action: register, unregister, reconnect, list, or status"
+			"description": "Action: register, unregister, reconnect, list, status, health_check, or list_stale_overrides"
 		},
 		"name": {
 			"type": "string",

@@ -541,16 +541,9 @@ func (s *Server) customizeImport(in CustomizeToolsInput) (*mcp.CallToolResult, c
 	return nil, out, nil
 }
 
-// rebuildOverrideIndex triggers a registry index rebuild so search_tools sees updated overrides.
-// It is a no-op if the server has no override provider wired yet (Task 16).
+// rebuildOverrideIndex re-registers the override provider on the registry,
+// triggering an index rebuild that applies current overrides and custom tools.
 func (s *Server) rebuildOverrideIndex() {
-	// If SetOverrideProvider was already called (Task 16), we need to re-call it
-	// so the index picks up the latest store state. We do this by passing through
-	// the existing provider. Since we don't hold a reference to it here, we
-	// trigger a rebuild via SetOverrideProvider(nil) + restore is not safe.
-	// Instead, call SetOverrideProvider with a fresh storeBackedProvider if
-	// the store is set; otherwise the registry index already has no overrides so
-	// no action needed.
 	if s.overrideStore == nil {
 		return
 	}

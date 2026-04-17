@@ -19,11 +19,11 @@ Customization is managed through the `customize_tools` meta-tool, which exposes 
 
 Customizations are stored at one of three scopes. Higher-priority scopes shadow lower ones; the original MCP tool is never modified.
 
-| Scope | File | Commit to git? |
-|-------|------|----------------|
-| `user` | `~/.config/slop-mcp/customizations.json` | No — personal |
-| `project` | `.slop-mcp-custom.kdl` in project root | Yes — shared with team |
-| `local` | `.slop-mcp-custom.local.kdl` in project root | No — git-ignored |
+| Scope | Directory | Files | Commit to git? |
+|-------|-----------|-------|----------------|
+| `user` | `~/.config/slop-mcp/memory/_slop/` | `_slop.overrides.json`, `_slop.tools.json` | No — personal |
+| `project` | `<repo>/.slop-mcp/memory/_slop/` | `_slop.overrides.json`, `_slop.tools.json` | Yes — shared with team |
+| `local` | `<repo>/.slop-mcp/memory.local/_slop/` | `_slop.overrides.json`, `_slop.tools.json` | No — git-ignored |
 
 When the same tool has overrides in multiple scopes, the order of precedence is: **local > project > user**.
 
@@ -167,40 +167,60 @@ Custom tools may call other custom tools. The call stack is limited to **16 fram
 
 ## Import / Export
 
-Customizations can be packaged into a portable JSON file — a *customization pack* — for sharing across machines or repositories.
+Customizations can be packaged into a portable JSON object — a *customization pack* — for sharing across machines or repositories. The server never reads or writes files directly; the agent handles file I/O using its own filesystem tools.
 
 ### Exporting a pack
+
+Call `export` with the scope (and optionally an MCP name to filter):
 
 ```json
 {
   "action": "export",
-  "scope": "project",
-  "path": "./figma-custom-pack.json"
-}
-```
-
-The exported file contains all overrides and custom tools at the specified scope, plus the schema hashes used for staleness detection.
-
-### Importing a pack
-
-```json
-{
-  "action": "import",
-  "path": "./figma-custom-pack.json",
+  "mcp": "figma",
   "scope": "project"
 }
 ```
 
-Importing merges the pack into the target scope. Existing entries are overwritten; entries not in the pack are untouched. The schema hashes are imported as-is — if the current MCP version differs, imported overrides may immediately appear stale.
+The response includes a `pack` field containing the full customization pack:
+
+```json
+{
+  "ok": true,
+  "action": "export",
+  "affected": 4,
+  "pack": {
+    "schema_version": 1,
+    "scope": "project",
+    "overrides": [...],
+    "custom_tools": [...]
+  }
+}
+```
+
+The agent is responsible for persisting the pack — serialize `pack` to a file using your filesystem tools.
+
+### Importing a pack
+
+Read the previously saved file with your filesystem tools, then pass the JSON string as the `data` argument:
+
+```json
+{
+  "action": "import",
+  "data": "<the pack JSON as a string>",
+  "scope": "project",
+  "overwrite": false
+}
+```
+
+Importing merges the pack into the target scope. By default, existing entries are not overwritten; set `overwrite: true` to replace them. The schema hashes are imported as-is — if the current MCP version differs, imported overrides may immediately appear stale.
 
 ### Sharing via git
 
-Export to a versioned file in your repository, then commit it. Teammates run `import` once after pulling. Because `project` scope writes to `.slop-mcp-custom.kdl` (which is committed), the pack file can be a convenience snapshot rather than the primary storage:
+1. Export the pack and save it to a file in your repository (e.g. `.slop-mcp-packs/figma.json`).
+2. Commit that file to git.
+3. Teammates pull and then import: read the file contents and pass them as `data` in an `import` call.
 
-```
-# One-time setup after clone
-customize_tools import path: ./.slop-mcp-packs/figma.json scope: project
-```
+The `project` scope files (`.slop-mcp/memory/_slop/`) are also committed, so the pack serves as an explicit snapshot that can be inspected and reviewed in pull requests.
 
 ## Staleness and Upgrades
 
@@ -266,21 +286,21 @@ Rather than calling `get_file` and parsing the result every time, define a custo
 ```json
 {
   "action": "export",
-  "scope": "project",
-  "path": "./.slop-mcp-packs/figma.json"
+  "mcp": "figma",
+  "scope": "project"
 }
 ```
 
-Commit `.slop-mcp-packs/figma.json` to the repository.
+The response `pack` field contains the serializable pack object. Save it to `.slop-mcp-packs/figma.json` using your filesystem tools, then commit that file.
 
 **Step 5 — Teammates import.**
 
-After pulling, each teammate runs:
+After pulling, each teammate reads `.slop-mcp-packs/figma.json` and runs:
 
 ```json
 {
   "action": "import",
-  "path": "./.slop-mcp-packs/figma.json",
+  "data": "<contents of figma.json as a string>",
   "scope": "project"
 }
 ```
