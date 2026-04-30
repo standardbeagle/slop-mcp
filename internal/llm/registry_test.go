@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -68,16 +69,7 @@ func TestRegistry_AgentNotFound(t *testing.T) {
 	}
 	// Error message must list candidates
 	msg := err.Error()
-	if !contains(msg, "summarizer") || !contains(msg, "reviewer") {
+	if !strings.Contains(msg, "summarizer") || !strings.Contains(msg, "reviewer") {
 		t.Fatalf("error must list known agents, got %q", msg)
 	}
-}
-
-func contains(s, sub string) bool {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
 }

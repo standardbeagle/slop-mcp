@@ -50,11 +50,11 @@ func (r *Registry) RegisterProvider(p Provider) {
 }
 
 func (r *Registry) RegisterAgent(a *AgentDef) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if a.MaxIters == 0 {
 		a.MaxIters = defaultMaxIters
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.agents[a.Name] = a
 }
 
@@ -70,30 +70,45 @@ func (r *Registry) SetChain(names []string) {
 // Otherwise, the chain is walked.
 func (r *Registry) Resolve(ctx context.Context, name string) (*AgentDef, Provider, error) {
 	r.mu.RLock()
-	defer r.mu.RUnlock()
-
 	def := r.lookupOrDefault(name)
 	if def == nil {
-		return nil, nil, r.unknownAgentError(name)
+		err := r.unknownAgentError(name)
+		r.mu.RUnlock()
+		return nil, nil, err
 	}
-
-	// Honour explicit backend if available.
+	var backendProvider Provider
 	if def.Backend != "" {
-		if p, ok := r.providers[def.Backend]; ok && p.Available(ctx) {
-			return def, p, nil
-		}
+		backendProvider = r.providers[def.Backend]
+	}
+	chain := append([]string(nil), r.chain...)
+	providerSnapshot := make(map[string]Provider, len(r.providers))
+	for k, v := range r.providers {
+		providerSnapshot[k] = v
+	}
+	r.mu.RUnlock()
+
+	// Honour explicit backend if available — probe without lock.
+	if backendProvider != nil && backendProvider.Available(ctx) {
+		return def, backendProvider, nil
 	}
 
 	// Walk fall-through chain.
+	if len(chain) == 0 {
+		return nil, nil, fmt.Errorf("no llm backend available: chain is empty")
+	}
 	var failures []string
-	for _, n := range r.chain {
-		p, ok := r.providers[n]
+	for _, n := range chain {
+		p, ok := providerSnapshot[n]
 		if !ok {
 			failures = append(failures, fmt.Sprintf("%s: not registered", n))
 			continue
 		}
 		if !p.Available(ctx) {
-			failures = append(failures, fmt.Sprintf("%s: unavailable", n))
+			reason := p.UnavailableReason()
+			if reason == "" {
+				reason = "unavailable"
+			}
+			failures = append(failures, fmt.Sprintf("%s: %s", n, reason))
 			continue
 		}
 		return def, p, nil
