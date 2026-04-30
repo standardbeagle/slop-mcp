@@ -6,12 +6,14 @@
 
 ## Summary
 
-Add an `llm()` builtin to the SLOP runtime in slop-mcp. SLOP scripts call language models without leaving the script. Backed by four pluggable providers in fall-through order: MCP sampling, ACP (subprocess agent), GitHub Copilot SDK, and any OpenAI-compatible HTTP endpoint. Named agents defined in KDL config bind a backend, model, system prompt, tool whitelist, and loop budget. The builtin runs a full agentic tool-use loop against slop-mcp's existing tool surface (registered MCPs + SLOP builtins), emits MCP progress notifications during streaming, and falls through to the next provider when one is unavailable.
+Add an `llm()` builtin to the SLOP runtime in slop-mcp. SLOP scripts call language models without leaving the script. Backed by three pluggable providers in fall-through order: ACP (subprocess agent), GitHub Copilot, and any OpenAI-compatible HTTP endpoint. Named agents defined in KDL config bind a backend, model, system prompt, tool whitelist, and loop budget. The builtin runs a full agentic tool-use loop against slop-mcp's existing tool surface (registered MCPs + SLOP builtins), emits MCP progress notifications during streaming, and falls through to the next provider when one is unavailable.
+
+MCP sampling was considered and dropped: insufficient client support across the agents that matter (most popular MCP clients do not implement the sampling capability) and the per-request user-consent flow is too heavy for an in-script call.
 
 ## Goals
 
 - Single SLOP function `llm(prompt, ...kwargs)` returning final assistant text.
-- Four backend providers behind one interface.
+- Three backend providers behind one interface.
 - Capability-based fall-through chain (no manual probing in user scripts).
 - Named agents in KDL config; per-call kwargs override agent defaults.
 - Agentic tool-use loop with `max_iters` budget.
@@ -39,9 +41,8 @@ internal/llm/
 ├── chain.go             # Fall-through resolution
 ├── loop.go              # Agentic tool-use loop
 └── providers/
-    ├── sampling.go      # MCP CreateMessage via active ServerSession
     ├── acp.go           # ACP client (subprocess agent)
-    ├── copilot.go       # GitHub Copilot SDK
+    ├── copilot.go       # GitHub Copilot (OpenAI-compatible w/ Copilot auth)
     └── openai.go        # OpenAI-compatible HTTP
 
 internal/builtins/llm.go # rt.RegisterBuiltin("llm", ...) + llm_last() helper
@@ -50,13 +51,10 @@ internal/config/         # extend KDL: llm {} and agent {} blocks
 
 ### Wire-up
 
-`cmd/slop-mcp/serve` constructs the `llm.Registry` once at startup, injects the
-active `*mcp.ServerSession` lazily through a getter (sampling needs it but it
-isn't available until the client initializes). The `llm` builtin closure
-captures the registry and the session getter. The `run` subcommand
-(one-shot CLI) constructs the same registry but with a nil session getter —
-the sampling provider's `Available()` returns false there and the chain falls
-through.
+Both `cmd/slop-mcp/serve` and the `run` subcommand construct the same
+`llm.Registry` at startup. The `llm` builtin closure captures the registry.
+No active-session injection needed — none of the providers depend on the
+MCP client session.
 
 The `llm` builtin reaches into slop-mcp's existing tool surface to execute
 tools requested by the model: it calls the same internal path used by
@@ -67,9 +65,8 @@ This keeps the tool surface identical to what scripts already see.
 
 Each provider implements:
 
-- `Name()` — stable identifier (`"sampling"`, `"acp"`, `"copilot"`, `"openai"`).
-- `Available(ctx)` — capability check. Sampling: session present and client
-  advertised the sampling capability. ACP: subprocess spawned and handshake
+- `Name()` — stable identifier (`"acp"`, `"copilot"`, `"openai"`).
+- `Available(ctx)` — capability check. ACP: subprocess spawned and handshake
   succeeded. Copilot: OAuth token present and unexpired. OpenAI: API key
   resolved.
 - `Sample(ctx, req, onEvent)` — issue a request, return final response.
@@ -87,23 +84,22 @@ Exact Go signatures and types live in code; this document covers behavior.
 
 ## Fall-through chain
 
-Configured in KDL as `chain "sampling" "acp" "copilot" "openai"`.
+Configured in KDL as `chain "acp" "copilot" "openai"`.
 
 - Triggered when an agent's backend is unset, OR when its bound backend's
   `Available()` returns false at call time.
 - Walk in order; first `Available()=true` provider wins.
 - Decision is per-call only. Capability state can change mid-session
-  (e.g., MCP client connects after slop-mcp startup, an OAuth token
-  refreshes). Caching across calls would mask these transitions.
-- All four unavailable: return `ErrorValue` listing each provider's failure
-  reason ("sampling: no client session", "openai: OPENAI_API_KEY unset", …).
-  SLOP `try`/`catch` recoverable.
+  (e.g., an OAuth token refreshes, an ACP subprocess respawns). Caching
+  across calls would mask these transitions.
+- All three unavailable: return `ErrorValue` listing each provider's failure
+  reason ("openai: OPENAI_API_KEY unset", …). SLOP `try`/`catch` recoverable.
 
 ## Agent registry + KDL config
 
 ```kdl
 llm {
-    chain "sampling" "acp" "copilot" "openai"
+    chain "acp" "copilot" "openai"
 
     provider "openai" {
         base_url "https://api.openai.com/v1"
@@ -115,9 +111,6 @@ llm {
     }
     provider "acp" {
         command "zed-agent" "--stdio"
-    }
-    provider "sampling" {
-        default_model_hint "claude-sonnet-4"
     }
 
     tool_timeout 60     // per-tool-call timeout in seconds
@@ -208,8 +201,6 @@ token-by-token output.
   hint flag. Network/5xx errors auto-retry once with exponential backoff.
 - Auth errors (401/403) skip retry, mark provider unavailable for the
   remainder of the current call, fall through to the next.
-- Sampling rejected by client (user denied): treated as auth error
-  semantics — fall through.
 - Agent not found: `ErrorValue` listing registered agents and similarity
   suggestions, reusing the existing pattern from `MCPNotFoundError` and
   friends.
@@ -226,19 +217,16 @@ token-by-token output.
   recommended idiom; the example config uses env-var form.
 - Copilot OAuth tokens stored via the existing `auth_mcp` token store; no
   new secret-storage code path.
-- Sampling requests inherit the client's existing trust boundary —
-  slop-mcp does not add new permissions there.
 
 ## Testing
 
-- Unit tests per provider with HTTP fakes (OpenAI), a fake `ServerSession`
-  (sampling), a fake ACP subprocess (round-trip JSON-RPC over a pipe),
-  and a stub Copilot HTTP layer.
+- Unit tests per provider with HTTP fakes (OpenAI), a fake ACP subprocess
+  (round-trip JSON-RPC over a pipe), and a stub Copilot HTTP layer.
 - Tool-loop tests: a scripted mock provider emits a deterministic sequence
   of `tool_use` and `end_turn` responses. Verify whitelist enforcement,
   `max_iters` halt, error feed-back, sequential ordering.
 - Chain tests: providers with controlled `Available()` flags. Assert
-  resolution order, skip-on-unavailable, error aggregation when all four
+  resolution order, skip-on-unavailable, error aggregation when all three
   are unavailable.
 - Integration: real OpenAI-compatible endpoint (llama.cpp / ollama) behind
   the existing `integration` build tag plus `LLM_INTEGRATION_TEST=1`.
@@ -255,7 +243,7 @@ token-by-token output.
 
 ## Milestones
 
-1. **v1 (this spec):** providers (sampling, openai, copilot, acp-client),
+1. **v1 (this spec):** providers (openai, copilot, acp-client),
    registry + KDL, builtin, tool-use loop, progress notifications, fall-
    through chain, tests.
 2. **v2 (separate spec):** `slop-mcp acp-serve` subcommand. Listens on
@@ -283,8 +271,8 @@ token-by-token output.
 - `internal/builtins/slop_reference.go` — add "llm" category entries
 - `internal/config/config.go` (or sibling) — extend KDL parser for
   `llm {}` and `agent {}` blocks
-- `cmd/slop-mcp/serve.go` — wire registry into runtime, expose session
-  getter
+- `cmd/slop-mcp/serve.go` and the `run` subcommand — construct registry,
+  inject builtin into runtime
 - `internal/server/server.go` — pass progress-emitter into builtin context
   during `run_slop` handler
 - `go.mod` — Copilot: no official Go SDK exists; talk to Copilot's
