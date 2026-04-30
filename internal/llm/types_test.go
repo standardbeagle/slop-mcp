@@ -21,7 +21,7 @@ func TestMessage_JSONRoundTrip(t *testing.T) {
 }
 
 func TestStopReason_Constants(t *testing.T) {
-	if StopReasonEndTurn == "" || StopReasonToolUse == "" || StopReasonMaxTokens == "" {
+	if StopReasonEndTurn == "" || StopReasonToolUse == "" || StopReasonMaxTokens == "" || StopReasonStopSequence == "" {
 		t.Fatal("stop-reason constants must be non-empty")
 	}
 }
