@@ -2,6 +2,7 @@
 package providers
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -36,7 +37,11 @@ type OpenAIConfig struct {
 }
 
 // OpenAI is an OpenAI-compatible chat-completions provider.
-// Streaming is not yet implemented (Task 16); onEvent is ignored.
+// When Sample is called with a non-nil onEvent, it uses SSE streaming.
+// Tool-call streaming is not supported in v1: if finish_reason=="tool_calls"
+// arrives mid-stream, the stream is aborted and a second blocking request is
+// made to retrieve the structured tool_calls reliably. This costs two HTTP
+// round-trips but avoids the complexity of reassembling tool-call deltas.
 type OpenAI struct {
 	cfg OpenAIConfig
 }
@@ -131,9 +136,18 @@ type chatResp struct {
 	Model string `json:"model"`
 }
 
-// Sample issues a blocking chat-completions request. onEvent is accepted for
-// interface compliance but ignored until Task 16 adds streaming support.
-func (o *OpenAI) Sample(ctx context.Context, req *llm.Request, _ func(llm.StreamEvent)) (*llm.Response, error) {
+// Sample issues a chat-completions request. If onEvent is non-nil, streams
+// SSE deltas via onEvent and fires a final Done event. If onEvent is nil,
+// uses the blocking (non-streaming) path.
+func (o *OpenAI) Sample(ctx context.Context, req *llm.Request, onEvent func(llm.StreamEvent)) (*llm.Response, error) {
+	if onEvent != nil {
+		return o.sampleStreaming(ctx, req, onEvent)
+	}
+	return o.sampleBlocking(ctx, req)
+}
+
+// sampleBlocking issues a single blocking chat-completions request.
+func (o *OpenAI) sampleBlocking(ctx context.Context, req *llm.Request) (*llm.Response, error) {
 	model := req.Model
 	if model == "" {
 		model = o.cfg.DefaultModel
@@ -190,17 +204,129 @@ func (o *OpenAI) Sample(ctx context.Context, req *llm.Request, _ func(llm.Stream
 			Arguments: json.RawMessage(tc.Function.Arguments),
 		})
 	}
-	switch c.FinishReason {
-	case "tool_calls":
-		out.StopReason = llm.StopReasonToolUse
-	case "length":
-		out.StopReason = llm.StopReasonMaxTokens
-	case "stop":
-		out.StopReason = llm.StopReasonEndTurn
-	default:
-		out.StopReason = llm.StopReason(c.FinishReason)
-	}
+	out.StopReason = mapFinishReason(c.FinishReason)
 	return out, nil
+}
+
+// sseChunk is the per-chunk shape from an OpenAI SSE stream.
+type sseChunk struct {
+	Choices []struct {
+		Delta struct {
+			Content string `json:"content"`
+		} `json:"delta"`
+		FinishReason *string `json:"finish_reason"`
+	} `json:"choices"`
+}
+
+// sampleStreaming requests stream:true, parses SSE, dispatches deltas, and
+// falls back to sampleBlocking if tool_calls are detected mid-stream (v1
+// limitation — see struct-level comment).
+func (o *OpenAI) sampleStreaming(ctx context.Context, req *llm.Request, onEvent func(llm.StreamEvent)) (*llm.Response, error) {
+	model := req.Model
+	if model == "" {
+		model = o.cfg.DefaultModel
+	}
+
+	type streamReq struct {
+		chatReq
+		Stream bool `json:"stream"`
+	}
+	body, err := json.Marshal(streamReq{chatReq: buildChatReq(model, req), Stream: true})
+	if err != nil {
+		return nil, fmt.Errorf("marshal: %w", err)
+	}
+
+	url := strings.TrimRight(o.cfg.BaseURL, "/") + "/chat/completions"
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "text/event-stream")
+	o.cfg.AuthHeader(httpReq)
+
+	httpResp, err := o.cfg.HTTPClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", o.cfg.Name, err)
+	}
+	defer httpResp.Body.Close()
+
+	if httpResp.StatusCode/100 != 2 {
+		buf, _ := io.ReadAll(io.LimitReader(httpResp.Body, 2048))
+		snippet := strings.TrimSpace(string(buf))
+		if len(snippet) > 512 {
+			snippet = snippet[:512] + "…"
+		}
+		return nil, fmt.Errorf("%s: http %d: %s", o.cfg.Name, httpResp.StatusCode, snippet)
+	}
+
+	out := &llm.Response{}
+	scanner := bufio.NewReader(httpResp.Body)
+	toolCallsDetected := false
+
+	for {
+		line, err := scanner.ReadString('\n')
+		line = strings.TrimSpace(line)
+		if line == "data: [DONE]" {
+			break
+		}
+		if strings.HasPrefix(line, "data: ") {
+			payload := line[len("data: "):]
+			var chunk sseChunk
+			if jsonErr := json.Unmarshal([]byte(payload), &chunk); jsonErr != nil {
+				// tolerate malformed chunks
+				if err != nil {
+					break
+				}
+				continue
+			}
+			if len(chunk.Choices) > 0 {
+				choice := chunk.Choices[0]
+				if delta := choice.Delta.Content; delta != "" {
+					out.Content += delta
+					onEvent(llm.StreamEvent{Delta: delta})
+				}
+				if choice.FinishReason != nil {
+					fr := *choice.FinishReason
+					if fr == "tool_calls" {
+						toolCallsDetected = true
+						break
+					}
+					out.StopReason = mapFinishReason(fr)
+				}
+			}
+		}
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return nil, fmt.Errorf("%s: read stream: %w", o.cfg.Name, err)
+		}
+	}
+
+	// Tool-call streaming: fall back to a blocking refetch to get structured
+	// tool_calls. This costs two HTTP round-trips but avoids the complexity
+	// of reassembling tool-call argument deltas (v1 known limitation).
+	if toolCallsDetected {
+		return o.sampleBlocking(ctx, req)
+	}
+
+	onEvent(llm.StreamEvent{Done: true, Final: out})
+	return out, nil
+}
+
+// mapFinishReason converts an OpenAI finish_reason string to a StopReason.
+func mapFinishReason(fr string) llm.StopReason {
+	switch fr {
+	case "tool_calls":
+		return llm.StopReasonToolUse
+	case "length":
+		return llm.StopReasonMaxTokens
+	case "stop":
+		return llm.StopReasonEndTurn
+	default:
+		return llm.StopReason(fr)
+	}
 }
 
 func buildChatReq(model string, in *llm.Request) chatReq {

@@ -3,6 +3,7 @@ package providers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -109,5 +110,37 @@ func TestOpenAI_UnavailableReason(t *testing.T) {
 	p2 := NewOpenAI(OpenAIConfig{BaseURL: "http://x", APIKey: "k", DefaultModel: "m"})
 	if reason := p2.UnavailableReason(); reason != "" {
 		t.Fatalf("UnavailableReason should be empty when available, got %q", reason)
+	}
+}
+
+func TestOpenAI_Streaming(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		flusher := w.(http.Flusher)
+		fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":\"hel\"}}]}\n\n")
+		flusher.Flush()
+		fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}, \"finish_reason\":\"stop\"}]}\n\n")
+		flusher.Flush()
+		fmt.Fprintf(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+	defer srv.Close()
+
+	p := NewOpenAI(OpenAIConfig{BaseURL: srv.URL, APIKey: "k", DefaultModel: "m"})
+	var collected string
+	resp, err := p.Sample(context.Background(), &llm.Request{
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}},
+	}, func(ev llm.StreamEvent) {
+		collected += ev.Delta
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if collected != "hello" {
+		t.Fatalf("collected deltas: %q", collected)
+	}
+	if resp.Content != "hello" {
+		t.Fatalf("final content: %q", resp.Content)
 	}
 }
