@@ -27,7 +27,9 @@ func (e *MaxItersExceededError) Error() string {
 // Caller responsibilities:
 //   - Resolve the provider via Registry first.
 //   - Pre-populate req.Messages with the user input. The loop appends
-//     assistant + tool messages as it iterates.
+//     assistant and tool messages to req.Messages in place across
+//     iterations — callers should not reuse the same Request after
+//     a Run call without resetting Messages.
 //
 // Run sets req.Tools by calling host.List(ctx, def.Tools).
 func Run(
@@ -38,15 +40,16 @@ func Run(
 	req *Request,
 	onEvent func(StreamEvent),
 ) (*LoopResult, error) {
-	if def.MaxIters <= 0 {
-		def.MaxIters = defaultMaxIters
+	maxIters := def.MaxIters
+	if maxIters <= 0 {
+		maxIters = defaultMaxIters
 	}
 
 	req.Tools = host.List(ctx, def.Tools)
 
 	out := &LoopResult{Provider: prov.Name()}
 
-	for i := 0; i < def.MaxIters; i++ {
+	for i := 0; i < maxIters; i++ {
 		resp, err := prov.Sample(ctx, req, onEvent)
 		if err != nil {
 			return out, err
@@ -84,5 +87,5 @@ func Run(
 		}
 	}
 
-	return out, &MaxItersExceededError{Iters: def.MaxIters}
+	return out, &MaxItersExceededError{Iters: maxIters}
 }
