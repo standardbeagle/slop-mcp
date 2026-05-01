@@ -94,13 +94,13 @@ func (r *Registry) Resolve(ctx context.Context, name string) (*AgentDef, Provide
 
 	// Walk fall-through chain.
 	if len(chain) == 0 {
-		return nil, nil, fmt.Errorf("no llm backend available: chain is empty")
+		return nil, nil, &NoBackendError{}
 	}
-	var failures []string
+	var failures []ProviderFailure
 	for _, n := range chain {
 		p, ok := providerSnapshot[n]
 		if !ok {
-			failures = append(failures, fmt.Sprintf("%s: not registered", n))
+			failures = append(failures, ProviderFailure{Name: n, Reason: "not registered"})
 			continue
 		}
 		if !p.Available(ctx) {
@@ -108,13 +108,13 @@ func (r *Registry) Resolve(ctx context.Context, name string) (*AgentDef, Provide
 			if reason == "" {
 				reason = "unavailable"
 			}
-			failures = append(failures, fmt.Sprintf("%s: %s", n, reason))
+			failures = append(failures, ProviderFailure{Name: n, Reason: reason})
 			continue
 		}
 		return def, p, nil
 	}
 
-	return nil, nil, fmt.Errorf("no llm backend available: %s", strings.Join(failures, "; "))
+	return nil, nil, &NoBackendError{Failures: failures}
 }
 
 func (r *Registry) lookupOrDefault(name string) *AgentDef {
