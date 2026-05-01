@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestNoBackendError_Unwrap(t *testing.T) {
+func TestNoBackendError_ErrorsAs(t *testing.T) {
 	err := &NoBackendError{
 		Failures: []ProviderFailure{
 			{Name: "openai", Reason: "OPENAI_API_KEY unset"},

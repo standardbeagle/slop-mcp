@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -71,5 +72,18 @@ func TestRegistry_AgentNotFound(t *testing.T) {
 	msg := err.Error()
 	if !strings.Contains(msg, "summarizer") || !strings.Contains(msg, "reviewer") {
 		t.Fatalf("error must list known agents, got %q", msg)
+	}
+}
+
+func TestRegistry_ResolveEmptyChain(t *testing.T) {
+	r := NewRegistry()
+	// No providers, no chain.
+	_, _, err := r.Resolve(context.Background(), "")
+	var nbe *NoBackendError
+	if !errors.As(err, &nbe) {
+		t.Fatalf("want *NoBackendError, got %T: %v", err, err)
+	}
+	if len(nbe.Failures) != 0 {
+		t.Fatalf("empty chain should produce zero failures, got %d", len(nbe.Failures))
 	}
 }
