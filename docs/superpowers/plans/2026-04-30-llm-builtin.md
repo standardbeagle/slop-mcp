@@ -1389,9 +1389,9 @@ type AgentConfig struct {
 
 - [ ] **Step 4: Implement parse paths**
 
-Extend the existing KDL block-parsing switch to handle `llm` and `agent`. Use the same helpers (`children()`, `arg(...)`, etc.) the file already uses for `mcp` and `customization`. Reject unknown keys inside the blocks with an error (consistent with existing strictness).
+Extend the existing KDL block-parsing switch to handle `llm` and `agent`. Use whatever helpers the surrounding parser uses (this codebase ships a `kdl.Unmarshal`-based struct-tag pipeline; new blocks should follow the same `KDL*Config` raw type → domain type convert pattern as `KDLMCPConfig`/`MCPConfig`). Unknown keys inside blocks are silently ignored — that matches the existing parser's behavior, the spec did not call for stricter validation than `mcp` blocks already get.
 
-Three-tier merge: in the existing merge code that handles `MCPs`, add merging for `Agents` (later layer fully replaces by name) and `LLM` (later layer overrides whole struct if present, or merges providers map with name-replacement).
+Three-tier merge: in the existing merge code that handles `MCPs`, add field-level merging for `Agents` (later layer fully replaces by name) and `LLM` (later layer's providers merge into earlier layer's providers by name; chain only overrides when the incoming layer's chain is non-empty; tool_timeout overrides when non-zero). This lets a project config add a provider without re-declaring the chain.
 
 - [ ] **Step 5: Run tests**
 
@@ -2408,6 +2408,8 @@ git commit -m "feat(server): ToolHost adapter bridging registry to llm builtin"
 - `internal/server/custom_exec.go` (line ~126 — custom-tool runtime)
 - `cmd/slop-mcp/run.go` (line ~93 — one-shot CLI)
 - `cmd/slop-mcp/monitor.go` (line ~111 — monitor mode)
+
+**Pre-step — three-tier merge for LLM and Agents:** `cmd/slop-mcp/run.go` and `cmd/slop-mcp/monitor.go` currently merge only the `MCPs` map across user/project/local config tiers. Before constructing the registry, walk the same three configs and merge their `LLM` and `Agents` fields (use `config.Merge` if it covers all of these, or call `mergeLLM` and replicate the agent map merge inline if not). Without this, `llm{}` and `agent{}` blocks declared in a project's `.slop-mcp.kdl` would have no effect from the `run`/`monitor` subcommands.
 
 Each site already calls `builtins.RegisterCrypto(rt)` and friends. Add:
 

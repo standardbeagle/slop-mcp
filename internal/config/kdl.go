@@ -461,7 +461,7 @@ func ParseKDLConfig(data string, source Source) (*Config, error) {
 // convertKDLLLM converts a raw KDL llm block into the domain LLMConfig type.
 func convertKDLLLM(raw *KDLLLMConfig) *LLMConfig {
 	llm := &LLMConfig{
-		Chain:          raw.Chain,
+		Chain:          append([]string(nil), raw.Chain...),
 		ToolTimeoutSec: raw.ToolTimeoutSec,
 		Providers:      make(map[string]*LLMProviderConfig, len(raw.Providers)),
 	}
@@ -535,6 +535,10 @@ func RemoveMCPFromFile(path, name string) error {
 }
 
 // WriteConfigFile writes a config to a KDL file.
+//
+// Only the MCPs map is serialized. LLM and Agents are read-only at the
+// management layer today; round-tripping a Config through this function
+// drops them. The MCP management commands are the only callers.
 func WriteConfigFile(path string, cfg *Config) error {
 	// Ensure directory exists
 	dir := filepath.Dir(path)
