@@ -18,7 +18,38 @@ const (
 
 // KDLConfig is the raw KDL structure for unmarshaling.
 type KDLConfig struct {
-	MCPs []KDLMCPConfig `kdl:"mcp,multiple"`
+	MCPs   []KDLMCPConfig   `kdl:"mcp,multiple"`
+	LLM    *KDLLLMConfig    `kdl:"llm"`
+	Agents []KDLAgentConfig `kdl:"agent,multiple"`
+}
+
+// KDLLLMConfig is the raw KDL structure for the llm{} block.
+type KDLLLMConfig struct {
+	Chain          []string                       `kdl:"chain"`
+	Providers      map[string]KDLProviderConfig   `kdl:"provider,multiple"`
+	ToolTimeoutSec int                            `kdl:"tool_timeout"`
+}
+
+// KDLProviderConfig is the raw KDL structure for a provider{} child block.
+type KDLProviderConfig struct {
+	BaseURL      string   `kdl:"base_url"`
+	APIKey       string   `kdl:"api_key"`
+	APIKeyEnv    string   `kdl:"api_key_env"`
+	DefaultModel string   `kdl:"default_model"`
+	Command      []string `kdl:"command"`
+	URL          string   `kdl:"url"`
+}
+
+// KDLAgentConfig is the raw KDL structure for an agent "name"{} block.
+type KDLAgentConfig struct {
+	Name        string   `kdl:",arg"`
+	Backend     string   `kdl:"backend"`
+	Model       string   `kdl:"model"`
+	System      string   `kdl:"system"`
+	Tools       []string `kdl:"tools"`
+	Temperature *float64 `kdl:"temperature"`
+	MaxTokens   *int     `kdl:"max_tokens"`
+	MaxIters    int      `kdl:"max_iters"`
 }
 
 // KDLMCPConfig represents an MCP node in KDL.
@@ -415,7 +446,51 @@ func ParseKDLConfig(data string, source Source) (*Config, error) {
 		}
 	}
 
+	if kdlCfg.LLM != nil {
+		cfg.LLM = convertKDLLLM(kdlCfg.LLM)
+	}
+
+	for _, a := range kdlCfg.Agents {
+		agent := convertKDLAgent(a)
+		cfg.Agents[agent.Name] = agent
+	}
+
 	return cfg, nil
+}
+
+// convertKDLLLM converts a raw KDL llm block into the domain LLMConfig type.
+func convertKDLLLM(raw *KDLLLMConfig) *LLMConfig {
+	llm := &LLMConfig{
+		Chain:          raw.Chain,
+		ToolTimeoutSec: raw.ToolTimeoutSec,
+		Providers:      make(map[string]*LLMProviderConfig, len(raw.Providers)),
+	}
+	for name, p := range raw.Providers {
+		provider := p // avoid loop-var capture
+		llm.Providers[name] = &LLMProviderConfig{
+			BaseURL:      provider.BaseURL,
+			APIKey:       provider.APIKey,
+			APIKeyEnv:    provider.APIKeyEnv,
+			DefaultModel: provider.DefaultModel,
+			Command:      provider.Command,
+			URL:          provider.URL,
+		}
+	}
+	return llm
+}
+
+// convertKDLAgent converts a raw KDL agent block into the domain AgentConfig type.
+func convertKDLAgent(raw KDLAgentConfig) *AgentConfig {
+	return &AgentConfig{
+		Name:        raw.Name,
+		Backend:     raw.Backend,
+		Model:       raw.Model,
+		System:      raw.System,
+		Tools:       raw.Tools,
+		Temperature: raw.Temperature,
+		MaxTokens:   raw.MaxTokens,
+		MaxIters:    raw.MaxIters,
+	}
 }
 
 // AddMCPToFile adds an MCP configuration to a KDL file.

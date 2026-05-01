@@ -4,7 +4,9 @@ import "encoding/json"
 
 // Config represents the merged configuration from user and project sources.
 type Config struct {
-	MCPs map[string]MCPConfig
+	MCPs   map[string]MCPConfig
+	LLM    *LLMConfig
+	Agents map[string]*AgentConfig
 }
 
 // MCPConfig represents a single MCP server configuration.
@@ -84,10 +86,43 @@ func (s Source) String() string {
 	}
 }
 
+// LLMConfig holds LLM provider configuration for the llm{} KDL block.
+type LLMConfig struct {
+	// Chain is the ordered list of provider names to try for LLM calls.
+	Chain []string
+	// Providers maps provider name to its configuration.
+	Providers map[string]*LLMProviderConfig
+	// ToolTimeoutSec is the timeout in seconds for tool calls made by LLM agents.
+	ToolTimeoutSec int
+}
+
+// LLMProviderConfig holds configuration for a single LLM provider.
+type LLMProviderConfig struct {
+	BaseURL      string
+	APIKey       string   // literal API key; prefer APIKeyEnv
+	APIKeyEnv    string   // name of env var holding the API key
+	DefaultModel string
+	Command      []string // ACP only: subprocess argv
+	URL          string   // ACP only: socket URL alternative
+}
+
+// AgentConfig holds configuration for a named agent defined with agent "name"{} in KDL.
+type AgentConfig struct {
+	Name        string
+	Backend     string
+	Model       string
+	System      string
+	Tools       []string
+	Temperature *float64
+	MaxTokens   *int
+	MaxIters    int
+}
+
 // NewConfig creates an empty config.
 func NewConfig() *Config {
 	return &Config{
-		MCPs: make(map[string]MCPConfig),
+		MCPs:   make(map[string]MCPConfig),
+		Agents: make(map[string]*AgentConfig),
 	}
 }
 

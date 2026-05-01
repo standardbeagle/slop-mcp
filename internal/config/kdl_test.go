@@ -943,3 +943,175 @@ func TestFormatMCPBlock_RoundTripWithTimeout(t *testing.T) {
 
 	assert.Equal(t, original.Timeout, parsed.Timeout)
 }
+
+func TestParse_LLMAndAgents(t *testing.T) {
+	src := `
+llm {
+    chain "acp" "openai"
+    provider "openai" {
+        base_url "https://api.example.com/v1"
+        api_key_env "FOO_KEY"
+        default_model "m1"
+    }
+    tool_timeout 30
+}
+agent "summarizer" {
+    backend "openai"
+    model "m1"
+    system "Be brief."
+    max_iters 1
+}
+`
+	cfg, err := ParseKDLConfig(src, SourceProject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.LLM == nil {
+		t.Fatal("expected LLM section")
+	}
+	if got := cfg.LLM.Chain; len(got) != 2 || got[0] != "acp" || got[1] != "openai" {
+		t.Fatalf("chain mismatch: %+v", got)
+	}
+	openai := cfg.LLM.Providers["openai"]
+	if openai == nil {
+		t.Fatal("expected openai provider")
+	}
+	if openai.BaseURL != "https://api.example.com/v1" || openai.APIKeyEnv != "FOO_KEY" || openai.DefaultModel != "m1" {
+		t.Fatalf("openai provider mismatch: %+v", openai)
+	}
+	if cfg.LLM.ToolTimeoutSec != 30 {
+		t.Fatalf("tool_timeout: want 30, got %d", cfg.LLM.ToolTimeoutSec)
+	}
+	a := cfg.Agents["summarizer"]
+	if a == nil || a.Backend != "openai" || a.Model != "m1" || a.System != "Be brief." || a.MaxIters != 1 {
+		t.Fatalf("agent mismatch: %+v", a)
+	}
+}
+
+func TestParse_LLMFullProvider(t *testing.T) {
+	src := `
+llm {
+    chain "acp" "copilot" "openai"
+    provider "openai" {
+        base_url "https://api.openai.com/v1"
+        api_key_env "OPENAI_API_KEY"
+        default_model "gpt-4o-mini"
+    }
+    provider "copilot" {
+        default_model "gpt-4o"
+    }
+    provider "acp" {
+        command "zed-agent" "--stdio"
+    }
+    tool_timeout 60
+}
+`
+	cfg, err := ParseKDLConfig(src, SourceProject)
+	require.NoError(t, err)
+	require.NotNil(t, cfg.LLM)
+	assert.Equal(t, []string{"acp", "copilot", "openai"}, cfg.LLM.Chain)
+	assert.Equal(t, 60, cfg.LLM.ToolTimeoutSec)
+
+	openai := cfg.LLM.Providers["openai"]
+	require.NotNil(t, openai)
+	assert.Equal(t, "https://api.openai.com/v1", openai.BaseURL)
+	assert.Equal(t, "OPENAI_API_KEY", openai.APIKeyEnv)
+	assert.Equal(t, "gpt-4o-mini", openai.DefaultModel)
+
+	copilot := cfg.LLM.Providers["copilot"]
+	require.NotNil(t, copilot)
+	assert.Equal(t, "gpt-4o", copilot.DefaultModel)
+
+	acp := cfg.LLM.Providers["acp"]
+	require.NotNil(t, acp)
+	assert.Equal(t, []string{"zed-agent", "--stdio"}, acp.Command)
+}
+
+func TestParse_AgentFullFields(t *testing.T) {
+	temp := 0.2
+	maxTok := 4096
+	src := `
+agent "reviewer" {
+    backend "copilot"
+    model "gpt-4o"
+    system "You are a strict code reviewer."
+    tools "search_tools" "execute_tool"
+    temperature 0.2
+    max_tokens 4096
+    max_iters 5
+}
+`
+	cfg, err := ParseKDLConfig(src, SourceProject)
+	require.NoError(t, err)
+	a := cfg.Agents["reviewer"]
+	require.NotNil(t, a)
+	assert.Equal(t, "copilot", a.Backend)
+	assert.Equal(t, "gpt-4o", a.Model)
+	assert.Equal(t, "You are a strict code reviewer.", a.System)
+	assert.Equal(t, []string{"search_tools", "execute_tool"}, a.Tools)
+	require.NotNil(t, a.Temperature)
+	assert.Equal(t, temp, *a.Temperature)
+	require.NotNil(t, a.MaxTokens)
+	assert.Equal(t, maxTok, *a.MaxTokens)
+	assert.Equal(t, 5, a.MaxIters)
+}
+
+func TestParse_LLMMerge(t *testing.T) {
+	user := &Config{
+		MCPs:   make(map[string]MCPConfig),
+		Agents: make(map[string]*AgentConfig),
+		LLM: &LLMConfig{
+			Chain:          []string{"openai"},
+			ToolTimeoutSec: 30,
+			Providers: map[string]*LLMProviderConfig{
+				"openai": {DefaultModel: "gpt-4o-mini"},
+			},
+		},
+	}
+	project := &Config{
+		MCPs:   make(map[string]MCPConfig),
+		Agents: make(map[string]*AgentConfig),
+		LLM: &LLMConfig{
+			// chain intentionally empty: should NOT override user chain
+			Providers: map[string]*LLMProviderConfig{
+				"openai":  {DefaultModel: "gpt-4o"},    // override
+				"copilot": {DefaultModel: "gpt-4o"},    // new
+			},
+			ToolTimeoutSec: 60,
+		},
+	}
+	merged := Merge(user, project)
+	require.NotNil(t, merged.LLM)
+	// Chain from user preserved (project had empty chain)
+	assert.Equal(t, []string{"openai"}, merged.LLM.Chain)
+	// ToolTimeout overridden
+	assert.Equal(t, 60, merged.LLM.ToolTimeoutSec)
+	// Providers merged
+	assert.Equal(t, "gpt-4o", merged.LLM.Providers["openai"].DefaultModel)
+	assert.Equal(t, "gpt-4o", merged.LLM.Providers["copilot"].DefaultModel)
+}
+
+func TestParse_AgentsMerge(t *testing.T) {
+	user := &Config{
+		MCPs:   make(map[string]MCPConfig),
+		Agents: map[string]*AgentConfig{
+			"summarizer": {Name: "summarizer", Backend: "openai", MaxIters: 3},
+			"user-only":  {Name: "user-only", Backend: "openai"},
+		},
+	}
+	project := &Config{
+		MCPs:   make(map[string]MCPConfig),
+		Agents: map[string]*AgentConfig{
+			"summarizer": {Name: "summarizer", Backend: "copilot", MaxIters: 5},
+			"proj-only":  {Name: "proj-only", Backend: "copilot"},
+		},
+	}
+	merged := Merge(user, project)
+	// project overrides user
+	assert.Equal(t, "copilot", merged.Agents["summarizer"].Backend)
+	assert.Equal(t, 5, merged.Agents["summarizer"].MaxIters)
+	// user-only preserved
+	assert.NotNil(t, merged.Agents["user-only"])
+	// proj-only added
+	assert.NotNil(t, merged.Agents["proj-only"])
+}
