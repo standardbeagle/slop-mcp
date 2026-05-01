@@ -38,11 +38,19 @@ func NewCopilot(cfg CopilotConfig) *Copilot {
 		DefaultModel: cfg.DefaultModel,
 		HTTPClient:   cfg.HTTPClient,
 		AuthHeader: func(r *http.Request) {
-			tok, _ := cfg.TokenStore.Token()
-			if tok != "" {
-				r.Header.Set("Authorization", "Bearer "+tok)
+			if cfg.TokenStore != nil {
+				// Token error is intentionally dropped — the server will
+				// reply 401 and the OpenAI provider surfaces that with the
+				// bounded error body. UnavailableReason is the diagnostic
+				// path, not this header injector.
+				tok, _ := cfg.TokenStore.Token()
+				if tok != "" {
+					r.Header.Set("Authorization", "Bearer "+tok)
+				}
 			}
 			r.Header.Set("Editor-Version", cfg.EditorVersion)
+			// Integration ID is the value VS Code's Copilot extension uses;
+			// confirm against current API docs at release time.
 			r.Header.Set("Copilot-Integration-Id", "vscode-chat")
 		},
 		Available: func(_ context.Context) bool {
