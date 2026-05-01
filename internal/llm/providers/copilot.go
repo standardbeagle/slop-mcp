@@ -2,13 +2,14 @@ package providers
 
 import (
 	"context"
-	"errors"
 	"net/http"
 
 	"github.com/standardbeagle/slop-mcp/internal/llm"
 )
 
-// CopilotConfig is the provisional shape; Task 10 fleshes this out.
+// CopilotConfig configures the GitHub Copilot provider.
+// Copilot exposes an OpenAI-compatible chat endpoint; this config
+// supplies the Copilot-specific headers and OAuth token source.
 type CopilotConfig struct {
 	BaseURL       string
 	DefaultModel  string
@@ -17,17 +18,62 @@ type CopilotConfig struct {
 	EditorVersion string
 }
 
-// Copilot is a stub awaiting Task 10's real implementation.
-type Copilot struct{}
+// Copilot wraps OpenAI with Copilot-specific auth headers injected per request.
+type Copilot struct {
+	inner *OpenAI
+}
 
-func NewCopilot(_ CopilotConfig) *Copilot { return &Copilot{} }
+// NewCopilot constructs a Copilot provider that delegates to an OpenAI-compatible
+// endpoint with OAuth token auth and Copilot-specific headers.
+func NewCopilot(cfg CopilotConfig) *Copilot {
+	if cfg.BaseURL == "" {
+		cfg.BaseURL = "https://api.githubcopilot.com"
+	}
+	if cfg.EditorVersion == "" {
+		cfg.EditorVersion = "slop-mcp/0"
+	}
+	inner := NewOpenAI(OpenAIConfig{
+		Name:         "copilot",
+		BaseURL:      cfg.BaseURL,
+		DefaultModel: cfg.DefaultModel,
+		HTTPClient:   cfg.HTTPClient,
+		AuthHeader: func(r *http.Request) {
+			tok, _ := cfg.TokenStore.Token()
+			if tok != "" {
+				r.Header.Set("Authorization", "Bearer "+tok)
+			}
+			r.Header.Set("Editor-Version", cfg.EditorVersion)
+			r.Header.Set("Copilot-Integration-Id", "vscode-chat")
+		},
+		Available: func(_ context.Context) bool {
+			if cfg.TokenStore == nil {
+				return false
+			}
+			tok, err := cfg.TokenStore.Token()
+			return err == nil && tok != ""
+		},
+		UnavailableReason: func() string {
+			if cfg.TokenStore == nil {
+				return "copilot: no token store wired"
+			}
+			tok, err := cfg.TokenStore.Token()
+			if err != nil {
+				return "copilot: token store error: " + err.Error()
+			}
+			if tok == "" {
+				return "copilot: no oauth token"
+			}
+			return ""
+		},
+	})
+	return &Copilot{inner: inner}
+}
 
 func (c *Copilot) Name() string                     { return "copilot" }
-func (c *Copilot) Available(_ context.Context) bool { return false }
-func (c *Copilot) UnavailableReason() string        { return "copilot: not implemented" }
+func (c *Copilot) Available(ctx context.Context) bool { return c.inner.Available(ctx) }
+func (c *Copilot) UnavailableReason() string         { return c.inner.UnavailableReason() }
 
-// Sample is unreachable while Available returns false; kept to satisfy
-// the Provider interface until Task 10 fills in the real implementation.
-func (c *Copilot) Sample(_ context.Context, _ *llm.Request, _ func(llm.StreamEvent)) (*llm.Response, error) {
-	return nil, errors.New("copilot: not implemented")
+// Sample delegates to the inner OpenAI provider.
+func (c *Copilot) Sample(ctx context.Context, req *llm.Request, on func(llm.StreamEvent)) (*llm.Response, error) {
+	return c.inner.Sample(ctx, req, on)
 }
