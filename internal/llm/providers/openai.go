@@ -210,6 +210,7 @@ func (o *OpenAI) sampleBlocking(ctx context.Context, req *llm.Request) (*llm.Res
 
 // sseChunk is the per-chunk shape from an OpenAI SSE stream.
 type sseChunk struct {
+	Model   string `json:"model"`
 	Choices []struct {
 		Delta struct {
 			Content string `json:"content"`
@@ -280,6 +281,9 @@ func (o *OpenAI) sampleStreaming(ctx context.Context, req *llm.Request, onEvent 
 				}
 				continue
 			}
+			if chunk.Model != "" {
+				out.Model = chunk.Model
+			}
 			if len(chunk.Choices) > 0 {
 				choice := chunk.Choices[0]
 				if delta := choice.Delta.Content; delta != "" {
@@ -306,9 +310,16 @@ func (o *OpenAI) sampleStreaming(ctx context.Context, req *llm.Request, onEvent 
 
 	// Tool-call streaming: fall back to a blocking refetch to get structured
 	// tool_calls. This costs two HTTP round-trips but avoids the complexity
-	// of reassembling tool-call argument deltas (v1 known limitation).
+	// of reassembling tool-call argument deltas (v1 known limitation). The
+	// Done event still fires so callers see the final response shape from
+	// the blocking path, not the partial streaming text.
 	if toolCallsDetected {
-		return o.sampleBlocking(ctx, req)
+		final, err := o.sampleBlocking(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		onEvent(llm.StreamEvent{Done: true, Final: final})
+		return final, nil
 	}
 
 	onEvent(llm.StreamEvent{Done: true, Final: out})

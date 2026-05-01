@@ -118,7 +118,7 @@ func TestOpenAI_Streaming(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		flusher := w.(http.Flusher)
-		fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":\"hel\"}}]}\n\n")
+		fmt.Fprintf(w, "data: {\"model\":\"gpt-stream\",\"choices\":[{\"delta\":{\"content\":\"hel\"}}]}\n\n")
 		flusher.Flush()
 		fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}, \"finish_reason\":\"stop\"}]}\n\n")
 		flusher.Flush()
@@ -129,9 +129,16 @@ func TestOpenAI_Streaming(t *testing.T) {
 
 	p := NewOpenAI(OpenAIConfig{BaseURL: srv.URL, APIKey: "k", DefaultModel: "m"})
 	var collected string
+	var doneSeen bool
+	var finalFromDone *llm.Response
 	resp, err := p.Sample(context.Background(), &llm.Request{
 		Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}},
 	}, func(ev llm.StreamEvent) {
+		if ev.Done {
+			doneSeen = true
+			finalFromDone = ev.Final
+			return
+		}
 		collected += ev.Delta
 	})
 	if err != nil {
@@ -142,5 +149,14 @@ func TestOpenAI_Streaming(t *testing.T) {
 	}
 	if resp.Content != "hello" {
 		t.Fatalf("final content: %q", resp.Content)
+	}
+	if resp.Model != "gpt-stream" {
+		t.Fatalf("final model: want gpt-stream, got %q", resp.Model)
+	}
+	if !doneSeen {
+		t.Fatal("Done event never fired")
+	}
+	if finalFromDone == nil || finalFromDone.Content != "hello" {
+		t.Fatalf("Done event missing Final response: %+v", finalFromDone)
 	}
 }
