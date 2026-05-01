@@ -68,13 +68,20 @@ func (s *llmState) callLLM(
 		defCopy.MaxIters = v
 	}
 	if v, ok := kwargs["tools"]; ok {
-		defCopy.Tools = stringListFromSLOP(v)
+		tools, err := stringListFromSLOP(v)
+		if err != nil {
+			return slop.NewErrorValue(err.Error()), nil
+		}
+		defCopy.Tools = tools
 	}
 
 	req := &llm.Request{
-		System: defCopy.System,
-		Model:  defCopy.Model,
+		System:      defCopy.System,
+		Model:       defCopy.Model,
+		Temperature: defCopy.Temperature,
+		MaxTokens:   defCopy.MaxTokens,
 	}
+	// Per-call kwargs override agent defaults.
 	if v, ok := kwargs["temperature"]; ok {
 		if nv, ok := v.(*slop.NumberValue); ok {
 			t := nv.Value
@@ -174,16 +181,24 @@ func messagesFromSLOP(v slop.Value) ([]llm.Message, error) {
 	return out, nil
 }
 
-func stringListFromSLOP(v slop.Value) []string {
+// stringListFromSLOP accepts either a list of strings or a single string
+// (sugar for a one-element list). Anything else is an error so a typo
+// like `tools: nil` does not silently widen to "all tools".
+func stringListFromSLOP(v slop.Value) ([]string, error) {
+	if s, ok := v.(*slop.StringValue); ok {
+		return []string{s.Value}, nil
+	}
 	lv, ok := v.(*slop.ListValue)
 	if !ok {
-		return nil
+		return nil, fmt.Errorf("tools: expected list of strings or a single string")
 	}
 	out := make([]string, 0, len(lv.Elements))
-	for _, el := range lv.Elements {
-		if s, ok := el.(*slop.StringValue); ok {
-			out = append(out, s.Value)
+	for i, el := range lv.Elements {
+		s, ok := el.(*slop.StringValue)
+		if !ok {
+			return nil, fmt.Errorf("tools[%d]: expected string", i)
 		}
+		out = append(out, s.Value)
 	}
-	return out
+	return out, nil
 }
