@@ -37,25 +37,16 @@ func NewACP(cfg ACPConfig) *ACP { return &ACP{cfg: cfg} }
 
 func (a *ACP) Name() string { return "acp" }
 
-// Available probes spawnability. On first call it tries to start the
-// subprocess; subsequent calls return the cached connected state. If
-// Command is empty or spawn fails, returns false.
+// Available reports whether the provider is configured and either
+// already running or able to be spawned. It does NOT spawn — that
+// happens lazily on the first Sample call so the chain's per-request
+// probe stays cheap and side-effect-free (matching OpenAI/Copilot
+// where Available is a pure capability check).
 func (a *ACP) Available(_ context.Context) bool {
 	if a.connected.Load() {
 		return true
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.proc != nil {
-		return true
-	}
-	if len(a.cfg.Command) == 0 {
-		return false
-	}
-	if err := a.spawnLocked(); err != nil {
-		return false
-	}
-	return true
+	return len(a.cfg.Command) > 0
 }
 
 func (a *ACP) UnavailableReason() string {
@@ -65,7 +56,7 @@ func (a *ACP) UnavailableReason() string {
 	if len(a.cfg.Command) == 0 {
 		return "acp: no command configured"
 	}
-	return "acp: subprocess not yet spawned"
+	return ""
 }
 
 func (a *ACP) spawnLocked() error {
@@ -89,40 +80,76 @@ func (a *ACP) spawnLocked() error {
 }
 
 // Sample sends one ACP `prompt` request and reads one response frame.
-// Note: the request schema here mirrors the protocol shape per the
-// April 2026 draft. The ACP wire format is evolving; field names may
-// require adjustment when validated against a current ACP agent.
-func (a *ACP) Sample(ctx context.Context, req *llm.Request, _ func(llm.StreamEvent)) (*llm.Response, error) {
+//
+// The request schema mirrors the April 2026 ACP draft. The wire format
+// is evolving; field names may require adjustment when validated
+// against a current ACP agent. Optional sampling parameters
+// (temperature, max_tokens, stop) are forwarded for forward
+// compatibility — agents that do not yet honour them will ignore
+// unknown keys.
+//
+// Streaming and ctx cancellation are not yet implemented; onEvent is
+// unused. Subprocess stderr is inherited from the parent process
+// intentionally so its diagnostic output flows through slop-mcp's
+// existing stderr channel.
+//
+// On any I/O error (read or write), the stored subprocess handle is
+// cleared so the next Sample call respawns the agent. This trades the
+// agent's in-flight conversation state (already lost when the process
+// crashes) for automatic recovery.
+func (a *ACP) Sample(ctx context.Context, req *llm.Request, _ func(llm.StreamEvent)) (resp *llm.Response, err error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	defer func() {
+		if err != nil {
+			// Either the subprocess died or the wire became corrupt.
+			// Drop our handle so the next call respawns.
+			a.connected.Store(false)
+			a.proc = nil
+			a.stdin = nil
+			a.stdout = nil
+		}
+	}()
+
 	if a.proc == nil {
-		if err := a.spawnLocked(); err != nil {
-			return nil, fmt.Errorf("acp spawn: %w", err)
+		if spawnErr := a.spawnLocked(); spawnErr != nil {
+			return nil, fmt.Errorf("acp spawn: %w", spawnErr)
 		}
 	}
 
 	id := a.nextID.Add(1)
+	params := map[string]any{
+		"messages": req.Messages,
+		"system":   req.System,
+		"model":    req.Model,
+		"tools":    req.Tools,
+	}
+	if req.Temperature != nil {
+		params["temperature"] = *req.Temperature
+	}
+	if req.MaxTokens != nil {
+		params["max_tokens"] = *req.MaxTokens
+	}
+	if len(req.Stop) > 0 {
+		params["stop"] = req.Stop
+	}
 	rpc := map[string]any{
 		"jsonrpc": "2.0",
 		"id":      id,
 		"method":  "prompt",
-		"params": map[string]any{
-			"messages": req.Messages,
-			"system":   req.System,
-			"model":    req.Model,
-			"tools":    req.Tools,
-		},
+		"params":  params,
 	}
-	if err := writeFrame(a.stdin, rpc); err != nil {
-		return nil, fmt.Errorf("acp write: %w", err)
+	if writeErr := writeFrame(a.stdin, rpc); writeErr != nil {
+		return nil, fmt.Errorf("acp write: %w", writeErr)
 	}
 
-	frame, err := readFrame(a.stdout)
-	if err != nil {
-		return nil, fmt.Errorf("acp read: %w", err)
+	frame, readErr := readFrame(a.stdout)
+	if readErr != nil {
+		return nil, fmt.Errorf("acp read: %w", readErr)
 	}
 
 	var raw struct {
+		ID     int64 `json:"id"`
 		Result *struct {
 			Content    string         `json:"content"`
 			ToolCalls  []llm.ToolCall `json:"tool_calls"`
@@ -134,8 +161,11 @@ func (a *ACP) Sample(ctx context.Context, req *llm.Request, _ func(llm.StreamEve
 			Message string `json:"message"`
 		} `json:"error"`
 	}
-	if err := json.Unmarshal(frame, &raw); err != nil {
-		return nil, fmt.Errorf("acp decode: %w", err)
+	if decodeErr := json.Unmarshal(frame, &raw); decodeErr != nil {
+		return nil, fmt.Errorf("acp decode: %w", decodeErr)
+	}
+	if raw.ID != id {
+		return nil, fmt.Errorf("acp: response id %d != request id %d", raw.ID, id)
 	}
 	if raw.Error != nil {
 		return nil, fmt.Errorf("acp error %d: %s", raw.Error.Code, raw.Error.Message)

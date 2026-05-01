@@ -18,10 +18,17 @@ func TestACP_AvailableFalseWithoutCommand(t *testing.T) {
 	}
 }
 
-func TestACP_AvailableFalseForBadCommand(t *testing.T) {
+func TestACP_BadCommandSurfacesOnSample(t *testing.T) {
+	// Available is a pure capability check (configured + alive); it
+	// returns true when Command is non-empty even if the binary does
+	// not exist. The spawn failure is surfaced when Sample is called.
 	p := NewACP(ACPConfig{Command: []string{"/nonexistent/binary"}})
-	if p.Available(context.Background()) {
-		t.Fatal("must be unavailable when subprocess fails to spawn")
+	if !p.Available(context.Background()) {
+		t.Fatal("Available should return true for a configured command")
+	}
+	_, err := p.Sample(context.Background(), nil, nil)
+	if err == nil {
+		t.Fatal("Sample must error when subprocess cannot spawn")
 	}
 }
 
