@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -14,6 +15,8 @@ import (
 
 	"github.com/standardbeagle/slop-mcp/internal/builtins"
 	"github.com/standardbeagle/slop-mcp/internal/config"
+	"github.com/standardbeagle/slop-mcp/internal/llm"
+	"github.com/standardbeagle/slop-mcp/internal/llm/factory"
 	"github.com/standardbeagle/slop/pkg/slop"
 )
 
@@ -84,23 +87,18 @@ func cmdMonitor(args []string) {
 		script = string(data)
 	}
 
-	// Load merged config
+	// Load merged config: user → project → local (three-tier merge covers MCPs, LLM, and Agents)
 	cwd, _ := os.Getwd()
-	cfg := config.NewConfig()
-	if userCfg, err := config.LoadUserConfig(); err == nil {
-		for name, mcp := range userCfg.MCPs {
-			cfg.MCPs[name] = mcp
-		}
-	}
-	if projectCfg, err := config.LoadProjectConfig(cwd); err == nil {
-		for name, mcp := range projectCfg.MCPs {
-			cfg.MCPs[name] = mcp
-		}
-	}
-	if localCfg, err := config.LoadLocalConfig(cwd); err == nil {
-		for name, mcp := range localCfg.MCPs {
-			cfg.MCPs[name] = mcp
-		}
+	userCfg, _ := config.LoadUserConfig()
+	projectCfg, _ := config.LoadProjectConfig(cwd)
+	localCfg, _ := config.LoadLocalConfig(cwd)
+	cfg := config.Merge(config.Merge(userCfg, projectCfg), localCfg)
+
+	// Build LLM registry from merged config.
+	llmReg, err := factory.Build(cfg, factory.BuildDeps{HTTPClient: http.DefaultClient})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to init LLM registry: %v\n", err)
+		llmReg, _ = factory.Build(config.NewConfig(), factory.BuildDeps{HTTPClient: http.DefaultClient})
 	}
 
 	// Create SLOP runtime
@@ -116,6 +114,14 @@ func cmdMonitor(args []string) {
 	// Register persistent memory (mem_save, mem_load, mem_list, etc.)
 	memStore := builtins.NewMemoryStore()
 	builtins.RegisterMemory(rt, memStore)
+
+	// Register LLM builtin with NoopHost (no MCP registry in monitor mode).
+	// Progress events are written to stderr to avoid polluting monitor stdout.
+	builtins.RegisterLLM(rt, llmReg, llm.NoopHost{}, func(ev llm.StreamEvent) {
+		if ev.Delta != "" {
+			fmt.Fprint(os.Stderr, ev.Delta)
+		}
+	})
 
 	// Register monitor-specific built-ins
 	registerMonitorBuiltins(rt)
@@ -141,7 +147,7 @@ func cmdMonitor(args []string) {
 	}
 
 	// Execute the monitor script — print() goes to stdout for Monitor tool
-	_, err := rt.Execute(script)
+	_, err = rt.Execute(script)
 	if err != nil {
 		if ctx.Err() != nil {
 			return

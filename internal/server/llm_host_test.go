@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/standardbeagle/slop-mcp/internal/config"
 	"github.com/standardbeagle/slop-mcp/internal/registry"
 )
 
@@ -166,5 +167,16 @@ func TestLLMHost_ExecuteUnknownMCPReturnsError(t *testing.T) {
 	}
 	if isErr {
 		t.Fatal("infrastructure failure must return isError=false")
+	}
+}
+
+func TestServer_LLMRegistryConstructed(t *testing.T) {
+	s, err := NewFromConfig(config.NewConfig())
+	if err != nil {
+		t.Fatalf("NewFromConfig returned error: %v", err)
+	}
+	defer s.Close()
+	if s.llmRegistry == nil {
+		t.Fatal("server should construct llmRegistry during init")
 	}
 }

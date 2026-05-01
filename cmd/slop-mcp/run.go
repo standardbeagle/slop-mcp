@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/standardbeagle/slop-mcp/internal/builtins"
 	"github.com/standardbeagle/slop-mcp/internal/config"
+	"github.com/standardbeagle/slop-mcp/internal/llm"
+	"github.com/standardbeagle/slop-mcp/internal/llm/factory"
 	"github.com/standardbeagle/slop/pkg/slop"
 )
 
@@ -64,25 +67,18 @@ func cmdRun(args []string) {
 		script = string(data)
 	}
 
-	// Load merged config
+	// Load merged config: user → project → local (three-tier merge covers MCPs, LLM, and Agents)
 	cwd, _ := os.Getwd()
-	cfg := config.NewConfig()
+	userCfg, _ := config.LoadUserConfig()
+	projectCfg, _ := config.LoadProjectConfig(cwd)
+	localCfg, _ := config.LoadLocalConfig(cwd)
+	cfg := config.Merge(config.Merge(userCfg, projectCfg), localCfg)
 
-	// Load configs in order (user, project, local)
-	if userCfg, err := config.LoadUserConfig(); err == nil {
-		for name, mcp := range userCfg.MCPs {
-			cfg.MCPs[name] = mcp
-		}
-	}
-	if projectCfg, err := config.LoadProjectConfig(cwd); err == nil {
-		for name, mcp := range projectCfg.MCPs {
-			cfg.MCPs[name] = mcp
-		}
-	}
-	if localCfg, err := config.LoadLocalConfig(cwd); err == nil {
-		for name, mcp := range localCfg.MCPs {
-			cfg.MCPs[name] = mcp
-		}
+	// Build LLM registry from merged config.
+	llmReg, err := factory.Build(cfg, factory.BuildDeps{HTTPClient: http.DefaultClient})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to init LLM registry: %v\n", err)
+		llmReg, _ = factory.Build(config.NewConfig(), factory.BuildDeps{HTTPClient: http.DefaultClient})
 	}
 
 	// Create SLOP runtime
@@ -94,6 +90,14 @@ func cmdRun(args []string) {
 	builtins.RegisterSlopSearch(rt)
 	builtins.RegisterJWT(rt)
 	builtins.RegisterTemplate(rt)
+
+	// Register LLM builtin with NoopHost (no MCP registry in CLI mode).
+	// Progress events are written to stderr so the user can see streaming output.
+	builtins.RegisterLLM(rt, llmReg, llm.NoopHost{}, func(ev llm.StreamEvent) {
+		if ev.Delta != "" {
+			fmt.Fprint(os.Stderr, ev.Delta)
+		}
+	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()

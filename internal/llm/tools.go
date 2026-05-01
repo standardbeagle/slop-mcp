@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 )
 
 // ToolHost is the surface the loop uses to enumerate and execute tools.
@@ -29,4 +30,15 @@ type ToolHost interface {
 	// "tool ran and failed" and "tool could not run" paths are mutually
 	// exclusive.
 	Execute(ctx context.Context, name string, args json.RawMessage) (result string, isError bool, err error)
+}
+
+// NoopHost is a ToolHost that reports no tools and fails all Execute calls.
+// Used in CLI contexts (slop-mcp run, slop-mcp monitor) where no MCP registry
+// is available. llm() calls succeed if the agent def has no tools; any tool
+// call the model attempts will receive an infrastructure error.
+type NoopHost struct{}
+
+func (NoopHost) List(_ context.Context, _ []string) []ToolSpec { return nil }
+func (NoopHost) Execute(_ context.Context, name string, _ json.RawMessage) (string, bool, error) {
+	return "", false, fmt.Errorf("tools unavailable in this context: %s", name)
 }

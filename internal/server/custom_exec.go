@@ -134,6 +134,9 @@ func (s *Server) executeCustomTool(ctx context.Context, ct overrides.CustomTool,
 		builtins.RegisterMemory(rt, s.memoryStore)
 	}
 
+	// Register LLM builtin. Custom tools run inline so no progress surface.
+	builtins.RegisterLLM(rt, s.llmRegistry, NewLLMHost(s), nil)
+
 	// Connect MCPs.
 	for _, cfg := range s.registry.GetConfigs() {
 		transportType := cfg.Type

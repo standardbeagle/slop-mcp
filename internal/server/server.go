@@ -11,6 +11,8 @@ import (
 	"github.com/standardbeagle/slop-mcp/internal/builtins"
 	"github.com/standardbeagle/slop-mcp/internal/cli"
 	"github.com/standardbeagle/slop-mcp/internal/config"
+	"github.com/standardbeagle/slop-mcp/internal/llm"
+	"github.com/standardbeagle/slop-mcp/internal/llm/factory"
 	"github.com/standardbeagle/slop-mcp/internal/logging"
 	"github.com/standardbeagle/slop-mcp/internal/overrides"
 	"github.com/standardbeagle/slop-mcp/internal/registry"
@@ -31,6 +33,7 @@ type Server struct {
 	sessionStore  *builtins.SessionStore
 	memoryStore   *builtins.MemoryStore
 	overrideStore *overrides.Store
+	llmRegistry   *llm.Registry
 }
 
 // openOverrideStore builds and opens the overrides store using standard config paths,
@@ -64,14 +67,20 @@ func New(ctx context.Context, mcps []config.MCPConfig) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	cfg := config.NewConfig()
+	llmReg, err := factory.Build(cfg, factory.BuildDeps{HTTPClient: http.DefaultClient})
+	if err != nil {
+		return nil, fmt.Errorf("init llm: %w", err)
+	}
 	s := &Server{
 		registry:      reg,
 		cliRegistry:   cli.NewRegistry(),
-		config:        config.NewConfig(),
+		config:        cfg,
 		logger:        logging.Default(),
 		sessionStore:  builtins.NewSessionStore(),
 		memoryStore:   builtins.NewMemoryStore(),
 		overrideStore: store,
+		llmRegistry:   llmReg,
 	}
 
 	// Create MCP server
@@ -108,6 +117,10 @@ func NewFromConfig(cfg *config.Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	llmReg, err := factory.Build(cfg, factory.BuildDeps{HTTPClient: http.DefaultClient})
+	if err != nil {
+		return nil, fmt.Errorf("init llm: %w", err)
+	}
 	s := &Server{
 		registry:      reg,
 		cliRegistry:   cli.NewRegistry(),
@@ -116,6 +129,7 @@ func NewFromConfig(cfg *config.Config) (*Server, error) {
 		sessionStore:  builtins.NewSessionStore(),
 		memoryStore:   builtins.NewMemoryStore(),
 		overrideStore: store,
+		llmRegistry:   llmReg,
 	}
 
 	// Create MCP server

@@ -14,6 +14,7 @@ import (
 	"github.com/standardbeagle/slop-mcp/internal/builtins"
 	"github.com/standardbeagle/slop-mcp/internal/cli"
 	"github.com/standardbeagle/slop-mcp/internal/config"
+	"github.com/standardbeagle/slop-mcp/internal/llm"
 	"github.com/standardbeagle/slop-mcp/internal/overrides"
 	"github.com/standardbeagle/slop-mcp/internal/recipes"
 	"github.com/standardbeagle/slop-mcp/internal/registry"
@@ -300,6 +301,10 @@ func (s *Server) handleRunSlop(
 	if s.memoryStore != nil {
 		builtins.RegisterMemory(rt, s.memoryStore)
 	}
+
+	// Register LLM builtin (llm() and llm_last()).
+	// progressFn is a stub for v1; Task 16 wires real MCP progress notifications.
+	builtins.RegisterLLM(rt, s.llmRegistry, NewLLMHost(s), func(ev llm.StreamEvent) {})
 
 	// Connect all MCP services to the slop runtime
 	for _, cfg := range s.registry.GetConfigs() {
