@@ -4,6 +4,7 @@
 package factory
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 
@@ -80,7 +81,7 @@ func buildProvider(name string, pc *config.LLMProviderConfig, deps BuildDeps) (l
 			URL:     pc.URL,
 		}), nil
 	default:
-		return nil, nil // unknown name — caller may add later
+		return nil, fmt.Errorf("unknown llm provider %q (known: openai, copilot, acp)", name)
 	}
 }
 

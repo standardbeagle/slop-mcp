@@ -2442,7 +2442,7 @@ func (NoopHost) Execute(_ context.Context, name string, _ json.RawMessage) (stri
 Modify `internal/server/server.go`: add `llmRegistry *llm.Registry`. Construct in the existing server-init function from `s.config`:
 
 ```go
-r, err := llm.Build(s.config, llm.BuildDeps{
+r, err := factory.Build(s.config, factory.BuildDeps{
 	HTTPClient:        http.DefaultClient,
 	CopilotTokenStore: s.authStore,  // existing auth_mcp store; adapt method name
 })
@@ -2468,7 +2468,7 @@ For `internal/server/custom_exec.go`: same as above (custom tools also have prog
 
 For `cmd/slop-mcp/run.go`:
 ```go
-r, _ := llm.Build(cfg, llm.BuildDeps{HTTPClient: http.DefaultClient})
+r, _ := factory.Build(cfg, factory.BuildDeps{HTTPClient: http.DefaultClient})
 builtins.RegisterLLM(rt, r, llm.NoopHost{}, func(ev llm.StreamEvent) {
 	if ev.Delta != "" {
 		fmt.Fprint(os.Stderr, ev.Delta)
