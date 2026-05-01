@@ -14,6 +14,7 @@ import (
 	"github.com/standardbeagle/slop-mcp/internal/builtins"
 	"github.com/standardbeagle/slop-mcp/internal/cli"
 	"github.com/standardbeagle/slop-mcp/internal/config"
+	"github.com/standardbeagle/slop-mcp/internal/llm"
 	"github.com/standardbeagle/slop-mcp/internal/logging"
 	"github.com/standardbeagle/slop-mcp/internal/overrides"
 	"github.com/standardbeagle/slop-mcp/internal/registry"
@@ -32,6 +33,8 @@ func mockServer(tools []registry.ToolInfo) *Server {
 		cliRegistry:  cli.NewRegistry(),
 		sessionStore: builtins.NewSessionStore(),
 		memoryStore:  builtins.NewMemoryStore(),
+		llmRegistry:  llm.NewRegistry(),
+		config:       config.NewConfig(),
 	}
 }
 

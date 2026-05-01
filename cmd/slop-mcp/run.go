@@ -74,11 +74,15 @@ func cmdRun(args []string) {
 	localCfg, _ := config.LoadLocalConfig(cwd)
 	cfg := config.Merge(config.Merge(userCfg, projectCfg), localCfg)
 
-	// Build LLM registry from merged config.
+	// Build LLM registry from merged config. On failure (e.g. unknown
+	// provider name in user KDL), fall back to an empty registry so
+	// SLOP scripts that don't call llm() still run. factory.Build over
+	// an empty config is guaranteed not to error — no providers, no
+	// agents, nothing to validate.
 	llmReg, err := factory.Build(cfg, factory.BuildDeps{HTTPClient: http.DefaultClient})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to init LLM registry: %v\n", err)
-		llmReg, _ = factory.Build(config.NewConfig(), factory.BuildDeps{HTTPClient: http.DefaultClient})
+		llmReg = llm.NewRegistry()
 	}
 
 	// Create SLOP runtime

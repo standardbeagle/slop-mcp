@@ -60,7 +60,13 @@ func openOverrideStore(reg *registry.Registry) (*overrides.Store, error) {
 	return store, nil
 }
 
-// New creates a new Server with the given config.
+// New creates a new Server with the given MCP configs.
+//
+// This low-level constructor accepts only MCP configs; the LLM
+// subsystem starts with an empty registry (no agents, no providers).
+// Callers that want llm()/llm_last() to be useful must use
+// NewFromConfig and pass a fully merged *Config that includes the
+// LLM and Agents sections from the user's KDL files.
 func New(ctx context.Context, mcps []config.MCPConfig) (*Server, error) {
 	reg := registry.New()
 	store, err := openOverrideStore(reg)
