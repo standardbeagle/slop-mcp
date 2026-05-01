@@ -106,12 +106,28 @@ func parseQualifiedName(name string) (mcpName, toolName string, err error) {
 	return name[:idx], name[idx+1:], nil
 }
 
-// extractText joins all text content items from a CallToolResult.
+// extractText converts a CallToolResult into a string the LLM can reason
+// about. Text content concatenates verbatim; non-text content (images,
+// resources) is JSON-encoded so the model at least sees that something
+// non-textual was returned rather than receiving silent emptiness. If
+// the tool produced StructuredContent, that takes precedence — it is
+// the MCP 2025 channel for machine-readable output and is more useful
+// to the model than the duplicated human-readable text.
 func extractText(result *mcp.CallToolResult) string {
+	if result.StructuredContent != nil {
+		if b, err := json.Marshal(result.StructuredContent); err == nil {
+			return string(b)
+		}
+	}
 	var sb strings.Builder
 	for _, c := range result.Content {
-		if tc, ok := c.(*mcp.TextContent); ok {
+		switch tc := c.(type) {
+		case *mcp.TextContent:
 			sb.WriteString(tc.Text)
+		default:
+			if b, err := json.Marshal(c); err == nil {
+				sb.Write(b)
+			}
 		}
 	}
 	return sb.String()
