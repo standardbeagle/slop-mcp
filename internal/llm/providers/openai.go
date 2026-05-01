@@ -15,7 +15,8 @@ import (
 
 // OpenAIConfig configures an OpenAI-compatible HTTP provider.
 // The same struct is reused by the Copilot provider (Task 10) which
-// overrides AuthHeader while keeping the identical wire format.
+// overrides AuthHeader, Available, and UnavailableReason while keeping
+// the identical wire format.
 type OpenAIConfig struct {
 	BaseURL      string
 	APIKey       string
@@ -23,6 +24,15 @@ type OpenAIConfig struct {
 	Name         string              // override; default "openai"
 	HTTPClient   *http.Client        // optional; default http.DefaultClient
 	AuthHeader   func(*http.Request) // optional; default Bearer APIKey
+
+	// Available overrides the availability check. Default is APIKey != "".
+	// Copilot supplies a TokenStore-backed closure so OAuth refresh state
+	// drives availability instead of a static API key field.
+	Available func(context.Context) bool
+
+	// UnavailableReason returns the explanation when Available reports
+	// false. Default is "<name>: api key empty". Empty when available.
+	UnavailableReason func() string
 }
 
 // OpenAI is an OpenAI-compatible chat-completions provider.
@@ -44,20 +54,29 @@ func NewOpenAI(cfg OpenAIConfig) *OpenAI {
 			r.Header.Set("Authorization", "Bearer "+cfg.APIKey)
 		}
 	}
+	if cfg.Available == nil {
+		cfg.Available = func(_ context.Context) bool { return cfg.APIKey != "" }
+	}
+	if cfg.UnavailableReason == nil {
+		name := cfg.Name
+		cfg.UnavailableReason = func() string {
+			if cfg.APIKey != "" {
+				return ""
+			}
+			return name + ": api key empty"
+		}
+	}
 	return &OpenAI{cfg: cfg}
 }
 
 func (o *OpenAI) Name() string { return o.cfg.Name }
 
-func (o *OpenAI) Available(_ context.Context) bool {
-	return o.cfg.APIKey != ""
+func (o *OpenAI) Available(ctx context.Context) bool {
+	return o.cfg.Available(ctx)
 }
 
 func (o *OpenAI) UnavailableReason() string {
-	if o.cfg.APIKey != "" {
-		return ""
-	}
-	return o.cfg.Name + ": api key empty"
+	return o.cfg.UnavailableReason()
 }
 
 // chatReq is the OpenAI chat/completions request body.
@@ -140,8 +159,12 @@ func (o *OpenAI) Sample(ctx context.Context, req *llm.Request, _ func(llm.Stream
 	defer httpResp.Body.Close()
 
 	if httpResp.StatusCode/100 != 2 {
-		buf, _ := io.ReadAll(httpResp.Body)
-		return nil, fmt.Errorf("%s: http %d: %s", o.cfg.Name, httpResp.StatusCode, string(buf))
+		buf, _ := io.ReadAll(io.LimitReader(httpResp.Body, 2048))
+		snippet := strings.TrimSpace(string(buf))
+		if len(snippet) > 512 {
+			snippet = snippet[:512] + "…"
+		}
+		return nil, fmt.Errorf("%s: http %d: %s", o.cfg.Name, httpResp.StatusCode, snippet)
 	}
 
 	var raw chatResp
