@@ -293,6 +293,10 @@ var SlopReference = []SlopFunction{
 	{Name: "indent", Category: "template", Signature: "indent(text, spaces)", Description: "Indents all lines by spaces", Example: `indent("hello\nworld", 4)`, Returns: "string", Tags: []string{"slop-mcp"}},
 	{Name: "dedent", Category: "template", Signature: "dedent(text)", Description: "Removes common leading whitespace", Example: `dedent("  hello\n  world")`, Returns: "string", Tags: []string{"slop-mcp"}},
 	{Name: "wrap", Category: "template", Signature: "wrap(text, width)", Description: "Wraps text at specified width", Example: `wrap("long text here", 40)`, Returns: "string", Tags: []string{"slop-mcp"}},
+
+	// LLM functions (slop-mcp additions)
+	{Name: "llm", Category: "llm", Signature: `llm(prompt, agent: "name", system, model, tools, temperature, max_tokens, max_iters, messages)`, Description: "Call a language model. Returns the final assistant string. Use llm_last() for usage/model/iteration metadata.", Example: `llm("Summarize: " + text, agent: "summarizer")`, Returns: "string", Tags: []string{"slop-mcp"}},
+	{Name: "llm_last", Category: "llm", Signature: "llm_last()", Description: "Returns metadata about the most recent llm() call: model, provider, iterations, stop_reason, usage.", Example: `meta = llm_last(); log(meta["model"])`, Returns: "map", Tags: []string{"slop-mcp"}},
 }
 
 // RegisterSlopSearch registers the slop_search built-in function.

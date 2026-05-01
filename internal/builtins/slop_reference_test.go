@@ -186,6 +186,24 @@ func TestGetCategories(t *testing.T) {
 	}
 }
 
+func TestSlopReference_LLMCategory(t *testing.T) {
+	var foundLLM, foundLast bool
+	for _, e := range SlopReference {
+		if e.Category == "llm" && e.Name == "llm" {
+			foundLLM = true
+		}
+		if e.Category == "llm" && e.Name == "llm_last" {
+			foundLast = true
+		}
+	}
+	if !foundLLM {
+		t.Fatal("llm category missing 'llm' entry from slop_reference catalog")
+	}
+	if !foundLast {
+		t.Fatal("llm category missing 'llm_last' entry from slop_reference catalog")
+	}
+}
+
 func TestSlopReferenceComplete(t *testing.T) {
 	// Verify all functions have required fields
 	for _, fn := range SlopReference {
