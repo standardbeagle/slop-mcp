@@ -13,8 +13,20 @@ type ToolHost interface {
 	// whitelist; nil/empty means "all available".
 	List(ctx context.Context, allow []string) []ToolSpec
 
-	// Execute runs a tool by name. The string is the textual result fed
-	// back to the model; isError reports whether the call failed (the
-	// loop will mark the tool message accordingly).
+	// Execute runs a tool by name. result is the textual output fed back
+	// to the model.
+	//
+	// Three return shapes:
+	//   - (result, false, nil): success.
+	//   - ("", false, err): infrastructure failure — the tool could not
+	//     be reached at all (unknown name, transport error, timeout).
+	//     The loop treats this as a hard error and aborts the iteration.
+	//   - (result, true, nil): tool ran but reported failure (MCP isError
+	//     bit set). The loop forwards the result to the model marked as
+	//     an error so the model can decide whether to recover or stop.
+	//
+	// Implementations must not return (_, true, non-nil err) — the
+	// "tool ran and failed" and "tool could not run" paths are mutually
+	// exclusive.
 	Execute(ctx context.Context, name string, args json.RawMessage) (result string, isError bool, err error)
 }
