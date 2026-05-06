@@ -15,6 +15,7 @@ coverage.out
 # IDE
 .idea/
 .vscode/
+.gemini/
 *.swp
 *.swo
 
