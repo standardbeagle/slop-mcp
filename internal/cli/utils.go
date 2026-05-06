@@ -32,22 +32,6 @@ func toSnakeCase(s string) string {
 	return result.String()
 }
 
-// fromSnakeCase converts snake_case back to the original format.
-func fromSnakeCase(s string) string {
-	return strings.ReplaceAll(s, "_", "-")
-}
-
-// quoteArg quotes an argument if it contains spaces or special characters.
-func quoteArg(s string) string {
-	if strings.ContainsAny(s, " \t\n\"'\\") {
-		// Simple quoting - escape backslashes and quotes
-		escaped := strings.ReplaceAll(s, "\\", "\\\\")
-		escaped = strings.ReplaceAll(escaped, "\"", "\\\"")
-		return "\"" + escaped + "\""
-	}
-	return s
-}
-
 // parseArrayValue parses a value that could be a string or array.
 func parseArrayValue(v any) []string {
 	switch val := v.(type) {
@@ -85,18 +69,3 @@ func parseBoolValue(v any) bool {
 	}
 }
 
-// parseStringValue parses a value as string.
-func parseStringValue(v any) string {
-	switch val := v.(type) {
-	case string:
-		return val
-	case int:
-		return string(rune(val))
-	case float64:
-		return strings.TrimRight(strings.TrimRight(
-			strings.Replace(string(rune(int(val))), ".", "", 1),
-			"0"), ".")
-	default:
-		return ""
-	}
-}

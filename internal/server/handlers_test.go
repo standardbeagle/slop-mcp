@@ -1459,17 +1459,6 @@ func TestHandleRunSlop_InlineScript_NoneResult(t *testing.T) {
 // Tests for handleAuthMCP
 // =============================================================================
 
-// setupAuthTestStore creates a temporary directory and returns a token store path.
-// The returned cleanup function should be deferred to clean up the temp directory.
-func setupAuthTestStore(t *testing.T) (storePath string, cleanup func()) {
-	tmpDir := t.TempDir()
-	storePath = filepath.Join(tmpDir, "auth.json")
-	cleanup = func() {
-		// t.TempDir() is automatically cleaned up
-	}
-	return storePath, cleanup
-}
-
 // TestHandleAuthMCP_ListAction_Empty tests auth_mcp list with no tokens.
 func TestHandleAuthMCP_ListAction_Empty(t *testing.T) {
 	// Create a server with empty registry

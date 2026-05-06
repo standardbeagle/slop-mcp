@@ -845,7 +845,7 @@ func TestTokenStore_UnreadableFile(t *testing.T) {
 
 	// Ensure we can clean up
 	t.Cleanup(func() {
-		os.Chmod(storePath, 0644)
+		_ = os.Chmod(storePath, 0644)
 	})
 
 	store := NewTokenStoreWithPath(storePath)
@@ -865,7 +865,7 @@ func TestTokenStore_NonWritableDirectory(t *testing.T) {
 
 	// Ensure we can clean up
 	t.Cleanup(func() {
-		os.Chmod(restrictedDir, 0755)
+		_ = os.Chmod(restrictedDir, 0755)
 	})
 
 	storePath := filepath.Join(restrictedDir, "auth.json")

@@ -365,7 +365,7 @@ func cmdRead(args []string) error {
 		// Check for default
 		if defaultVal, ok := flags["default"]; ok {
 			var v any
-			json.Unmarshal([]byte(defaultVal), &v)
+			_ = json.Unmarshal([]byte(defaultVal), &v)
 			printJSON(ReadResult{Value: v})
 			return nil
 		}
@@ -397,7 +397,7 @@ func cmdRead(args []string) error {
 	if !ok || entry.IsExpired() {
 		if defaultVal, ok := flags["default"]; ok {
 			var v any
-			json.Unmarshal([]byte(defaultVal), &v)
+			_ = json.Unmarshal([]byte(defaultVal), &v)
 			printJSON(ReadResult{Value: v})
 			return nil
 		}
@@ -514,7 +514,7 @@ func cmdWrite(args []string) error {
 	// Handle TTL
 	if ttlStr, ok := flags["ttl"]; ok {
 		var ttl int64
-		fmt.Sscanf(ttlStr, "%d", &ttl)
+		_, _ = fmt.Sscanf(ttlStr, "%d", &ttl)
 		entry.TTL = &ttl
 	}
 
@@ -827,7 +827,7 @@ func applyFilter(data any, filter string) (any, error) {
 			if strings.HasPrefix(part, "[") && strings.HasSuffix(part, "]") {
 				indexStr := strings.TrimPrefix(strings.TrimSuffix(part, "]"), "[")
 				var index int
-				fmt.Sscanf(indexStr, "%d", &index)
+				_, _ = fmt.Sscanf(indexStr, "%d", &index)
 
 				arr, ok := current.([]any)
 				if !ok {

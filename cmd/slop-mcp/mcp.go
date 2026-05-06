@@ -1131,9 +1131,9 @@ func cmdMCPStatus(args []string) {
 		case args[i] == "--json":
 			outputJSON = true
 		case strings.HasPrefix(args[i], "--port="):
-			fmt.Sscanf(args[i], "--port=%d", &port)
+			_, _ = fmt.Sscanf(args[i], "--port=%d", &port)
 		case args[i] == "--port" && i+1 < len(args):
-			fmt.Sscanf(args[i+1], "%d", &port)
+			_, _ = fmt.Sscanf(args[i+1], "%d", &port)
 			i++
 		case args[i] == "--help" || args[i] == "-h":
 			printMCPStatusUsage()
@@ -1468,9 +1468,9 @@ func cmdMCPMetadata(args []string) {
 		case args[i] == "--json":
 			outputJSON = true
 		case strings.HasPrefix(args[i], "--port="):
-			fmt.Sscanf(args[i], "--port=%d", &port)
+			_, _ = fmt.Sscanf(args[i], "--port=%d", &port)
 		case args[i] == "--port" && i+1 < len(args):
-			fmt.Sscanf(args[i+1], "%d", &port)
+			_, _ = fmt.Sscanf(args[i+1], "%d", &port)
 			i++
 		case strings.HasPrefix(args[i], "--output="):
 			outputFile = strings.TrimPrefix(args[i], "--output=")

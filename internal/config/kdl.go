@@ -144,12 +144,10 @@ func LoadClaudeCodeConfig() (*Config, error) {
 		}
 	}
 
-	// Load from user-scoped plugin .mcp.json files
+	// Load from user-scoped plugin .mcp.json files (non-fatal)
 	pluginsPath := ClaudeCodePluginsPath()
 	if pluginsPath != "" {
-		if err := loadClaudeCodePluginMCPs(pluginsPath, cfg); err != nil {
-			// Non-fatal - just skip plugins if we can't read them
-		}
+		_ = loadClaudeCodePluginMCPs(pluginsPath, cfg)
 	}
 
 	return cfg, nil

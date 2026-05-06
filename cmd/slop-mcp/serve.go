@@ -19,7 +19,7 @@ func cmdServe(args []string) {
 		switch args[i] {
 		case "--port", "-p":
 			if i+1 < len(args) {
-				fmt.Sscanf(args[i+1], "%d", &port)
+				_, _ = fmt.Sscanf(args[i+1], "%d", &port)
 				i++
 			}
 		case "--help", "-h":

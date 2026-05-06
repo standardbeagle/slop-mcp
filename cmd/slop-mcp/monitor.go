@@ -30,7 +30,7 @@ func cmdMonitor(args []string) {
 			i++
 		case strings.HasPrefix(args[i], "--timeout="):
 			var secs int
-			fmt.Sscanf(args[i], "--timeout=%d", &secs)
+			_, _ = fmt.Sscanf(args[i], "--timeout=%d", &secs)
 			timeout = secs
 		case args[i] == "--help" || args[i] == "-h":
 			showHelp = true
@@ -177,7 +177,10 @@ func watchMessages(ctx context.Context) {
 			continue
 		}
 		if offset > 0 {
-			f.Seek(offset, 0)
+			if _, err := f.Seek(offset, 0); err != nil {
+				f.Close()
+				continue
+			}
 		}
 		scanner := bufio.NewScanner(f)
 		for scanner.Scan() {

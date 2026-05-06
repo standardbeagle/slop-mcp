@@ -173,10 +173,7 @@ func (e *Executor) buildArgs(tool *ToolConfig, params map[string]any) ([]string,
 
 		// Handle array type
 		if arg.Type == "array" {
-			arrVals := parseArrayValue(val)
-			for _, v := range arrVals {
-				args = append(args, v)
-			}
+			args = append(args, parseArrayValue(val)...)
 		} else {
 			args = append(args, fmt.Sprintf("%v", val))
 		}

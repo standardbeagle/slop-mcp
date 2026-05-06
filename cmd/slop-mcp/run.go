@@ -33,7 +33,7 @@ func cmdRun(args []string) {
 			outputJSON = true
 		case strings.HasPrefix(args[i], "--timeout="):
 			var secs int
-			fmt.Sscanf(args[i], "--timeout=%d", &secs)
+			_, _ = fmt.Sscanf(args[i], "--timeout=%d", &secs)
 			timeout = time.Duration(secs) * time.Second
 		case args[i] == "--help" || args[i] == "-h":
 			printRunUsage()

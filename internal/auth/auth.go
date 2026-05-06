@@ -335,11 +335,11 @@ func (f *OAuthFlow) startCallbackServer() (string, <-chan callbackResult, error)
 
 		go func() {
 			time.Sleep(100 * time.Millisecond)
-			server.Shutdown(context.Background())
+			_ = server.Shutdown(context.Background())
 		}()
 	})
 
-	go server.Serve(listener)
+	go func() { _ = server.Serve(listener) }()
 	return callbackURL, codeChan, nil
 }
 
@@ -409,7 +409,10 @@ func generatePKCE() (verifier, challenge string, err error) {
 
 func generateState() string {
 	b := make([]byte, 16)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		// crypto/rand failure is catastrophic; fall back to time-based state
+		return base64.RawURLEncoding.EncodeToString([]byte(time.Now().String()))
+	}
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 

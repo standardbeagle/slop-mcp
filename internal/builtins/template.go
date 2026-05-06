@@ -7,9 +7,32 @@ import (
 	"os"
 	"strings"
 	"text/template"
+	"unicode"
 
 	"github.com/standardbeagle/slop/pkg/slop"
 )
+
+// titleCase upper-cases the first letter of each whitespace-separated word.
+// Replaces the deprecated strings.Title; sufficient for ASCII template use.
+func titleCase(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	prevSpace := true
+	for _, r := range s {
+		if unicode.IsSpace(r) {
+			prevSpace = true
+			b.WriteRune(r)
+			continue
+		}
+		if prevSpace {
+			b.WriteRune(unicode.ToUpper(r))
+		} else {
+			b.WriteRune(r)
+		}
+		prevSpace = false
+	}
+	return b.String()
+}
 
 // templateRuntime holds reference to SLOP runtime for callbacks
 var templateRuntime *slop.Runtime
@@ -99,7 +122,7 @@ func createFuncMap() template.FuncMap {
 		// String functions
 		"upper":      strings.ToUpper,
 		"lower":      strings.ToLower,
-		"title":      strings.Title,
+		"title":      titleCase,
 		"trim":       strings.TrimSpace,
 		"trimPrefix": strings.TrimPrefix,
 		"trimSuffix": strings.TrimSuffix,
@@ -188,7 +211,7 @@ func tmplToInt(v any) int64 {
 		return int64(val)
 	case string:
 		var i int64
-		fmt.Sscanf(val, "%d", &i)
+		_, _ = fmt.Sscanf(val, "%d", &i)
 		return i
 	default:
 		return 0
@@ -205,7 +228,7 @@ func tmplToFloat(v any) float64 {
 		return val
 	case string:
 		var f float64
-		fmt.Sscanf(val, "%f", &f)
+		_, _ = fmt.Sscanf(val, "%f", &f)
 		return f
 	default:
 		return 0
