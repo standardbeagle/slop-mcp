@@ -78,10 +78,12 @@ func (e *Executor) Execute(ctx context.Context, tool *ToolConfig, params map[str
 	timeout := tool.GetTimeout()
 	execCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	savedEnv := cmd.Env
+	savedStdin := cmd.Stdin
 	cmd = exec.CommandContext(execCtx, cmd.Path, cmd.Args[1:]...)
 	cmd.Dir = workdir
-	cmd.Env = cmd.Env
-	cmd.Stdin = cmd.Stdin
+	cmd.Env = savedEnv
+	cmd.Stdin = savedStdin
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
