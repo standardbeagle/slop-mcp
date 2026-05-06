@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/standardbeagle/slop-mcp/internal/cli"
@@ -173,6 +174,21 @@ func (s *Server) wrapExecuteTool(ctx context.Context, req *mcp.CallToolRequest) 
 		return errorResult(fmt.Errorf("invalid parameters: %w", err)), nil
 	}
 
+	// Detect common wrong-key typos (`arguments` / `args` / `input`) that
+	// Go's silent unknown-field unmarshal would otherwise drop, causing the
+	// tool to run with an empty parameter map. Only trigger when the real
+	// `parameters` field is absent/empty AND the wrong key carries a
+	// non-empty object payload — empty/null wrong-keys are ignored so they
+	// don't mask registry-level errors.
+	if len(input.Parameters) == 0 {
+		if wrong, ok := detectWrongParametersKey(req.Params.Arguments); ok {
+			return errorResult(fmt.Errorf(
+				"unexpected field %q -- execute_tool expects 'parameters' (not %q). "+
+					"Did you mean: {\"mcp_name\":..., \"tool_name\":..., \"parameters\":{...}}?",
+				wrong, wrong)), nil
+		}
+	}
+
 	if input.MCPName == "" {
 		return errorResult(fmt.Errorf("mcp_name is required")), nil
 	}
@@ -311,6 +327,44 @@ func (s *Server) wrapCustomizeTools(ctx context.Context, req *mcp.CallToolReques
 	}
 
 	return toCallToolResult(output)
+}
+
+// detectWrongParametersKey inspects raw execute_tool arguments for common
+// typos used in place of the canonical `parameters` field. Returns the
+// offending key and true when one is present with a non-empty value. Empty
+// objects and null values are ignored -- they indicate the caller probably
+// sent no params at all, not a typo worth surfacing.
+func detectWrongParametersKey(raw json.RawMessage) (string, bool) {
+	if len(raw) == 0 {
+		return "", false
+	}
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return "", false
+	}
+	// Order matters: `arguments` is the most common MCP-native typo, check first.
+	for _, k := range []string{"arguments", "args", "input"} {
+		v, ok := probe[k]
+		if !ok {
+			continue
+		}
+		if isEmptyJSONValue(v) {
+			continue
+		}
+		return k, true
+	}
+	return "", false
+}
+
+// isEmptyJSONValue reports whether a raw JSON value is null, {}, [], or "".
+// Whitespace-only payloads are treated as empty.
+func isEmptyJSONValue(v json.RawMessage) bool {
+	trimmed := strings.TrimSpace(string(v))
+	switch trimmed {
+	case "", "null", "{}", "[]", `""`:
+		return true
+	}
+	return false
 }
 
 // errorResult creates an error CallToolResult.
