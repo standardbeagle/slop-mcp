@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.2] - 2026-05-06
+
+### Added
+
+- **Wrong-key detection in `execute_tool`**: passing `arguments`, `args`, or `input` instead of the canonical `parameters` field now returns a helpful error naming both the wrong key and the correct one with an example payload, instead of silently running the tool with an empty parameter map.
+- **`Notes` field on SLOP function reference**: `slop_help` and `slop_reference --verbose` now surface caveats and cross-refs. Every `mem_*` entry gained notes documenting semantics (default behaviour, glob syntax, case-insensitive match, bank scope).
+- **`mem_save` multiline-map warning**: notes explicitly call out that SLOP's parser does not skip newlines between map literal pairs, so maps must stay on a single line. Examples updated to inline literals (`{"task": "review", "done": false}`) so agents copy a working pattern.
+
+### Fixed
+
+- **CLI executor dropped `Env` and `Stdin`**: `Execute()` rebuilt `cmd` to apply the timeout context but restored fields with `cmd.Env = cmd.Env` (self-assignment on the freshly constructed cmd). Environment variables and stdin readers configured upstream were silently lost. Saved and restored via local variables.
+- **OAuth `generateState` rand.Read failure**: now falls back to a time-based string on `crypto/rand` failure instead of returning data from a partially-initialised buffer.
+- **Monitor tail-loop `f.Seek` failure**: closes the file and skips the cycle instead of reading from the wrong offset.
+
+### Changed
+
+- **`strings.Title` replaced with a local ASCII `titleCase`** helper in template builtins (avoids deprecated stdlib symbol without pulling in `golang.org/x/text` and bumping the Go toolchain requirement).
+- **Lint sweep**: cleared all remaining errcheck, staticcheck, gosimple, and unused-symbol findings across the codebase.
+
 ## [0.14.1] - 2026-04-17
 
 ### Added
