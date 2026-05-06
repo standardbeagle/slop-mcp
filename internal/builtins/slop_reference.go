@@ -17,6 +17,7 @@ type SlopFunction struct {
 	Description string   `json:"description"`
 	Example     string   `json:"example,omitempty"`
 	Returns     string   `json:"returns,omitempty"`
+	Notes       string   `json:"notes,omitempty"`
 	Tags        []string `json:"tags,omitempty"`
 }
 
@@ -256,14 +257,15 @@ var SlopReference = []SlopFunction{
 	{Name: "store_keys", Category: "store", Signature: "store_keys()", Description: "Returns all keys in store", Example: `store_keys()`, Returns: "list"},
 
 	// Persistent memory (slop-mcp additions)
-	{Name: "mem_save", Category: "memory", Signature: `mem_save(bank, key, value, description: "", schema: {})`, Description: "Saves value to persistent disk-backed memory with optional description and schema metadata", Example: `mem_save("cache", "result", data, description: "API response cache")`, Returns: "none", Tags: []string{"slop-mcp"}},
-	{Name: "mem_load", Category: "memory", Signature: "mem_load(bank, key, [default])", Description: "Loads value from persistent memory, returns default or none if missing", Example: `mem_load("cache", "result", "fallback")`, Returns: "any", Tags: []string{"slop-mcp"}},
-	{Name: "mem_delete", Category: "memory", Signature: "mem_delete(bank, key)", Description: "Deletes key from persistent memory bank", Example: `mem_delete("cache", "result")`, Returns: "none", Tags: []string{"slop-mcp"}},
-	{Name: "mem_keys", Category: "memory", Signature: "mem_keys(bank)", Description: "Returns all keys in a persistent memory bank", Example: `mem_keys("cache")`, Returns: "list", Tags: []string{"slop-mcp"}},
+	// Stored as JSON at ~/.config/slop-mcp/memory/<bank>.json. Survives restarts. Banks group related keys.
+	{Name: "mem_save", Category: "memory", Signature: `mem_save(bank, key, value, description: "", schema: {})`, Description: "Saves value to persistent disk-backed memory. value can be any SLOP value (string, number, list, map). Provide description so mem_search and mem_list can surface the entry later", Example: `mem_save("notes", "today", {"task": "review", "done": false}, description: "daily log")`, Returns: "none", Notes: "Map literals must be on a single line: {\"a\": 1, \"b\": 2}. Multiline {\\n ... \\n} is not parsed (SLOP parser does not skip NEWLINE between map pairs). Use json_parse(string) for large values or build maps via assignments. Description is preserved on re-save when the kwarg is omitted.", Tags: []string{"slop-mcp"}},
+	{Name: "mem_load", Category: "memory", Signature: "mem_load(bank, key, [default])", Description: "Loads value from persistent memory, returns default or none if missing", Example: `mem_load("notes", "today", {"task": "", "done": false})`, Returns: "any", Notes: "Pair with mem_info to inspect metadata without loading the value. Returns NullValue (not an error) for missing bank or key when no default given.", Tags: []string{"slop-mcp"}},
+	{Name: "mem_delete", Category: "memory", Signature: "mem_delete(bank, key)", Description: "Deletes key from persistent memory bank", Example: `mem_delete("notes", "today")`, Returns: "none", Tags: []string{"slop-mcp"}},
+	{Name: "mem_keys", Category: "memory", Signature: "mem_keys(bank)", Description: "Returns all keys in a persistent memory bank", Example: `mem_keys("notes")`, Returns: "list", Notes: "Prefer mem_list for richer output (metadata + glob filter); mem_keys is for raw key enumeration only.", Tags: []string{"slop-mcp"}},
 	{Name: "mem_banks", Category: "memory", Signature: "mem_banks()", Description: "Returns all persistent memory bank names", Example: `mem_banks()`, Returns: "list", Tags: []string{"slop-mcp"}},
-	{Name: "mem_info", Category: "memory", Signature: "mem_info(bank, key)", Description: "Returns metadata for a memory entry (description, schema, size, timestamps) without the value", Example: `mem_info("cache", "result")`, Returns: "map", Tags: []string{"slop-mcp"}},
-	{Name: "mem_list", Category: "memory", Signature: `mem_list(bank, pattern: "")`, Description: "Lists all entries in a bank with metadata (no values). Optional glob pattern filters keys", Example: `mem_list("cache", pattern: "user_*")`, Returns: "list", Tags: []string{"slop-mcp"}},
-	{Name: "mem_search", Category: "memory", Signature: `mem_search(query, bank: "", include_values: false)`, Description: "Searches across banks by key name and description. Optionally restrict to one bank or include value content in search", Example: `mem_search("user", bank: "cache")`, Returns: "list", Tags: []string{"slop-mcp"}},
+	{Name: "mem_info", Category: "memory", Signature: "mem_info(bank, key)", Description: "Returns metadata for a memory entry (description, schema, size, timestamps) without the value", Example: `mem_info("notes", "today")`, Returns: "map", Tags: []string{"slop-mcp"}},
+	{Name: "mem_list", Category: "memory", Signature: `mem_list(bank, pattern: "")`, Description: "Lists all entries in a bank with metadata (no values). Optional glob pattern filters keys", Example: `mem_list("notes", pattern: "2026-*")`, Returns: "list", Notes: "Pattern uses filepath.Match glob syntax (* ? [class]). Returns sorted by key.", Tags: []string{"slop-mcp"}},
+	{Name: "mem_search", Category: "memory", Signature: `mem_search(query, bank: "", include_values: false)`, Description: "Searches across banks by key name and description. Optionally restrict to one bank or include value content in search", Example: `mem_search("review", include_values: true)`, Returns: "list", Notes: "Case-insensitive substring match. Without bank: kwarg, scans every bank in ~/.config/slop-mcp/memory. Set include_values: true to also match against serialized JSON of stored values.", Tags: []string{"slop-mcp"}},
 
 	// Crypto (slop-mcp additions)
 	{Name: "crypto_password", Category: "crypto", Signature: "crypto_password(length)", Description: "Generates secure password", Example: `crypto_password(32)`, Returns: "string", Tags: []string{"slop-mcp"}},

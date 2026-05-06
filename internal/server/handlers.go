@@ -1034,6 +1034,9 @@ func (s *Server) handleSlopReference(
 			if fn.Example != "" {
 				sb.WriteString(fmt.Sprintf("\n  Ex: %s", fn.Example))
 			}
+			if fn.Notes != "" {
+				sb.WriteString(fmt.Sprintf("\n  Note: %s", fn.Notes))
+			}
 		}
 		sb.WriteString("\n")
 	}
@@ -1077,6 +1080,9 @@ func (s *Server) handleSlopHelp(
 			}
 			if fn.Returns != "" {
 				sb.WriteString(fmt.Sprintf("Returns: %s\n", fn.Returns))
+			}
+			if fn.Notes != "" {
+				sb.WriteString(fmt.Sprintf("Notes: %s\n", fn.Notes))
 			}
 			return nil, SlopHelpOutput{Text: sb.String()}, nil
 		}
