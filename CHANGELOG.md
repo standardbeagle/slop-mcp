@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.3] - 2026-05-31
+
+### Fixed
+
+- **`execute_tool` silently corrupted large integers in `parameters`**: parameters were decoded into `map[string]any`, which coerces every JSON number to `float64`. Integers above 2^53 — lease tokens, snowflake IDs, nanosecond timestamps — were rounded before being forwarded to the target MCP. Tools taking string ids (reads) were unaffected, but any mutation carrying a large integer was silently mangled, making writes appear to "fail silently" through slop while working when the MCP was driven directly. Parameters are now forwarded as verbatim `json.RawMessage`, so the target MCP receives exactly what the caller sent.
+
 ## [0.14.2] - 2026-05-06
 
 ### Added
