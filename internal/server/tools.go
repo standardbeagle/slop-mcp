@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -168,9 +169,36 @@ func (s *Server) wrapSearchTools(ctx context.Context, req *mcp.CallToolRequest) 
 	return toCallToolResult(output)
 }
 
+// execToolArgs mirrors ExecuteToolInput but keeps `parameters` as verbatim JSON.
+// Decoding into map[string]any coerces every JSON number to float64, silently
+// corrupting integers above 2^53 (lease tokens, snowflake IDs, ns timestamps)
+// before they reach the target MCP. Raw bytes are forwarded losslessly.
+type execToolArgs struct {
+	MCPName    string          `json:"mcp_name"`
+	ToolName   string          `json:"tool_name"`
+	Parameters json.RawMessage `json:"parameters,omitempty"`
+}
+
+// parseExecuteToolArgs decodes execute_tool arguments, preserving the raw
+// `parameters` payload so numeric precision survives forwarding.
+func parseExecuteToolArgs(raw json.RawMessage) (execToolArgs, error) {
+	var a execToolArgs
+	if err := json.Unmarshal(raw, &a); err != nil {
+		return a, err
+	}
+	return a, nil
+}
+
+// isEmptyRawParams reports whether a raw `parameters` payload carries no
+// meaningful content (absent, blank, null, or an empty object).
+func isEmptyRawParams(raw json.RawMessage) bool {
+	t := bytes.TrimSpace(raw)
+	return len(t) == 0 || string(t) == "null" || string(t) == "{}"
+}
+
 func (s *Server) wrapExecuteTool(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	var input ExecuteToolInput
-	if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
+	input, err := parseExecuteToolArgs(req.Params.Arguments)
+	if err != nil {
 		return errorResult(fmt.Errorf("invalid parameters: %w", err)), nil
 	}
 
@@ -180,7 +208,7 @@ func (s *Server) wrapExecuteTool(ctx context.Context, req *mcp.CallToolRequest) 
 	// `parameters` field is absent/empty AND the wrong key carries a
 	// non-empty object payload — empty/null wrong-keys are ignored so they
 	// don't mask registry-level errors.
-	if len(input.Parameters) == 0 {
+	if isEmptyRawParams(input.Parameters) {
 		if wrong, ok := detectWrongParametersKey(req.Params.Arguments); ok {
 			return errorResult(fmt.Errorf(
 				"unexpected field %q -- execute_tool expects 'parameters' (not %q). "+
@@ -196,17 +224,29 @@ func (s *Server) wrapExecuteTool(ctx context.Context, req *mcp.CallToolRequest) 
 		return errorResult(fmt.Errorf("tool_name is required")), nil
 	}
 
-	// Handle CLI tools (mcp_name is "cli" or tool_name has cli_ prefix)
+	// Handle CLI tools (mcp_name is "cli" or tool_name has cli_ prefix). CLI
+	// tools take string arguments, so the map[string]any path is safe here.
 	if input.MCPName == "cli" || cli.IsCLITool(input.ToolName) {
-		_, output, err := s.handleExecuteTool(ctx, req, input)
+		var params map[string]any
+		if !isEmptyRawParams(input.Parameters) {
+			if err := json.Unmarshal(input.Parameters, &params); err != nil {
+				return errorResult(fmt.Errorf("invalid parameters: %w", err)), nil
+			}
+		}
+		_, output, err := s.handleExecuteTool(ctx, req, ExecuteToolInput{
+			MCPName:    input.MCPName,
+			ToolName:   input.ToolName,
+			Parameters: params,
+		})
 		if err != nil {
 			return errorResult(err), nil
 		}
 		return toCallToolResult(output)
 	}
 
-	// For MCP tools, pass through the raw response from the underlying MCP
-	result, err := s.registry.ExecuteToolRaw(ctx, input.MCPName, input.ToolName, input.Parameters)
+	// For MCP tools, forward the raw parameters byte-for-byte so large integers
+	// keep their precision, and pass through the underlying MCP's raw response.
+	result, err := s.registry.ExecuteToolRawJSON(ctx, input.MCPName, input.ToolName, input.Parameters)
 	if err != nil {
 		return errorResult(err), nil
 	}

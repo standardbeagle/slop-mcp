@@ -1,7 +1,9 @@
 package registry
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -136,28 +138,28 @@ type MCPStatus struct {
 type MCPState string
 
 const (
-	StateConfigured    MCPState = "configured"
-	StateConnecting    MCPState = "connecting"
-	StateConnected     MCPState = "connected"
-	StateDisconnected  MCPState = "disconnected"
-	StateReconnecting  MCPState = "reconnecting"
-	StateError         MCPState = "error"
-	StateNeedsAuth     MCPState = "needs_auth"
-	StateCached        MCPState = "cached" // Tools loaded from cache, not yet connected
+	StateConfigured   MCPState = "configured"
+	StateConnecting   MCPState = "connecting"
+	StateConnected    MCPState = "connected"
+	StateDisconnected MCPState = "disconnected"
+	StateReconnecting MCPState = "reconnecting"
+	StateError        MCPState = "error"
+	StateNeedsAuth    MCPState = "needs_auth"
+	StateCached       MCPState = "cached" // Tools loaded from cache, not yet connected
 )
 
 // Reconnection constants for exponential backoff.
 const (
-	DefaultMaxRetries    = 5              // Default max auto-reconnect retries (0 = disabled)
-	InitialBackoff       = 1 * time.Second
-	MaxBackoff           = 60 * time.Second
-	BackoffMultiplier    = 2.0
+	DefaultMaxRetries = 5 // Default max auto-reconnect retries (0 = disabled)
+	InitialBackoff    = 1 * time.Second
+	MaxBackoff        = 60 * time.Second
+	BackoffMultiplier = 2.0
 )
 
 // Health check constants.
 const (
-	DefaultHealthCheckTimeout  = 5 * time.Second  // Timeout for individual health check pings
-	DefaultHealthCheckInterval = 0                 // Default is disabled (0 = no background health checks)
+	DefaultHealthCheckTimeout  = 5 * time.Second // Timeout for individual health check pings
+	DefaultHealthCheckInterval = 0               // Default is disabled (0 = no background health checks)
 )
 
 // HealthStatus represents the health check status of an MCP.
@@ -205,8 +207,8 @@ type mcpConnection struct {
 // Registry manages multiple MCP connections.
 type Registry struct {
 	connections       map[string]*mcpConnection
-	states            map[string]*mcpState   // tracks all configured MCPs and their states
-	tools             map[string][]ToolInfo  // mutable source of truth for tool lists (guarded by mu)
+	states            map[string]*mcpState      // tracks all configured MCPs and their states
+	tools             map[string][]ToolInfo     // mutable source of truth for tool lists (guarded by mu)
 	indexPtr          atomic.Pointer[ToolIndex] // immutable search snapshot, swapped on rebuild
 	overrides         OverrideProvider          // optional; injected via SetOverrideProvider
 	logger            logging.Logger
@@ -1230,6 +1232,32 @@ func (r *Registry) ExecuteTool(ctx context.Context, mcpName, toolName string, pa
 // ExecuteToolRaw calls a tool and returns the raw MCP response without conversion.
 // Use this when you need to pass through the underlying MCP's response format directly.
 func (r *Registry) ExecuteToolRaw(ctx context.Context, mcpName, toolName string, params map[string]any) (*mcp.CallToolResult, error) {
+	// Normalize nil params to empty map (MCP protocol requires object, not null)
+	if params == nil {
+		params = make(map[string]any)
+	}
+	return r.callRaw(ctx, mcpName, toolName, params)
+}
+
+// ExecuteToolRawJSON calls a tool with parameters supplied as verbatim JSON,
+// preserving numeric precision. Decoding parameters into map[string]any first
+// coerces every JSON number to float64, silently corrupting integers above 2^53
+// (lease tokens, snowflake IDs, nanosecond timestamps). A json.RawMessage is
+// marshaled byte-for-byte by the SDK, so the target MCP receives exactly what
+// the caller sent. An empty/blank/null payload is forwarded as nil so the SDK
+// normalizes it to an empty object.
+func (r *Registry) ExecuteToolRawJSON(ctx context.Context, mcpName, toolName string, params json.RawMessage) (*mcp.CallToolResult, error) {
+	var args any
+	if t := bytes.TrimSpace(params); len(t) > 0 && string(t) != "null" {
+		args = params
+	}
+	return r.callRaw(ctx, mcpName, toolName, args)
+}
+
+// callRaw connects (lazily if needed) and invokes a tool, returning the raw MCP
+// response. args is passed straight to the SDK as CallToolParams.Arguments; a
+// nil interface lets the SDK normalize it to an empty object.
+func (r *Registry) callRaw(ctx context.Context, mcpName, toolName string, args any) (*mcp.CallToolResult, error) {
 	// Lazy-connect if cached
 	if state := r.GetState(mcpName); state == StateCached || state == StateConfigured {
 		if err := r.EnsureConnected(ctx, mcpName); err != nil {
@@ -1248,15 +1276,10 @@ func (r *Registry) ExecuteToolRaw(ctx context.Context, mcpName, toolName string,
 		}
 	}
 
-	// Normalize nil params to empty map (MCP protocol requires object, not null)
-	if params == nil {
-		params = make(map[string]any)
-	}
-
 	// Call tool and return raw result
 	result, err := conn.session.CallTool(ctx, &mcp.CallToolParams{
 		Name:      toolName,
-		Arguments: params,
+		Arguments: args,
 	})
 	if err != nil {
 		// Check for tool not found errors
@@ -1579,14 +1602,14 @@ func findSimilarTools(query string, available []string) []string {
 
 // InvalidParameterError is returned when invalid parameters are passed to a tool.
 type InvalidParameterError struct {
-	MCPName           string
-	ToolName          string
-	OriginalError     string
-	ProvidedParams    []string
-	ExpectedParams    []ParamInfo
-	SimilarParams     map[string]string // provided -> suggested
-	MissingRequired   []string          // required params not provided
-	UnknownParams     []string          // provided params not in schema
+	MCPName         string
+	ToolName        string
+	OriginalError   string
+	ProvidedParams  []string
+	ExpectedParams  []ParamInfo
+	SimilarParams   map[string]string // provided -> suggested
+	MissingRequired []string          // required params not provided
+	UnknownParams   []string          // provided params not in schema
 }
 
 // ParamInfo describes a parameter in a tool's schema.
