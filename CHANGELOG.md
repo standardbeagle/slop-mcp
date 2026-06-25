@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Agentic Resource Discovery (ARD) manifest**: published `.well-known/ai-catalog.json` (served from the docs site) so ARD discovery services can index slop-mcp as an MCP server. See https://agenticresourcediscovery.org/how_to_publish/.
+
 ## [0.14.3] - 2026-05-31
 
 ### Fixed

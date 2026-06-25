@@ -1,0 +1,33 @@
+{
+  "specVersion": "1.0",
+  "host": {
+    "displayName": "Standard Beagle",
+    "identifier": "did:web:standardbeagle.github.io"
+  },
+  "entries": [
+    {
+      "identifier": "urn:air:standardbeagle.github.io:server:slop-mcp",
+      "displayName": "slop-mcp",
+      "type": "application/mcp-server+json",
+      "url": "https://standardbeagle.github.io/slop-mcp/",
+      "capabilities": [
+        "search_tools",
+        "execute_tool",
+        "get_metadata",
+        "run_slop",
+        "manage_mcps",
+        "auth_mcp",
+        "slop_reference",
+        "slop_help"
+      ],
+      "description": "An MCP orchestrator that aggregates many MCP servers behind 8 meta-tools, eliminating context-window bloat. Instead of exposing 50 servers x 20 tools = 1000 tool definitions, agents always see only 8 tools and discover the rest on demand via fuzzy tool search, then execute any tool on any connected server. Supports runtime registration, OAuth, and SLOP scripts for multi-server code execution.",
+      "representativeQueries": [
+        "find a tool that can read files across my connected MCP servers",
+        "register a new MCP server and list its tools",
+        "run a script that calls tools on several MCP servers at once",
+        "search every connected server for a tool to create a GitHub issue",
+        "authenticate an MCP server over OAuth"
+      ]
+    }
+  ]
+}
