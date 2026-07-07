@@ -7,8 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Custom tools were unexecutable over the real MCP protocol**: `execute_tool` only routed `_custom` tools in the test-helper path, so real clients got `MCPNotFoundError` for tools that `search_tools` had just listed. The protocol path now routes them.
+- **Overridden tools were permanently flagged stale**: the search index substitutes override descriptions, and staleness checks then hashed the override text as if it were the upstream description (re-saving corrupted the baseline, and the tool cache persisted override text as server descriptions). The index now retains the upstream description and all staleness hashes use it; compact and verbose `get_metadata` now agree.
+- **Command injection**: `agnt_watch` command strings and CLI-tool shell mode passed caller-controlled values to the shell unquoted; both now strictly single-quote non-trivial arguments.
+- **Path traversal in memory banks**: `mem_*` builtins accepted bank names containing path separators, escaping `~/.config/slop-mcp/memory`. Bank names are now validated everywhere (shared with memory-cli), and reserved `_slop.*` banks are rejected on read entry points too.
+- **ES256/384/512 JWT signing panicked**: `signECDSA` passed a nil randomness source to `ecdsa.Sign`.
+- **KDL config writing corrupted on special characters**: emitted values (command, args, env, headers) are now escaped, and env/header keys quoted.
+- **CLI tool failures were swallowed in SLOP**: a failing CLI tool returned its partial stdout to scripts as success; failures now surface as errors.
+- **OAuth**: auth-server metadata discovery no longer nil-panics on 4xx and falls back to `openid-configuration`; refresh responses without `expires_in` no longer mark tokens instantly expired; dynamic client registration registers the real loopback callback URI instead of `localhost:0`; token writes are atomic and serialized; `auth_mcp` timestamps are real UTC.
+- **Registry**: connecting no longer holds the registry lock across network I/O (one slow MCP stalled every request); lifecycle operations are serialized per MCP; disconnect/reconnect races and a leaked session on connect-overwrite fixed; a transient tool-listing failure can no longer persist an empty tool cache; `manage_mcps unregister` removes the entry instead of leaving a phantom "disconnected" one, and a failed `register` no longer persists the broken config to the KDL file.
+- **`run_slop` with both `recipe` and `file_path` silently discarded the recipe**; now rejected as mutually exclusive.
+- Concurrent SLOP runtime construction was a data race (upstream slop v0.3.0 package-level hook); construction is now serialized.
+
 ### Changed
 
+- **`run_slop` and custom tools no longer eagerly connect every registered MCP**: SLOP runtimes get one lazy registry-backed service per MCP, so scripts only connect (via the shared registry session) to servers they actually call. Previously every execution spawned and tore down one subprocess per command-transport MCP, even for pure scripts. `customize_tools` listings no longer trigger connections either: staleness for unconnected dependencies reports `stale_status: "unknown"`.
 - **Upgraded `modelcontextprotocol/go-sdk` from v1.2.0 to v1.6.1**. This raises the minimum Go toolchain to 1.25.0 (the SDK's new floor). The OAuth discovery flow was migrated to the SDK's revised `oauthex` API: `GetProtectedResourceMetadataFromID` is gone, so the RFC 9728 / RFC 8414 well-known metadata URLs are now derived locally and passed to `GetProtectedResourceMetadata`/`GetAuthServerMeta` alongside the resource/issuer for validation.
 
 ## [0.14.3] - 2026-05-31
