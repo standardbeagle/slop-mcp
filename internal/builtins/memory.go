@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -13,6 +14,36 @@ import (
 	"github.com/standardbeagle/slop-mcp/internal/overrides"
 	"github.com/standardbeagle/slop/pkg/slop"
 )
+
+// bankNameRegex matches valid bank names (same rules as memory-cli):
+// must start with a lowercase letter, then lowercase letters, digits,
+// hyphens, or underscores. This prevents path traversal via bank names.
+var bankNameRegex = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
+
+// ValidateBankName rejects bank names that are too long, malformed, or
+// could escape the memory directory (e.g. "../../etc/passwd").
+func ValidateBankName(name string) error {
+	if len(name) > 64 {
+		return fmt.Errorf("bank name too long (max 64 characters)")
+	}
+	if !bankNameRegex.MatchString(name) {
+		return fmt.Errorf("invalid bank name %q: must start with lowercase letter and contain only lowercase letters, numbers, hyphens, and underscores", name)
+	}
+	return nil
+}
+
+// checkBank validates a bank name for a mem_* entry point: reserved banks
+// are rejected first (with a pointer to customize_tools), then the name is
+// validated against the bank naming rules.
+func checkBank(fn, name string) error {
+	if overrides.IsReservedBank(name) {
+		return fmt.Errorf("%s: bank %q is reserved; use customize_tools", fn, name)
+	}
+	if err := ValidateBankName(name); err != nil {
+		return fmt.Errorf("%s: %w", fn, err)
+	}
+	return nil
+}
 
 // MemoryStore provides disk-backed persistent memory for SLOP scripts.
 // Data is stored as JSON files in ~/.config/slop-mcp/memory/<bank>.json,
@@ -104,8 +135,8 @@ func RegisterMemory(rt *slop.Runtime, store *MemoryStore) {
 		if !ok {
 			return nil, fmt.Errorf("mem_save: bank must be a string")
 		}
-		if overrides.IsReservedBank(bankName.Value) {
-			return nil, fmt.Errorf("mem_save: bank %q is reserved; use customize_tools", bankName.Value)
+		if err := checkBank("mem_save", bankName.Value); err != nil {
+			return nil, err
 		}
 		key, ok := args[1].(*slop.StringValue)
 		if !ok {
@@ -180,6 +211,9 @@ func RegisterMemory(rt *slop.Runtime, store *MemoryStore) {
 		if !ok {
 			return nil, fmt.Errorf("mem_load: bank must be a string")
 		}
+		if err := checkBank("mem_load", bankName.Value); err != nil {
+			return nil, err
+		}
 		key, ok := args[1].(*slop.StringValue)
 		if !ok {
 			return nil, fmt.Errorf("mem_load: key must be a string")
@@ -218,8 +252,8 @@ func RegisterMemory(rt *slop.Runtime, store *MemoryStore) {
 		if !ok {
 			return nil, fmt.Errorf("mem_delete: bank must be a string")
 		}
-		if overrides.IsReservedBank(bankName.Value) {
-			return nil, fmt.Errorf("mem_delete: bank %q is reserved; use customize_tools", bankName.Value)
+		if err := checkBank("mem_delete", bankName.Value); err != nil {
+			return nil, err
 		}
 		key, ok := args[1].(*slop.StringValue)
 		if !ok {
@@ -253,6 +287,9 @@ func RegisterMemory(rt *slop.Runtime, store *MemoryStore) {
 		bankName, ok := args[0].(*slop.StringValue)
 		if !ok {
 			return nil, fmt.Errorf("mem_keys: bank must be a string")
+		}
+		if err := checkBank("mem_keys", bankName.Value); err != nil {
+			return nil, err
 		}
 
 		store.mu.Lock()
@@ -291,6 +328,9 @@ func RegisterMemory(rt *slop.Runtime, store *MemoryStore) {
 				continue
 			}
 			name := entry.Name()[:len(entry.Name())-5] // strip .json
+			if overrides.IsReservedBank(name) {
+				continue
+			}
 			banks = append(banks, name)
 		}
 		return slop.GoToValue(banks), nil
@@ -303,6 +343,9 @@ func RegisterMemory(rt *slop.Runtime, store *MemoryStore) {
 		bankName, ok := args[0].(*slop.StringValue)
 		if !ok {
 			return nil, fmt.Errorf("mem_info: bank must be a string")
+		}
+		if err := checkBank("mem_info", bankName.Value); err != nil {
+			return nil, err
 		}
 		key, ok := args[1].(*slop.StringValue)
 		if !ok {
@@ -326,11 +369,11 @@ func RegisterMemory(rt *slop.Runtime, store *MemoryStore) {
 		}
 
 		result := map[string]any{
-			"key":        key.Value,
+			"key":         key.Value,
 			"description": entry.Description,
-			"size":       entry.Size,
-			"created_at": entry.CreatedAt.Format(time.RFC3339),
-			"updated_at": entry.UpdatedAt.Format(time.RFC3339),
+			"size":        entry.Size,
+			"created_at":  entry.CreatedAt.Format(time.RFC3339),
+			"updated_at":  entry.UpdatedAt.Format(time.RFC3339),
 		}
 		if entry.Schema != nil {
 			result["schema"] = entry.Schema
@@ -345,6 +388,9 @@ func RegisterMemory(rt *slop.Runtime, store *MemoryStore) {
 		bankName, ok := args[0].(*slop.StringValue)
 		if !ok {
 			return nil, fmt.Errorf("mem_list: bank must be a string")
+		}
+		if err := checkBank("mem_list", bankName.Value); err != nil {
+			return nil, err
 		}
 
 		pattern := ""
@@ -407,6 +453,11 @@ func RegisterMemory(rt *slop.Runtime, store *MemoryStore) {
 				bankFilter = sv.Value
 			}
 		}
+		if bankFilter != "" {
+			if err := checkBank("mem_search", bankFilter); err != nil {
+				return nil, err
+			}
+		}
 
 		includeValues := false
 		if v, ok := kwargs["include_values"]; ok {
@@ -434,7 +485,11 @@ func RegisterMemory(rt *slop.Runtime, store *MemoryStore) {
 				if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
 					continue
 				}
-				bankNames = append(bankNames, entry.Name()[:len(entry.Name())-5])
+				name := entry.Name()[:len(entry.Name())-5]
+				if overrides.IsReservedBank(name) {
+					continue
+				}
+				bankNames = append(bankNames, name)
 			}
 		}
 		sort.Strings(bankNames)

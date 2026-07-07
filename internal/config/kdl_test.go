@@ -688,7 +688,7 @@ func TestFormatMCPBlock(t *testing.T) {
 			contains: []string{
 				`mcp "env-test"`,
 				"env {",
-				`KEY "value"`,
+				`"KEY" "value"`,
 			},
 		},
 		{
@@ -704,7 +704,7 @@ func TestFormatMCPBlock(t *testing.T) {
 			contains: []string{
 				`mcp "header-test"`,
 				"headers {",
-				`Authorization "Bearer token"`,
+				`"Authorization" "Bearer token"`,
 			},
 		},
 	}
@@ -942,4 +942,52 @@ func TestFormatMCPBlock_RoundTripWithTimeout(t *testing.T) {
 	require.True(t, ok)
 
 	assert.Equal(t, original.Timeout, parsed.Timeout)
+}
+
+func TestFormatMCPBlock_EscapesSpecialCharacters(t *testing.T) {
+	original := MCPConfig{
+		Name:    "escape-test",
+		Type:    "stdio",
+		Command: `run "quoted" \path`,
+		Args:    []string{`arg with "quotes"`, "line1\nline2", "tab\there", "back\\slash", "cr\rhere"},
+		Env: map[string]string{
+			"MULTI": "a\nb",
+			"QUOTE": `say "hi"`,
+		},
+		Headers: map[string]string{
+			"X-Weird": "v1\tv2",
+		},
+		URL: `https://example.com/?q="x"`,
+	}
+
+	formatted := formatMCPBlock(original)
+	cfg, err := ParseKDLConfig(formatted, SourceProject)
+	require.NoError(t, err)
+
+	parsed, ok := cfg.MCPs["escape-test"]
+	require.True(t, ok)
+
+	assert.Equal(t, original.Command, parsed.Command)
+	assert.Equal(t, original.Args, parsed.Args)
+	assert.Equal(t, original.Env["MULTI"], parsed.Env["MULTI"])
+	assert.Equal(t, original.Env["QUOTE"], parsed.Env["QUOTE"])
+	assert.Equal(t, original.Headers["X-Weird"], parsed.Headers["X-Weird"])
+	assert.Equal(t, original.URL, parsed.URL)
+}
+
+func TestFormatMCPBlock_EscapedNameRoundTrip(t *testing.T) {
+	name := `weird "name" with\stuff`
+	original := MCPConfig{
+		Name:    name,
+		Type:    "stdio",
+		Command: "server",
+	}
+
+	formatted := formatMCPBlock(original)
+	cfg, err := ParseKDLConfig(formatted, SourceProject)
+	require.NoError(t, err)
+
+	parsed, ok := cfg.MCPs[name]
+	require.True(t, ok)
+	assert.Equal(t, name, parsed.Name)
 }

@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/sha512"
@@ -384,7 +385,7 @@ func signECDSA(signingInput string, keyPEM string, hashType crypto.Hash) ([]byte
 	hasher.Write([]byte(signingInput))
 	hashed := hasher.Sum(nil)
 
-	r, s, err := ecdsa.Sign(nil, privKey, hashed)
+	r, s, err := ecdsa.Sign(rand.Reader, privKey, hashed)
 	if err != nil {
 		return nil, err
 	}

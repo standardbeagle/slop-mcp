@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/standardbeagle/slop/pkg/slop"
 )
@@ -55,6 +56,17 @@ func (s *SlopService) Call(method string, args []slop.Value, kwargs map[string]s
 	result, err := s.registry.Execute(s.ctx, method, params)
 	if err != nil {
 		return slop.NewErrorValue(fmt.Sprintf("CLI tool %s failed: %v", method, err)), nil
+	}
+
+	// Fail fast on execution failure. The executor sets result.Error for
+	// non-zero exits (unless the tool config allows failure), launch
+	// failures, and stderr-as-failure policies.
+	if result.Error != "" {
+		msg := result.Error
+		if stderr := strings.TrimSpace(result.Stderr); stderr != "" {
+			msg += ": " + stderr
+		}
+		return slop.NewErrorValue(fmt.Sprintf("CLI tool %s failed: %s", method, msg)), nil
 	}
 
 	// Parse output as JSON if possible

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	kdl "github.com/sblinch/kdl-go"
 )
@@ -474,33 +475,48 @@ func WriteConfigFile(path string, cfg *Config) error {
 	return os.WriteFile(path, []byte(content), 0644)
 }
 
+// kdlEscaper escapes characters that are significant inside KDL quoted
+// strings so written values round-trip through the KDL parser.
+var kdlEscaper = strings.NewReplacer(
+	"\\", "\\\\",
+	"\"", "\\\"",
+	"\n", "\\n",
+	"\t", "\\t",
+	"\r", "\\r",
+)
+
+// kdlQuote returns s as a KDL quoted string literal.
+func kdlQuote(s string) string {
+	return "\"" + kdlEscaper.Replace(s) + "\""
+}
+
 func formatMCPBlock(mcp MCPConfig) string {
-	result := "mcp \"" + mcp.Name + "\" {\n"
+	result := "mcp " + kdlQuote(mcp.Name) + " {\n"
 
 	if mcp.Type != "" {
-		result += "    type \"" + mcp.Type + "\"\n"
+		result += "    type " + kdlQuote(mcp.Type) + "\n"
 	} else {
 		result += "    type \"command\"\n"
 	}
 
 	if mcp.Command != "" {
-		result += "    command \"" + mcp.Command + "\"\n"
+		result += "    command " + kdlQuote(mcp.Command) + "\n"
 	}
 
 	if len(mcp.Args) > 0 {
 		result += "    args"
 		for _, arg := range mcp.Args {
-			result += " \"" + arg + "\""
+			result += " " + kdlQuote(arg)
 		}
 		result += "\n"
 	}
 
 	if mcp.URL != "" {
-		result += "    url \"" + mcp.URL + "\"\n"
+		result += "    url " + kdlQuote(mcp.URL) + "\n"
 	}
 
 	if mcp.Timeout != "" {
-		result += "    timeout \"" + mcp.Timeout + "\"\n"
+		result += "    timeout " + kdlQuote(mcp.Timeout) + "\n"
 	}
 
 	if mcp.Dynamic {
@@ -510,7 +526,7 @@ func formatMCPBlock(mcp MCPConfig) string {
 	if len(mcp.Env) > 0 {
 		result += "    env {\n"
 		for k, v := range mcp.Env {
-			result += "        " + k + " \"" + v + "\"\n"
+			result += "        " + kdlQuote(k) + " " + kdlQuote(v) + "\n"
 		}
 		result += "    }\n"
 	}
@@ -518,7 +534,7 @@ func formatMCPBlock(mcp MCPConfig) string {
 	if len(mcp.Headers) > 0 {
 		result += "    headers {\n"
 		for k, v := range mcp.Headers {
-			result += "        " + k + " \"" + v + "\"\n"
+			result += "        " + kdlQuote(k) + " " + kdlQuote(v) + "\n"
 		}
 		result += "    }\n"
 	}

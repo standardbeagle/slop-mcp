@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
+	"github.com/standardbeagle/slop-mcp/internal/builtins"
 	"github.com/standardbeagle/slop-mcp/internal/overrides"
 )
 
@@ -49,10 +49,10 @@ func (e *Entry) IsExpired() bool {
 
 // Result types for JSON output.
 type ReadResult struct {
-	Value    any           `json:"value,omitempty"`
-	Metadata *EntryMeta    `json:"metadata,omitempty"`
-	Bank     *BankSummary  `json:"bank,omitempty"`
-	Error    *ErrorResult  `json:"error,omitempty"`
+	Value    any          `json:"value,omitempty"`
+	Metadata *EntryMeta   `json:"metadata,omitempty"`
+	Bank     *BankSummary `json:"bank,omitempty"`
+	Error    *ErrorResult `json:"error,omitempty"`
 }
 
 type EntryMeta struct {
@@ -302,20 +302,10 @@ func newBank() *Bank {
 	}
 }
 
-// Validate bank name
-var bankNameRegex = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
-
+// validateBankName delegates to the shared bank name validation used by the
+// SLOP mem_* builtins so both entry points enforce identical rules.
 func validateBankName(name string) error {
-	if len(name) > 64 {
-		return fmt.Errorf("bank name too long (max 64 characters)")
-	}
-	if !bankNameRegex.MatchString(name) {
-		return fmt.Errorf("invalid bank name: must start with lowercase letter and contain only lowercase letters, numbers, hyphens, and underscores")
-	}
-	if strings.HasPrefix(name, "_") {
-		return fmt.Errorf("bank names starting with underscore are reserved")
-	}
-	return nil
+	return builtins.ValidateBankName(name)
 }
 
 // Parse flags

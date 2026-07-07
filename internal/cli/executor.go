@@ -36,15 +36,24 @@ func (e *Executor) Execute(ctx context.Context, tool *ToolConfig, params map[str
 		return nil, fmt.Errorf("failed to build arguments: %w", err)
 	}
 
+	// Apply tool timeout
+	timeout := tool.GetTimeout()
+	execCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
 	// Create command
 	var cmd *exec.Cmd
 	if tool.Shell {
-		// Run through shell (less secure)
-		shellCmd := tool.Command + " " + strings.Join(args, " ")
-		cmd = exec.CommandContext(ctx, "sh", "-c", shellCmd)
+		// Run through shell; each argument is single-quoted so parameter
+		// values cannot inject shell syntax.
+		shellCmd := tool.Command
+		for _, arg := range args {
+			shellCmd += " " + shellQuote(arg)
+		}
+		cmd = exec.CommandContext(execCtx, "sh", "-c", shellCmd)
 	} else {
 		// Direct execution (more secure)
-		cmd = exec.CommandContext(ctx, tool.Command, args...)
+		cmd = exec.CommandContext(execCtx, tool.Command, args...)
 	}
 
 	// Set working directory
@@ -71,19 +80,6 @@ func (e *Executor) Execute(ctx context.Context, tool *ToolConfig, params map[str
 
 	// Capture stdout and stderr
 	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	// Create timeout context if not already set
-	timeout := tool.GetTimeout()
-	execCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	savedEnv := cmd.Env
-	savedStdin := cmd.Stdin
-	cmd = exec.CommandContext(execCtx, cmd.Path, cmd.Args[1:]...)
-	cmd.Dir = workdir
-	cmd.Env = savedEnv
-	cmd.Stdin = savedStdin
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
@@ -143,6 +139,12 @@ func (e *Executor) Execute(ctx context.Context, tool *ToolConfig, params map[str
 	}
 
 	return result, nil
+}
+
+// shellQuote wraps s in single quotes for POSIX sh, escaping any embedded
+// single quote as quote-backslash-quote-quote so the value is passed literally.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // buildArgs builds command line arguments from tool config and params.
