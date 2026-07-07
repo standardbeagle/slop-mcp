@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"text/template"
 	"unicode"
@@ -158,8 +159,8 @@ func createFuncMap() template.FuncMap {
 		"get":    tmplGet,
 
 		// Conditionals
-		"default": tmplDefault,
-		"empty":   tmplEmpty,
+		"default":  tmplDefault,
+		"empty":    tmplEmpty,
 		"coalesce": tmplCoalesce,
 
 		// Math
@@ -201,37 +202,41 @@ func tmplToString(v any) string {
 	return fmt.Sprintf("%v", v)
 }
 
-func tmplToInt(v any) int64 {
+func tmplToInt(v any) (int64, error) {
 	switch val := v.(type) {
 	case int:
-		return int64(val)
+		return int64(val), nil
 	case int64:
-		return val
+		return val, nil
 	case float64:
-		return int64(val)
+		return int64(val), nil
 	case string:
-		var i int64
-		_, _ = fmt.Sscanf(val, "%d", &i)
-		return i
+		i, err := strconv.ParseInt(strings.TrimSpace(val), 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("toInt: invalid integer %q", val)
+		}
+		return i, nil
 	default:
-		return 0
+		return 0, fmt.Errorf("toInt: unsupported type %T", v)
 	}
 }
 
-func tmplToFloat(v any) float64 {
+func tmplToFloat(v any) (float64, error) {
 	switch val := v.(type) {
 	case int:
-		return float64(val)
+		return float64(val), nil
 	case int64:
-		return float64(val)
+		return float64(val), nil
 	case float64:
-		return val
+		return val, nil
 	case string:
-		var f float64
-		_, _ = fmt.Sscanf(val, "%f", &f)
-		return f
+		f, err := strconv.ParseFloat(strings.TrimSpace(val), 64)
+		if err != nil {
+			return 0, fmt.Errorf("toFloat: invalid float %q", val)
+		}
+		return f, nil
 	default:
-		return 0
+		return 0, fmt.Errorf("toFloat: unsupported type %T", v)
 	}
 }
 
@@ -385,52 +390,82 @@ func tmplCoalesce(vals ...any) any {
 	return nil
 }
 
-func tmplAdd(a, b any) any {
-	af := tmplToFloat(a)
-	bf := tmplToFloat(b)
+func tmplAdd(a, b any) (any, error) {
+	af, err := tmplToFloat(a)
+	if err != nil {
+		return nil, err
+	}
+	bf, err := tmplToFloat(b)
+	if err != nil {
+		return nil, err
+	}
 	result := af + bf
 	if result == float64(int64(result)) {
-		return int64(result)
+		return int64(result), nil
 	}
-	return result
+	return result, nil
 }
 
-func tmplSub(a, b any) any {
-	af := tmplToFloat(a)
-	bf := tmplToFloat(b)
+func tmplSub(a, b any) (any, error) {
+	af, err := tmplToFloat(a)
+	if err != nil {
+		return nil, err
+	}
+	bf, err := tmplToFloat(b)
+	if err != nil {
+		return nil, err
+	}
 	result := af - bf
 	if result == float64(int64(result)) {
-		return int64(result)
+		return int64(result), nil
 	}
-	return result
+	return result, nil
 }
 
-func tmplMul(a, b any) any {
-	af := tmplToFloat(a)
-	bf := tmplToFloat(b)
+func tmplMul(a, b any) (any, error) {
+	af, err := tmplToFloat(a)
+	if err != nil {
+		return nil, err
+	}
+	bf, err := tmplToFloat(b)
+	if err != nil {
+		return nil, err
+	}
 	result := af * bf
 	if result == float64(int64(result)) {
-		return int64(result)
+		return int64(result), nil
 	}
-	return result
+	return result, nil
 }
 
-func tmplDiv(a, b any) any {
-	af := tmplToFloat(a)
-	bf := tmplToFloat(b)
+func tmplDiv(a, b any) (any, error) {
+	af, err := tmplToFloat(a)
+	if err != nil {
+		return nil, err
+	}
+	bf, err := tmplToFloat(b)
+	if err != nil {
+		return nil, err
+	}
 	if bf == 0 {
-		return 0
+		return nil, fmt.Errorf("div: division by zero")
 	}
-	return af / bf
+	return af / bf, nil
 }
 
-func tmplMod(a, b any) int64 {
-	ai := tmplToInt(a)
-	bi := tmplToInt(b)
-	if bi == 0 {
-		return 0
+func tmplMod(a, b any) (int64, error) {
+	ai, err := tmplToInt(a)
+	if err != nil {
+		return 0, err
 	}
-	return ai % bi
+	bi, err := tmplToInt(b)
+	if err != nil {
+		return 0, err
+	}
+	if bi == 0 {
+		return 0, fmt.Errorf("mod: division by zero")
+	}
+	return ai % bi, nil
 }
 
 // tmplSlopCall calls a SLOP expression and returns the result.
@@ -448,28 +483,28 @@ func tmplSlopCall(expr string) (any, error) {
 	return slopValueToAny(result), nil
 }
 
-func tmplToJSON(v any) string {
+func tmplToJSON(v any) (string, error) {
 	data, err := json.Marshal(v)
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("toJson: %w", err)
 	}
-	return string(data)
+	return string(data), nil
 }
 
-func tmplToPrettyJSON(v any) string {
+func tmplToPrettyJSON(v any) (string, error) {
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("toPrettyJson: %w", err)
 	}
-	return string(data)
+	return string(data), nil
 }
 
-func tmplFromJSON(s string) any {
+func tmplFromJSON(s string) (any, error) {
 	var result any
 	if err := json.Unmarshal([]byte(s), &result); err != nil {
-		return nil
+		return nil, fmt.Errorf("fromJson: invalid JSON: %w", err)
 	}
-	return result
+	return result, nil
 }
 
 func tmplToYAML(v any) string {
@@ -537,7 +572,6 @@ func toYAMLString(v any, indent int) string {
 		return fmt.Sprintf("%v", val)
 	}
 }
-
 
 // Text manipulation functions
 

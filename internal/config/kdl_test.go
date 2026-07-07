@@ -1,11 +1,39 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestUserConfigDirPathHonorsXDGConfigHome(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+	t.Setenv("HOME", filepath.Join(t.TempDir(), "home"))
+
+	assert.Equal(t, filepath.Join(configHome, UserConfigDir), UserConfigDirPath())
+	assert.Equal(t, filepath.Join(configHome, UserConfigDir, UserConfigFile), UserConfigPath())
+}
+
+func TestUserConfigDirPathFallsBackToHomeConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("HOME", home)
+
+	assert.Equal(t, filepath.Join(home, ".config", UserConfigDir), UserConfigDirPath())
+	assert.Equal(t, filepath.Join(home, ".config", UserConfigDir, UserConfigFile), UserConfigPath())
+}
+
+func TestUserConfigDirPathUnavailable(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("HOME", "")
+
+	assert.Empty(t, UserConfigDirPath())
+	assert.Empty(t, UserConfigPath())
+}
 
 func TestParseKDLConfig_CommandTransport(t *testing.T) {
 	tests := []struct {
@@ -88,6 +116,49 @@ func TestParseKDLConfig_CommandTransport(t *testing.T) {
 			assert.Equal(t, tt.expected.Source, mcp.Source)
 		})
 	}
+}
+
+func TestAddMCPConfigsToFile_WritesBatchWithDefaults(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "nested", "config.kdl")
+
+	err := AddMCPConfigsToFile(configPath, map[string]MCPConfig{
+		"beta": {
+			Command: "beta-cmd",
+			Args:    []string{"--flag"},
+		},
+		"alpha": {
+			Type: "sse",
+			URL:  "https://example.com/sse",
+		},
+	})
+	require.NoError(t, err)
+
+	cfg, err := loadConfigFile(configPath, SourceProject)
+	require.NoError(t, err)
+	require.Len(t, cfg.MCPs, 2)
+
+	assert.Equal(t, "alpha", cfg.MCPs["alpha"].Name)
+	assert.Equal(t, "sse", cfg.MCPs["alpha"].Type)
+	assert.Equal(t, "https://example.com/sse", cfg.MCPs["alpha"].URL)
+	assert.Equal(t, "beta", cfg.MCPs["beta"].Name)
+	assert.Equal(t, "stdio", cfg.MCPs["beta"].Type)
+	assert.Equal(t, "beta-cmd", cfg.MCPs["beta"].Command)
+	assert.Equal(t, []string{"--flag"}, cfg.MCPs["beta"].Args)
+}
+
+func TestAddMCPConfigsToFile_DoesNotOverwriteMalformedConfig(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.kdl")
+	original := []byte(`mcp "broken" {`)
+	require.NoError(t, os.WriteFile(configPath, original, 0644))
+
+	err := AddMCPConfigsToFile(configPath, map[string]MCPConfig{
+		"new": {Command: "new-cmd"},
+	})
+	require.Error(t, err)
+
+	got, readErr := os.ReadFile(configPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, original, got)
 }
 
 func TestParseKDLConfig_SSETransport(t *testing.T) {
@@ -604,7 +675,7 @@ func TestParseKDLConfig_SpecialCharactersInName(t *testing.T) {
 }
 
 func TestParseKDLConfig_NoTypeSpecified(t *testing.T) {
-	// When type is not specified, it should remain empty
+	// When type is not specified, infer the effective transport from the fields.
 	kdl := `mcp "no-type" {
     command "server"
 }`
@@ -615,8 +686,22 @@ func TestParseKDLConfig_NoTypeSpecified(t *testing.T) {
 
 	mcp, ok := cfg.MCPs["no-type"]
 	require.True(t, ok)
-	assert.Equal(t, "", mcp.Type)
+	assert.Equal(t, "stdio", mcp.Type)
 	assert.Equal(t, "server", mcp.Command)
+}
+
+func TestParseKDLConfig_InfersHTTPForURLWithoutType(t *testing.T) {
+	kdl := `mcp "url-only" {
+    url "https://example.com/mcp"
+}`
+
+	cfg, err := ParseKDLConfig(kdl, SourceProject)
+	require.NoError(t, err)
+
+	mcp, ok := cfg.MCPs["url-only"]
+	require.True(t, ok)
+	assert.Equal(t, "http", mcp.Type)
+	assert.Equal(t, "https://example.com/mcp", mcp.URL)
 }
 
 func TestParseKDLConfig_EmptyEnvAndHeaders(t *testing.T) {
@@ -942,6 +1027,45 @@ func TestFormatMCPBlock_RoundTripWithTimeout(t *testing.T) {
 	require.True(t, ok)
 
 	assert.Equal(t, original.Timeout, parsed.Timeout)
+}
+
+func TestParseKDLConfig_RetryAndHealthCheck(t *testing.T) {
+	kdl := `mcp "resilient" {
+    type "stdio"
+    command "server"
+    max_retries 8
+    health_check_interval "30s"
+}`
+
+	cfg, err := ParseKDLConfig(kdl, SourceProject)
+	require.NoError(t, err)
+
+	parsed, ok := cfg.MCPs["resilient"]
+	require.True(t, ok)
+	assert.Equal(t, 8, parsed.MaxRetries)
+	assert.Equal(t, "30s", parsed.HealthCheckInterval)
+}
+
+func TestFormatMCPBlock_RoundTripWithRetryAndHealthCheck(t *testing.T) {
+	original := MCPConfig{
+		Name:                "resilient",
+		Type:                "http",
+		URL:                 "https://api.example.com/mcp",
+		MaxRetries:          -1,
+		HealthCheckInterval: "45s",
+	}
+
+	formatted := formatMCPBlock(original)
+	assert.Contains(t, formatted, "max_retries -1")
+	assert.Contains(t, formatted, `health_check_interval "45s"`)
+
+	cfg, err := ParseKDLConfig(formatted, SourceProject)
+	require.NoError(t, err)
+
+	parsed, ok := cfg.MCPs["resilient"]
+	require.True(t, ok)
+	assert.Equal(t, original.MaxRetries, parsed.MaxRetries)
+	assert.Equal(t, original.HealthCheckInterval, parsed.HealthCheckInterval)
 }
 
 func TestFormatMCPBlock_EscapesSpecialCharacters(t *testing.T) {

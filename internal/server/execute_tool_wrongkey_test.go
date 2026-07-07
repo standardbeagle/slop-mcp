@@ -138,3 +138,42 @@ func TestWrapExecuteTool_EmptyArgumentsValue(t *testing.T) {
 			"empty wrong-key value must not trigger hint. body=%s", body)
 	}
 }
+
+func TestToolWrappersReturnErrorForMissingParams(t *testing.T) {
+	s := mockServer(nil)
+	ctx := context.Background()
+	req := &mcp.CallToolRequest{}
+
+	tests := []struct {
+		name string
+		call func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error)
+	}{
+		{name: "search_tools", call: s.wrapSearchTools},
+		{name: "execute_tool", call: s.wrapExecuteTool},
+		{name: "run_slop", call: s.wrapRunSlop},
+		{name: "manage_mcps", call: s.wrapManageMCPs},
+		{name: "auth_mcp", call: s.wrapAuthMCP},
+		{name: "get_metadata", call: s.wrapGetMetadata},
+		{name: "slop_reference", call: s.wrapSlopReference},
+		{name: "slop_help", call: s.wrapSlopHelp},
+		{name: "agnt_watch", call: s.wrapAgntWatch},
+		{name: "customize_tools", call: s.wrapCustomizeTools},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := tt.call(ctx, req)
+			require.NoError(t, err)
+			text := extractErrorText(t, result)
+			assert.Contains(t, text, "missing params")
+		})
+	}
+}
+
+func TestCallToolArgumentsBlankDefaultsToEmptyObject(t *testing.T) {
+	got, err := callToolArguments(&mcp.CallToolRequest{
+		Params: &mcp.CallToolParamsRaw{Arguments: json.RawMessage(" \n\t ")},
+	})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{}`, string(got))
+}

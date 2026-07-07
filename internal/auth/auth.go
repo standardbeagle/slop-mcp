@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -303,6 +304,45 @@ func (f *OAuthFlow) startCallbackServer() (string, <-chan callbackResult, func()
 	return callbackURL, codeChan, shutdown, nil
 }
 
+type tokenEndpointResponse struct {
+	AccessToken      string `json:"access_token"`
+	TokenType        string `json:"token_type"`
+	ExpiresIn        int    `json:"expires_in"`
+	RefreshToken     string `json:"refresh_token"`
+	Scope            string `json:"scope"`
+	Error            string `json:"error"`
+	ErrorDescription string `json:"error_description"`
+}
+
+func decodeTokenEndpointResponse(resp *http.Response, operation string) (*tokenEndpointResponse, error) {
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		detail := strings.TrimSpace(string(body))
+		if detail != "" {
+			return nil, fmt.Errorf("%s failed with status %d: %s", operation, resp.StatusCode, detail)
+		}
+		return nil, fmt.Errorf("%s failed with status %d", operation, resp.StatusCode)
+	}
+
+	var tokenResp tokenEndpointResponse
+	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+		return nil, err
+	}
+	if tokenResp.Error != "" {
+		if tokenResp.ErrorDescription != "" {
+			return nil, fmt.Errorf("%s failed: %s: %s", operation, tokenResp.Error, tokenResp.ErrorDescription)
+		}
+		return nil, fmt.Errorf("%s failed: %s", operation, tokenResp.Error)
+	}
+	if tokenResp.AccessToken == "" {
+		return nil, fmt.Errorf("%s failed: missing access_token in token response", operation)
+	}
+
+	return &tokenResp, nil
+}
+
 func (f *OAuthFlow) exchangeCode(ctx context.Context, tokenEndpoint, clientID, clientSecret, code, redirectURI, verifier, resource string) (*oauth2.Token, error) {
 	data := url.Values{
 		"grant_type":    {"authorization_code"},
@@ -327,20 +367,9 @@ func (f *OAuthFlow) exchangeCode(ctx context.Context, tokenEndpoint, clientID, c
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("token exchange failed with status %d", resp.StatusCode)
-	}
-
-	var tokenResp struct {
-		AccessToken  string `json:"access_token"`
-		TokenType    string `json:"token_type"`
-		ExpiresIn    int    `json:"expires_in"`
-		RefreshToken string `json:"refresh_token"`
-		Scope        string `json:"scope"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+	tokenResp, err := decodeTokenEndpointResponse(resp, "token exchange")
+	if err != nil {
 		return nil, err
 	}
 
@@ -440,20 +469,9 @@ func RefreshToken(ctx context.Context, token *MCPToken, tokenEndpoint string) (*
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("token refresh failed with status %d", resp.StatusCode)
-	}
-
-	var tokenResp struct {
-		AccessToken  string `json:"access_token"`
-		TokenType    string `json:"token_type"`
-		ExpiresIn    int    `json:"expires_in"`
-		RefreshToken string `json:"refresh_token"`
-		Scope        string `json:"scope"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+	tokenResp, err := decodeTokenEndpointResponse(resp, "token refresh")
+	if err != nil {
 		return nil, err
 	}
 

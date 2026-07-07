@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +11,17 @@ import (
 
 	"github.com/standardbeagle/slop/pkg/slop"
 )
+
+func withFailingGetwd(t *testing.T) {
+	t.Helper()
+	oldGetwd := getwd
+	getwd = func() (string, error) {
+		return "", errors.New("cwd unavailable")
+	}
+	t.Cleanup(func() {
+		getwd = oldGetwd
+	})
+}
 
 func TestToolConfig_GenerateInputSchema(t *testing.T) {
 	tool := &ToolConfig{
@@ -136,6 +149,23 @@ cli "cat" {
 	}
 }
 
+func TestRegistry_ListAndGetToolInfosAreSorted(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(&ToolConfig{Name: "zeta", Description: "Z"})
+	reg.Register(&ToolConfig{Name: "alpha", Description: "A"})
+	reg.Register(&ToolConfig{Name: "middle", Description: "M"})
+
+	list := reg.List()
+	if got := []string{list[0].Name, list[1].Name, list[2].Name}; got[0] != "alpha" || got[1] != "middle" || got[2] != "zeta" {
+		t.Fatalf("List order = %v, want [alpha middle zeta]", got)
+	}
+
+	infos := reg.GetToolInfos()
+	if got := []string{infos[0].Name, infos[1].Name, infos[2].Name}; got[0] != "cli_alpha" || got[1] != "cli_middle" || got[2] != "cli_zeta" {
+		t.Fatalf("GetToolInfos order = %v, want [cli_alpha cli_middle cli_zeta]", got)
+	}
+}
+
 func TestExecutor_Execute(t *testing.T) {
 	tool := &ToolConfig{
 		Name:        "echo",
@@ -161,6 +191,53 @@ func TestExecutor_Execute(t *testing.T) {
 
 	if result.Stdout != "hello world" {
 		t.Errorf("expected stdout 'hello world', got '%s'", result.Stdout)
+	}
+}
+
+func TestExecutorReturnsGetwdErrorWhenDefaultWorkdirIsUnavailable(t *testing.T) {
+	withFailingGetwd(t)
+
+	tool := &ToolConfig{
+		Name:    "echo",
+		Command: "echo",
+		Args: []ArgConfig{
+			{Name: "message", Required: true, Position: 0, Type: "string"},
+		},
+	}
+
+	executor := NewExecutor("")
+	result, err := executor.Execute(context.Background(), tool, map[string]any{
+		"message": "hello",
+	})
+	if err == nil {
+		t.Fatalf("expected getwd error, got result %#v", result)
+	}
+	if !strings.Contains(err.Error(), "cwd unavailable") {
+		t.Fatalf("error = %q, want wrapped getwd error", err.Error())
+	}
+}
+
+func TestExecutorExplicitWorkdirBypassesDefaultGetwdError(t *testing.T) {
+	withFailingGetwd(t)
+
+	tool := &ToolConfig{
+		Name:    "echo",
+		Command: "echo",
+		Workdir: t.TempDir(),
+		Args: []ArgConfig{
+			{Name: "message", Required: true, Position: 0, Type: "string"},
+		},
+	}
+
+	executor := NewExecutor("")
+	result, err := executor.Execute(context.Background(), tool, map[string]any{
+		"message": "hello",
+	})
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+	if result.Stdout != "hello" {
+		t.Fatalf("stdout = %q, want hello", result.Stdout)
 	}
 }
 
@@ -256,6 +333,79 @@ func TestExecutor_ShellMode_SingleQuoteEscaping(t *testing.T) {
 	}
 	if result.Stdout != msg {
 		t.Errorf("expected %q, got %q", msg, result.Stdout)
+	}
+}
+
+func TestExecutorBuildArgsRejectsInvalidArrayItems(t *testing.T) {
+	tool := &ToolConfig{
+		Name:    "array-tool",
+		Command: "echo",
+		Flags: []FlagConfig{
+			{Name: "tag", Long: "--tag", Type: "array", Repeat: true},
+		},
+	}
+
+	executor := NewExecutor("")
+	_, err := executor.buildArgs(tool, map[string]any{
+		"tag": []any{"ok", 42},
+	})
+	if err == nil {
+		t.Fatal("expected invalid array item error")
+	}
+	if !strings.Contains(err.Error(), "unsupported type int") {
+		t.Fatalf("expected unsupported type in error, got %q", err.Error())
+	}
+}
+
+func TestExecutorBuildArgsRejectsInvalidBooleanString(t *testing.T) {
+	tool := &ToolConfig{
+		Name:    "bool-tool",
+		Command: "echo",
+		Flags: []FlagConfig{
+			{Name: "verbose", Long: "--verbose", Type: "boolean"},
+		},
+	}
+
+	executor := NewExecutor("")
+	_, err := executor.buildArgs(tool, map[string]any{
+		"verbose": "definitely",
+	})
+	if err == nil {
+		t.Fatal("expected invalid boolean error")
+	}
+	if !strings.Contains(err.Error(), "invalid boolean") {
+		t.Fatalf("expected invalid boolean in error, got %q", err.Error())
+	}
+}
+
+func TestExecutorBuildArgsFormatsTypedValues(t *testing.T) {
+	tool := &ToolConfig{
+		Name:    "typed-tool",
+		Command: "echo",
+		Args: []ArgConfig{
+			{Name: "count", Position: 0, Type: "number", Required: true},
+			{Name: "enabled", Position: 1, Type: "boolean", Required: true},
+		},
+		Flags: []FlagConfig{
+			{Name: "limit", Long: "--limit", Type: "number"},
+			{Name: "tag", Long: "--tag", Type: "array", Repeat: true},
+		},
+	}
+
+	executor := NewExecutor("")
+	args, err := executor.buildArgs(tool, map[string]any{
+		"count":   json.Number("12"),
+		"enabled": "yes",
+		"limit":   "3.5",
+		"tag":     []any{"one", "two"},
+	})
+	if err != nil {
+		t.Fatalf("buildArgs failed: %v", err)
+	}
+
+	want := []string{"12", "true", "--limit", "3.5", "--tag", "one", "--tag", "two"}
+	if strings.Join(args, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("args = %#v, want %#v", args, want)
 	}
 }
 

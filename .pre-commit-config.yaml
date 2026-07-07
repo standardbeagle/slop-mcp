@@ -17,14 +17,14 @@ repos:
     hooks:
       - id: go-test
         name: go test
-        entry: go test -short ./...
+        entry: go test -short -tags mcp_go_client_oauth ./...
         language: system
         pass_filenames: false
         types: [go]
 
       - id: go-build
         name: go build
-        entry: go build ./...
+        entry: go build -tags mcp_go_client_oauth ./...
         language: system
         pass_filenames: false
         types: [go]

@@ -42,3 +42,29 @@ func TestCallToolParams_RawMessageArguments_PreserveLargeInts(t *testing.T) {
 		t.Skip("float64 coercion did not corrupt on this platform; precision guard moot")
 	}
 }
+
+func TestExecuteToolRawJSONRejectsNonObjectArguments(t *testing.T) {
+	reg := New()
+
+	tests := []struct {
+		name   string
+		params json.RawMessage
+		want   string
+	}{
+		{name: "array", params: json.RawMessage(`[]`), want: "JSON object"},
+		{name: "scalar", params: json.RawMessage(`42`), want: "JSON object"},
+		{name: "invalid object", params: json.RawMessage(`{"broken"`), want: "valid JSON"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := reg.ExecuteToolRawJSON(t.Context(), "missing", "tool", tt.params)
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %q, want substring %q", err.Error(), tt.want)
+			}
+		})
+	}
+}

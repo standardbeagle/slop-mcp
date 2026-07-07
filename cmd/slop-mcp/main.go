@@ -148,7 +148,7 @@ Subcommands:
 Scope Options:
   --local      Local config (.slop-mcp.local.kdl) - gitignored
   --project    Project config (.slop-mcp.kdl) [default]
-  --user       User config (~/.config/slop-mcp/config.kdl)
+  --user       User config ($XDG_CONFIG_HOME/slop-mcp/config.kdl or ~/.config/slop-mcp/config.kdl)
 
 Transport Options:
   --transport=<type>  stdio (default), sse, http, streamable

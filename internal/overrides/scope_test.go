@@ -58,6 +58,21 @@ func TestFindRepoRoot_NotFound(t *testing.T) {
 	}
 }
 
+func TestScopeRootUserHonorsXDGConfigHome(t *testing.T) {
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+
+	got, err := ScopeRoot(ScopeUser, "/home/example", "")
+	if err != nil {
+		t.Fatalf("ScopeRoot: %v", err)
+	}
+
+	want := filepath.Join(xdg, "slop-mcp", "memory", "_slop")
+	if got != want {
+		t.Fatalf("ScopeRoot = %q, want %q", got, want)
+	}
+}
+
 func TestMergeScopes_LocalBeatsProjectBeatsUser(t *testing.T) {
 	userE := OverrideEntry{Description: "u", Scope: ScopeUser}
 	projE := OverrideEntry{Description: "p", Scope: ScopeProject}

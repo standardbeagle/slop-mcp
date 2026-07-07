@@ -8,180 +8,71 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/standardbeagle/slop-mcp/internal/atomicfile"
 	"github.com/standardbeagle/slop-mcp/internal/auth"
 	"github.com/standardbeagle/slop-mcp/internal/config"
 	"github.com/standardbeagle/slop-mcp/internal/registry"
 )
 
+var getwd = os.Getwd
+
+func currentWorkingDir() (string, error) {
+	cwd, err := getwd()
+	if err != nil {
+		return "", fmt.Errorf("getting current directory: %w", err)
+	}
+	return cwd, nil
+}
+
+func configPathForScope(scope config.Scope) (string, error) {
+	cwd, err := currentWorkingDir()
+	if err != nil {
+		return "", err
+	}
+	cfgPath := config.ConfigPathForScope(scope, cwd)
+	if cfgPath == "" {
+		return "", fmt.Errorf("could not determine config path")
+	}
+	return cfgPath, nil
+}
+
 func cmdMCPAdd(args []string) {
-	if len(args) < 1 {
+	opts, showHelp, err := parseMCPAddArgs(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		printMCPAddUsage()
 		os.Exit(1)
 	}
-
-	// Parse flags
-	name := ""
-	command := ""
-	var cmdArgs []string
-	scope := config.ScopeProject
-	transport := "stdio"
-	env := make(map[string]string)
-	headers := make(map[string]string)
-	url := ""
-
-	var positional []string
-	for i := 0; i < len(args); i++ {
-		switch {
-		case args[i] == "--local" || args[i] == "-l":
-			scope = config.ScopeLocal
-		case args[i] == "--project" || args[i] == "-p":
-			scope = config.ScopeProject
-		case args[i] == "--user" || args[i] == "-u":
-			scope = config.ScopeUser
-		case args[i] == "--scope" || args[i] == "-s":
-			if i+1 >= len(args) {
-				fmt.Fprintln(os.Stderr, "Error: --scope requires a value (local, project, or user)")
-				os.Exit(1)
-			}
-			i++
-			switch args[i] {
-			case "local":
-				scope = config.ScopeLocal
-			case "project":
-				scope = config.ScopeProject
-			case "user":
-				scope = config.ScopeUser
-			default:
-				fmt.Fprintf(os.Stderr, "Error: invalid scope '%s' (must be local, project, or user)\n", args[i])
-				os.Exit(1)
-			}
-		case strings.HasPrefix(args[i], "--scope="):
-			scopeVal := strings.TrimPrefix(args[i], "--scope=")
-			switch scopeVal {
-			case "local":
-				scope = config.ScopeLocal
-			case "project":
-				scope = config.ScopeProject
-			case "user":
-				scope = config.ScopeUser
-			default:
-				fmt.Fprintf(os.Stderr, "Error: invalid scope '%s' (must be local, project, or user)\n", scopeVal)
-				os.Exit(1)
-			}
-		case args[i] == "--transport" || args[i] == "-t":
-			if i+1 >= len(args) {
-				fmt.Fprintln(os.Stderr, "Error: --transport requires a value")
-				os.Exit(1)
-			}
-			i++
-			transport = args[i]
-		case strings.HasPrefix(args[i], "--transport="):
-			transport = strings.TrimPrefix(args[i], "--transport=")
-		case args[i] == "--url":
-			if i+1 >= len(args) {
-				fmt.Fprintln(os.Stderr, "Error: --url requires a value")
-				os.Exit(1)
-			}
-			i++
-			url = args[i]
-		case strings.HasPrefix(args[i], "--url="):
-			url = strings.TrimPrefix(args[i], "--url=")
-		case args[i] == "--env" || args[i] == "-e":
-			if i+1 >= len(args) {
-				fmt.Fprintln(os.Stderr, "Error: --env requires KEY=VALUE")
-				os.Exit(1)
-			}
-			i++
-			kv := strings.SplitN(args[i], "=", 2)
-			if len(kv) != 2 {
-				fmt.Fprintf(os.Stderr, "Error: invalid env format '%s', expected KEY=VALUE\n", args[i])
-				os.Exit(1)
-			}
-			env[kv[0]] = kv[1]
-		case strings.HasPrefix(args[i], "--env="):
-			kv := strings.SplitN(strings.TrimPrefix(args[i], "--env="), "=", 2)
-			if len(kv) != 2 {
-				fmt.Fprintf(os.Stderr, "Error: invalid env format, expected KEY=VALUE\n")
-				os.Exit(1)
-			}
-			env[kv[0]] = kv[1]
-		case args[i] == "--header" || args[i] == "-H":
-			if i+1 >= len(args) {
-				fmt.Fprintln(os.Stderr, "Error: --header requires 'Key: Value'")
-				os.Exit(1)
-			}
-			i++
-			parts := strings.SplitN(args[i], ":", 2)
-			if len(parts) != 2 {
-				fmt.Fprintf(os.Stderr, "Error: invalid header format '%s', expected 'Key: Value'\n", args[i])
-				os.Exit(1)
-			}
-			headers[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
-		case strings.HasPrefix(args[i], "--header="):
-			parts := strings.SplitN(strings.TrimPrefix(args[i], "--header="), ":", 2)
-			if len(parts) != 2 {
-				fmt.Fprintf(os.Stderr, "Error: invalid header format, expected 'Key: Value'\n")
-				os.Exit(1)
-			}
-			headers[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
-		case args[i] == "--help" || args[i] == "-h":
-			printMCPAddUsage()
-			return
-		default:
-			positional = append(positional, args[i])
-		}
+	if showHelp {
+		printMCPAddUsage()
+		return
 	}
 
-	// For HTTP transports, we don't need a command
-	if transport == "sse" || transport == "http" || transport == "streamable" {
-		if len(positional) < 1 {
-			fmt.Fprintln(os.Stderr, "Error: name is required")
-			printMCPAddUsage()
-			os.Exit(1)
-		}
-		name = positional[0]
-		if url == "" {
-			fmt.Fprintln(os.Stderr, "Error: --url is required for HTTP transports")
-			os.Exit(1)
-		}
-	} else {
-		// stdio/command transport
-		if len(positional) < 2 {
-			fmt.Fprintln(os.Stderr, "Error: name and command are required for stdio transport")
-			printMCPAddUsage()
-			os.Exit(1)
-		}
-		name = positional[0]
-		command = positional[1]
-		if len(positional) > 2 {
-			cmdArgs = positional[2:]
-		}
-	}
-
-	// Determine config path
-	cwd, _ := os.Getwd()
-	cfgPath := config.ConfigPathForScope(scope, cwd)
-	if cfgPath == "" {
-		fmt.Fprintln(os.Stderr, "Error: could not determine config path")
+	cfgPath, err := configPathForScope(opts.scope)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 
 	// Build the MCP config
 	mcpCfg := config.MCPConfig{
-		Name:    name,
-		Type:    transport,
-		Command: command,
-		Args:    cmdArgs,
-		URL:     url,
+		Name:    opts.name,
+		Type:    opts.transport,
+		Command: opts.command,
+		Args:    opts.cmdArgs,
+		URL:     opts.url,
 	}
-	if len(env) > 0 {
-		mcpCfg.Env = env
+	if len(opts.env) > 0 {
+		mcpCfg.Env = opts.env
 	}
-	if len(headers) > 0 {
-		mcpCfg.Headers = headers
+	if len(opts.headers) > 0 {
+		mcpCfg.Headers = opts.headers
 	}
 
 	// Add to config file
@@ -190,7 +81,168 @@ func cmdMCPAdd(args []string) {
 		os.Exit(1)
 	}
 
-	fmt.Printf("Added MCP '%s' to %s config (%s)\n", name, scope, cfgPath)
+	fmt.Printf("Added MCP '%s' to %s config (%s)\n", opts.name, opts.scope, cfgPath)
+}
+
+type mcpAddOptions struct {
+	name      string
+	command   string
+	cmdArgs   []string
+	scope     config.Scope
+	transport string
+	env       map[string]string
+	headers   map[string]string
+	url       string
+}
+
+func parseMCPAddArgs(args []string) (mcpAddOptions, bool, error) {
+	opts := mcpAddOptions{
+		scope:     config.ScopeProject,
+		transport: "stdio",
+		env:       make(map[string]string),
+		headers:   make(map[string]string),
+	}
+	var positional []string
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--local" || args[i] == "-l":
+			opts.scope = config.ScopeLocal
+		case args[i] == "--project" || args[i] == "-p":
+			opts.scope = config.ScopeProject
+		case args[i] == "--user" || args[i] == "-u":
+			opts.scope = config.ScopeUser
+		case args[i] == "--scope" || args[i] == "-s":
+			if i+1 >= len(args) {
+				return opts, false, fmt.Errorf("--scope requires a value (local, project, or user)")
+			}
+			parsedScope, err := parseMCPConfigScope(args[i+1])
+			if err != nil {
+				return opts, false, err
+			}
+			opts.scope = parsedScope
+			i++
+		case strings.HasPrefix(args[i], "--scope="):
+			parsedScope, err := parseMCPConfigScope(strings.TrimPrefix(args[i], "--scope="))
+			if err != nil {
+				return opts, false, err
+			}
+			opts.scope = parsedScope
+		case args[i] == "--transport" || args[i] == "-t":
+			if i+1 >= len(args) {
+				return opts, false, fmt.Errorf("--transport requires a value")
+			}
+			opts.transport = args[i+1]
+			i++
+		case strings.HasPrefix(args[i], "--transport="):
+			opts.transport = strings.TrimPrefix(args[i], "--transport=")
+		case args[i] == "--url":
+			if i+1 >= len(args) {
+				return opts, false, fmt.Errorf("--url requires a value")
+			}
+			opts.url = args[i+1]
+			i++
+		case strings.HasPrefix(args[i], "--url="):
+			opts.url = strings.TrimPrefix(args[i], "--url=")
+		case args[i] == "--env" || args[i] == "-e":
+			if i+1 >= len(args) {
+				return opts, false, fmt.Errorf("--env requires KEY=VALUE")
+			}
+			key, value, err := parseMCPEnv(args[i+1])
+			if err != nil {
+				return opts, false, err
+			}
+			opts.env[key] = value
+			i++
+		case strings.HasPrefix(args[i], "--env="):
+			key, value, err := parseMCPEnv(strings.TrimPrefix(args[i], "--env="))
+			if err != nil {
+				return opts, false, err
+			}
+			opts.env[key] = value
+		case args[i] == "--header" || args[i] == "-H":
+			if i+1 >= len(args) {
+				return opts, false, fmt.Errorf("--header requires 'Key: Value'")
+			}
+			key, value, err := parseMCPHeader(args[i+1])
+			if err != nil {
+				return opts, false, err
+			}
+			opts.headers[key] = value
+			i++
+		case strings.HasPrefix(args[i], "--header="):
+			key, value, err := parseMCPHeader(strings.TrimPrefix(args[i], "--header="))
+			if err != nil {
+				return opts, false, err
+			}
+			opts.headers[key] = value
+		case args[i] == "--help" || args[i] == "-h":
+			return opts, true, nil
+		default:
+			positional = append(positional, args[i])
+		}
+	}
+
+	if !isValidMCPTransport(opts.transport) {
+		return opts, false, fmt.Errorf("invalid transport %q (must be stdio, command, sse, http, or streamable)", opts.transport)
+	}
+
+	// For HTTP transports, we don't need a command
+	if isURLMCPTransport(opts.transport) {
+		if len(positional) != 1 {
+			if len(positional) == 0 {
+				return opts, false, fmt.Errorf("name is required")
+			}
+			return opts, false, fmt.Errorf("unexpected extra argument %q for %s transport", positional[1], opts.transport)
+		}
+		opts.name = positional[0]
+		if opts.url == "" {
+			return opts, false, fmt.Errorf("--url is required for HTTP transports")
+		}
+		return opts, false, nil
+	}
+
+	// stdio/command transport
+	if len(positional) < 2 {
+		return opts, false, fmt.Errorf("name and command are required for stdio transport")
+	}
+	opts.name = positional[0]
+	opts.command = positional[1]
+	if len(positional) > 2 {
+		opts.cmdArgs = positional[2:]
+	}
+	return opts, false, nil
+}
+
+func isURLMCPTransport(transport string) bool {
+	return transport == "sse" || transport == "http" || transport == "streamable"
+}
+
+func isValidMCPTransport(transport string) bool {
+	switch transport {
+	case "stdio", "command", "sse", "http", "streamable":
+		return true
+	}
+	return false
+}
+
+func parseMCPEnv(raw string) (string, string, error) {
+	kv := strings.SplitN(raw, "=", 2)
+	if len(kv) != 2 || kv[0] == "" {
+		return "", "", fmt.Errorf("invalid env format %q, expected KEY=VALUE", raw)
+	}
+	return kv[0], kv[1], nil
+}
+
+func parseMCPHeader(raw string) (string, string, error) {
+	parts := strings.SplitN(raw, ":", 2)
+	if len(parts) != 2 {
+		return "", "", fmt.Errorf("invalid header format %q, expected 'Key: Value'", raw)
+	}
+	key := strings.TrimSpace(parts[0])
+	if key == "" {
+		return "", "", fmt.Errorf("invalid header format %q, header name is required", raw)
+	}
+	return key, strings.TrimSpace(parts[1]), nil
 }
 
 func printMCPAddUsage() {
@@ -208,7 +260,7 @@ Arguments:
 Options:
   -l, --local       Add to local config (.slop-mcp.local.kdl, gitignored)
   -p, --project     Add to project config (.slop-mcp.kdl) [default]
-  -u, --user        Add to user config (~/.config/slop-mcp/config.kdl)
+  -u, --user        Add to user config ($XDG_CONFIG_HOME/slop-mcp/config.kdl or ~/.config/slop-mcp/config.kdl)
   -s, --scope=<scope>  Set scope: local, project, or user
 
   --transport=<type>, -t <type>
@@ -240,69 +292,16 @@ Examples:
 }
 
 func cmdMCPAddJSON(args []string) {
-	if len(args) < 2 {
+	name, jsonStr, scope, showHelp, err := parseMCPAddJSONArgs(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		printMCPAddJSONUsage()
 		os.Exit(1)
 	}
-
-	name := ""
-	jsonStr := ""
-	scope := config.ScopeProject
-
-	var positional []string
-	for i := 0; i < len(args); i++ {
-		switch {
-		case args[i] == "--local" || args[i] == "-l":
-			scope = config.ScopeLocal
-		case args[i] == "--project" || args[i] == "-p":
-			scope = config.ScopeProject
-		case args[i] == "--user" || args[i] == "-u":
-			scope = config.ScopeUser
-		case args[i] == "--scope" || args[i] == "-s":
-			if i+1 >= len(args) {
-				fmt.Fprintln(os.Stderr, "Error: --scope requires a value (local, project, or user)")
-				os.Exit(1)
-			}
-			i++
-			switch args[i] {
-			case "local":
-				scope = config.ScopeLocal
-			case "project":
-				scope = config.ScopeProject
-			case "user":
-				scope = config.ScopeUser
-			default:
-				fmt.Fprintf(os.Stderr, "Error: invalid scope '%s' (must be local, project, or user)\n", args[i])
-				os.Exit(1)
-			}
-		case strings.HasPrefix(args[i], "--scope="):
-			scopeVal := strings.TrimPrefix(args[i], "--scope=")
-			switch scopeVal {
-			case "local":
-				scope = config.ScopeLocal
-			case "project":
-				scope = config.ScopeProject
-			case "user":
-				scope = config.ScopeUser
-			default:
-				fmt.Fprintf(os.Stderr, "Error: invalid scope '%s' (must be local, project, or user)\n", scopeVal)
-				os.Exit(1)
-			}
-		case args[i] == "--help" || args[i] == "-h":
-			printMCPAddJSONUsage()
-			return
-		default:
-			positional = append(positional, args[i])
-		}
+	if showHelp {
+		printMCPAddJSONUsage()
+		return
 	}
-
-	if len(positional) < 2 {
-		fmt.Fprintln(os.Stderr, "Error: name and JSON config are required")
-		os.Exit(1)
-	}
-
-	name = positional[0]
-	jsonStr = positional[1]
 
 	// Parse the JSON config
 	mcpCfg, err := config.ParseJSONConfig(jsonStr)
@@ -312,11 +311,9 @@ func cmdMCPAddJSON(args []string) {
 	}
 	mcpCfg.Name = name
 
-	// Determine config path
-	cwd, _ := os.Getwd()
-	cfgPath := config.ConfigPathForScope(scope, cwd)
-	if cfgPath == "" {
-		fmt.Fprintln(os.Stderr, "Error: could not determine config path")
+	cfgPath, err := configPathForScope(scope)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -327,6 +324,58 @@ func cmdMCPAddJSON(args []string) {
 	}
 
 	fmt.Printf("Added MCP '%s' from JSON to %s config (%s)\n", name, scope, cfgPath)
+}
+
+func parseMCPAddJSONArgs(args []string) (name string, jsonStr string, scope config.Scope, showHelp bool, err error) {
+	scope = config.ScopeProject
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--local" || args[i] == "-l":
+			scope = config.ScopeLocal
+		case args[i] == "--project" || args[i] == "-p":
+			scope = config.ScopeProject
+		case args[i] == "--user" || args[i] == "-u":
+			scope = config.ScopeUser
+		case args[i] == "--scope" || args[i] == "-s":
+			if i+1 >= len(args) {
+				return "", "", scope, false, fmt.Errorf("--scope requires a value (local, project, or user)")
+			}
+			parsedScope, err := parseMCPConfigScope(args[i+1])
+			if err != nil {
+				return "", "", scope, false, err
+			}
+			scope = parsedScope
+			i++
+		case strings.HasPrefix(args[i], "--scope="):
+			parsedScope, err := parseMCPConfigScope(strings.TrimPrefix(args[i], "--scope="))
+			if err != nil {
+				return "", "", scope, false, err
+			}
+			scope = parsedScope
+		case args[i] == "--help" || args[i] == "-h":
+			showHelp = true
+		default:
+			if strings.HasPrefix(args[i], "-") {
+				return "", "", scope, false, fmt.Errorf("unknown add-json option %q", args[i])
+			}
+			if name == "" {
+				name = args[i]
+				continue
+			}
+			if jsonStr == "" {
+				jsonStr = args[i]
+				continue
+			}
+			return "", "", scope, false, fmt.Errorf("unexpected extra argument %q", args[i])
+		}
+	}
+	if showHelp {
+		return name, jsonStr, scope, true, nil
+	}
+	if name == "" || jsonStr == "" {
+		return "", "", scope, false, fmt.Errorf("name and JSON config are required")
+	}
+	return name, jsonStr, scope, false, nil
 }
 
 func printMCPAddJSONUsage() {
@@ -342,7 +391,7 @@ Arguments:
 Options:
   --local      Add to local config (.slop-mcp.local.kdl)
   --project    Add to project config (.slop-mcp.kdl) [default]
-  --user       Add to user config (~/.config/slop-mcp/config.kdl)
+  --user       Add to user config ($XDG_CONFIG_HOME/slop-mcp/config.kdl or ~/.config/slop-mcp/config.kdl)
   --help, -h   Show this help
 
 Examples:
@@ -352,53 +401,15 @@ Examples:
 }
 
 func cmdMCPAddFromClaudeDesktop(args []string) {
-	scope := config.ScopeProject
-	var specificNames []string
-
-	for i := 0; i < len(args); i++ {
-		switch {
-		case args[i] == "--local" || args[i] == "-l":
-			scope = config.ScopeLocal
-		case args[i] == "--project" || args[i] == "-p":
-			scope = config.ScopeProject
-		case args[i] == "--user" || args[i] == "-u":
-			scope = config.ScopeUser
-		case args[i] == "--scope" || args[i] == "-s":
-			if i+1 >= len(args) {
-				fmt.Fprintln(os.Stderr, "Error: --scope requires a value (local, project, or user)")
-				os.Exit(1)
-			}
-			i++
-			switch args[i] {
-			case "local":
-				scope = config.ScopeLocal
-			case "project":
-				scope = config.ScopeProject
-			case "user":
-				scope = config.ScopeUser
-			default:
-				fmt.Fprintf(os.Stderr, "Error: invalid scope '%s' (must be local, project, or user)\n", args[i])
-				os.Exit(1)
-			}
-		case strings.HasPrefix(args[i], "--scope="):
-			scopeVal := strings.TrimPrefix(args[i], "--scope=")
-			switch scopeVal {
-			case "local":
-				scope = config.ScopeLocal
-			case "project":
-				scope = config.ScopeProject
-			case "user":
-				scope = config.ScopeUser
-			default:
-				fmt.Fprintf(os.Stderr, "Error: invalid scope '%s' (must be local, project, or user)\n", scopeVal)
-				os.Exit(1)
-			}
-		case args[i] == "--help" || args[i] == "-h":
-			printMCPAddFromClaudeDesktopUsage()
-			return
-		default:
-			specificNames = append(specificNames, args[i])
-		}
+	scope, specificNames, showHelp, err := parseMCPAddFromClaudeDesktopArgs(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		printMCPAddFromClaudeDesktopUsage()
+		os.Exit(1)
+	}
+	if showHelp {
+		printMCPAddFromClaudeDesktopUsage()
+		return
 	}
 
 	// Load Claude Desktop config
@@ -413,11 +424,9 @@ func cmdMCPAddFromClaudeDesktop(args []string) {
 		return
 	}
 
-	// Determine config path
-	cwd, _ := os.Getwd()
-	cfgPath := config.ConfigPathForScope(scope, cwd)
-	if cfgPath == "" {
-		fmt.Fprintln(os.Stderr, "Error: could not determine config path")
+	cfgPath, err := configPathForScope(scope)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -440,15 +449,52 @@ func cmdMCPAddFromClaudeDesktop(args []string) {
 		return
 	}
 
-	// Add each MCP
-	for name, mcp := range toAdd {
-		mcp.Name = name
-		if err := config.AddMCPConfigToFile(cfgPath, mcp); err != nil {
-			fmt.Fprintf(os.Stderr, "Error adding %s: %v\n", name, err)
-			continue
-		}
+	if err := config.AddMCPConfigsToFile(cfgPath, toAdd); err != nil {
+		fmt.Fprintf(os.Stderr, "Error adding MCPs from Claude Desktop: %v\n", err)
+		os.Exit(1)
+	}
+
+	for _, name := range sortedMCPNames(toAdd) {
 		fmt.Printf("Added MCP '%s' from Claude Desktop to %s config\n", name, scope)
 	}
+}
+
+func parseMCPAddFromClaudeDesktopArgs(args []string) (scope config.Scope, specificNames []string, showHelp bool, err error) {
+	scope = config.ScopeProject
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--local" || args[i] == "-l":
+			scope = config.ScopeLocal
+		case args[i] == "--project" || args[i] == "-p":
+			scope = config.ScopeProject
+		case args[i] == "--user" || args[i] == "-u":
+			scope = config.ScopeUser
+		case args[i] == "--scope" || args[i] == "-s":
+			if i+1 >= len(args) {
+				return scope, nil, false, fmt.Errorf("--scope requires a value (local, project, or user)")
+			}
+			parsedScope, err := parseMCPConfigScope(args[i+1])
+			if err != nil {
+				return scope, nil, false, err
+			}
+			scope = parsedScope
+			i++
+		case strings.HasPrefix(args[i], "--scope="):
+			parsedScope, err := parseMCPConfigScope(strings.TrimPrefix(args[i], "--scope="))
+			if err != nil {
+				return scope, nil, false, err
+			}
+			scope = parsedScope
+		case args[i] == "--help" || args[i] == "-h":
+			showHelp = true
+		default:
+			if strings.HasPrefix(args[i], "-") {
+				return scope, nil, false, fmt.Errorf("unknown add-from-claude-desktop option %q", args[i])
+			}
+			specificNames = append(specificNames, args[i])
+		}
+	}
+	return scope, specificNames, showHelp, nil
 }
 
 func printMCPAddFromClaudeDesktopUsage() {
@@ -463,7 +509,7 @@ Arguments:
 Options:
   --local      Add to local config (.slop-mcp.local.kdl)
   --project    Add to project config (.slop-mcp.kdl) [default]
-  --user       Add to user config (~/.config/slop-mcp/config.kdl)
+  --user       Add to user config ($XDG_CONFIG_HOME/slop-mcp/config.kdl or ~/.config/slop-mcp/config.kdl)
   --help, -h   Show this help
 
 Claude Desktop config location:
@@ -482,19 +528,15 @@ Examples:
 }
 
 func cmdMCPAddFromClaudeCode(args []string) {
-	var specificNames []string
-	dryRun := false
-
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--dry-run":
-			dryRun = true
-		case "--help", "-h":
-			printMCPAddFromClaudeCodeUsage()
-			return
-		default:
-			specificNames = append(specificNames, args[i])
-		}
+	specificNames, dryRun, showHelp, err := parseMCPAddFromClaudeCodeArgs(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		printMCPAddFromClaudeCodeUsage()
+		os.Exit(1)
+	}
+	if showHelp {
+		printMCPAddFromClaudeCodeUsage()
+		return
 	}
 
 	// Load Claude Code config
@@ -549,7 +591,8 @@ func cmdMCPAddFromClaudeCode(args []string) {
 	if dryRun {
 		fmt.Println("Dry run - would migrate the following MCPs to user config:")
 		fmt.Printf("Target: %s\n\n", cfgPath)
-		for name, mcp := range toAdd {
+		for _, name := range sortedMCPNames(toAdd) {
+			mcp := toAdd[name]
 			fmt.Printf("  %s:\n", name)
 			fmt.Printf("    type: %s\n", mcp.Type)
 			if mcp.Command != "" {
@@ -569,17 +612,42 @@ func cmdMCPAddFromClaudeCode(args []string) {
 		return
 	}
 
-	// Add each MCP
-	for name, mcp := range toAdd {
-		mcp.Name = name
-		if err := config.AddMCPConfigToFile(cfgPath, mcp); err != nil {
-			fmt.Fprintf(os.Stderr, "Error adding %s: %v\n", name, err)
-			continue
-		}
+	if err := config.AddMCPConfigsToFile(cfgPath, toAdd); err != nil {
+		fmt.Fprintf(os.Stderr, "Error migrating MCPs from Claude Code: %v\n", err)
+		os.Exit(1)
+	}
+
+	for _, name := range sortedMCPNames(toAdd) {
 		fmt.Printf("Migrated MCP '%s' from Claude Code to user config\n", name)
 	}
 
 	fmt.Printf("\nMigrated %d MCPs to %s\n", len(toAdd), cfgPath)
+}
+
+func parseMCPAddFromClaudeCodeArgs(args []string) (specificNames []string, dryRun bool, showHelp bool, err error) {
+	for _, arg := range args {
+		switch arg {
+		case "--dry-run":
+			dryRun = true
+		case "--help", "-h":
+			showHelp = true
+		default:
+			if strings.HasPrefix(arg, "-") {
+				return nil, false, false, fmt.Errorf("unknown add-from-claude-code option %q", arg)
+			}
+			specificNames = append(specificNames, arg)
+		}
+	}
+	return specificNames, dryRun, showHelp, nil
+}
+
+func sortedMCPNames(mcps map[string]config.MCPConfig) []string {
+	names := make([]string, 0, len(mcps))
+	for name := range mcps {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // isSlotMCP checks if the MCP name refers to slop-mcp itself.
@@ -631,72 +699,20 @@ Note:
 }
 
 func cmdMCPRemove(args []string) {
-	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "Usage: slop-mcp mcp remove <name> [--local|--project|--user]")
+	name, scope, showHelp, err := parseMCPRemoveArgs(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		printMCPRemoveUsage()
 		os.Exit(1)
 	}
-
-	name := ""
-	scope := config.ScopeProject
-
-	for i := 0; i < len(args); i++ {
-		switch {
-		case args[i] == "--local" || args[i] == "-l":
-			scope = config.ScopeLocal
-		case args[i] == "--project" || args[i] == "-p":
-			scope = config.ScopeProject
-		case args[i] == "--user" || args[i] == "-u":
-			scope = config.ScopeUser
-		case args[i] == "--scope" || args[i] == "-s":
-			if i+1 >= len(args) {
-				fmt.Fprintln(os.Stderr, "Error: --scope requires a value (local, project, or user)")
-				os.Exit(1)
-			}
-			i++
-			switch args[i] {
-			case "local":
-				scope = config.ScopeLocal
-			case "project":
-				scope = config.ScopeProject
-			case "user":
-				scope = config.ScopeUser
-			default:
-				fmt.Fprintf(os.Stderr, "Error: invalid scope '%s' (must be local, project, or user)\n", args[i])
-				os.Exit(1)
-			}
-		case strings.HasPrefix(args[i], "--scope="):
-			scopeVal := strings.TrimPrefix(args[i], "--scope=")
-			switch scopeVal {
-			case "local":
-				scope = config.ScopeLocal
-			case "project":
-				scope = config.ScopeProject
-			case "user":
-				scope = config.ScopeUser
-			default:
-				fmt.Fprintf(os.Stderr, "Error: invalid scope '%s' (must be local, project, or user)\n", scopeVal)
-				os.Exit(1)
-			}
-		case args[i] == "--help" || args[i] == "-h":
-			printMCPRemoveUsage()
-			return
-		default:
-			if name == "" {
-				name = args[i]
-			}
-		}
+	if showHelp {
+		printMCPRemoveUsage()
+		return
 	}
 
-	if name == "" {
-		fmt.Fprintln(os.Stderr, "Error: name is required")
-		os.Exit(1)
-	}
-
-	// Determine config path
-	cwd, _ := os.Getwd()
-	cfgPath := config.ConfigPathForScope(scope, cwd)
-	if cfgPath == "" {
-		fmt.Fprintln(os.Stderr, "Error: could not determine config path")
+	cfgPath, err := configPathForScope(scope)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -707,6 +723,66 @@ func cmdMCPRemove(args []string) {
 	}
 
 	fmt.Printf("Removed MCP '%s' from %s config (%s)\n", name, scope, cfgPath)
+}
+
+func parseMCPRemoveArgs(args []string) (name string, scope config.Scope, showHelp bool, err error) {
+	scope = config.ScopeProject
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--local" || args[i] == "-l":
+			scope = config.ScopeLocal
+		case args[i] == "--project" || args[i] == "-p":
+			scope = config.ScopeProject
+		case args[i] == "--user" || args[i] == "-u":
+			scope = config.ScopeUser
+		case args[i] == "--scope" || args[i] == "-s":
+			if i+1 >= len(args) {
+				return "", scope, false, fmt.Errorf("--scope requires a value (local, project, or user)")
+			}
+			parsedScope, err := parseMCPConfigScope(args[i+1])
+			if err != nil {
+				return "", scope, false, err
+			}
+			scope = parsedScope
+			i++
+		case strings.HasPrefix(args[i], "--scope="):
+			parsedScope, err := parseMCPConfigScope(strings.TrimPrefix(args[i], "--scope="))
+			if err != nil {
+				return "", scope, false, err
+			}
+			scope = parsedScope
+		case args[i] == "--help" || args[i] == "-h":
+			showHelp = true
+		default:
+			if strings.HasPrefix(args[i], "-") {
+				return "", scope, false, fmt.Errorf("unknown remove option %q", args[i])
+			}
+			if name != "" {
+				return "", scope, false, fmt.Errorf("unexpected extra argument %q", args[i])
+			}
+			name = args[i]
+		}
+	}
+	if showHelp {
+		return name, scope, true, nil
+	}
+	if name == "" {
+		return "", scope, false, fmt.Errorf("name is required")
+	}
+	return name, scope, false, nil
+}
+
+func parseMCPConfigScope(scope string) (config.Scope, error) {
+	switch scope {
+	case "local":
+		return config.ScopeLocal, nil
+	case "project":
+		return config.ScopeProject, nil
+	case "user":
+		return config.ScopeUser, nil
+	default:
+		return config.ScopeProject, fmt.Errorf("invalid scope %q (must be local, project, or user)", scope)
+	}
 }
 
 func printMCPRemoveUsage() {
@@ -721,7 +797,7 @@ Arguments:
 Options:
   --local      Remove from local config (.slop-mcp.local.kdl)
   --project    Remove from project config (.slop-mcp.kdl) [default]
-  --user       Remove from user config (~/.config/slop-mcp/config.kdl)
+  --user       Remove from user config ($XDG_CONFIG_HOME/slop-mcp/config.kdl or ~/.config/slop-mcp/config.kdl)
   --help, -h   Show this help
 
 Examples:
@@ -731,34 +807,22 @@ Examples:
 }
 
 func cmdMCPGet(args []string) {
-	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "Usage: slop-mcp mcp get <name>")
+	name, outputJSON, showHelp, err := parseMCPGetArgs(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		printMCPGetUsage()
 		os.Exit(1)
 	}
-
-	name := ""
-	outputJSON := false
-
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--json":
-			outputJSON = true
-		case "--help", "-h":
-			printMCPGetUsage()
-			return
-		default:
-			if name == "" {
-				name = args[i]
-			}
-		}
+	if showHelp {
+		printMCPGetUsage()
+		return
 	}
 
-	if name == "" {
-		fmt.Fprintln(os.Stderr, "Error: name is required")
+	cwd, err := currentWorkingDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-
-	cwd, _ := os.Getwd()
 	paths := config.ConfigPaths(cwd)
 
 	// Search all config sources
@@ -814,6 +878,32 @@ func cmdMCPGet(args []string) {
 	os.Exit(1)
 }
 
+func parseMCPGetArgs(args []string) (name string, outputJSON bool, showHelp bool, err error) {
+	for _, arg := range args {
+		switch arg {
+		case "--json":
+			outputJSON = true
+		case "--help", "-h":
+			showHelp = true
+		default:
+			if strings.HasPrefix(arg, "-") {
+				return "", false, false, fmt.Errorf("unknown get option %q", arg)
+			}
+			if name != "" {
+				return "", false, false, fmt.Errorf("unexpected extra argument %q", arg)
+			}
+			name = arg
+		}
+	}
+	if showHelp {
+		return name, outputJSON, true, nil
+	}
+	if name == "" {
+		return "", false, false, fmt.Errorf("name is required")
+	}
+	return name, outputJSON, false, nil
+}
+
 func printMCPGetUsage() {
 	fmt.Print(`slop-mcp mcp get - Get details of an MCP server
 
@@ -834,56 +924,28 @@ Examples:
 }
 
 func cmdMCPList(args []string) {
-	showLocal := true
-	showProject := true
-	showUser := true
-	outputJSON := false
-
-	for _, arg := range args {
-		switch arg {
-		case "--local":
-			showProject = false
-			showUser = false
-		case "--project":
-			showLocal = false
-			showUser = false
-		case "--user":
-			showLocal = false
-			showProject = false
-		case "--all":
-			showLocal = true
-			showProject = true
-			showUser = true
-		case "--json":
-			outputJSON = true
-		case "--help", "-h":
-			printMCPListUsage()
-			return
-		}
+	opts, err := parseMCPListArgs(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		printMCPListUsage()
+		os.Exit(1)
+	}
+	if opts.showHelp {
+		printMCPListUsage()
+		return
 	}
 
-	cwd, _ := os.Getwd()
+	cwd, err := currentWorkingDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
 
-	if outputJSON {
-		allMCPs := make(map[string]config.MCPConfig)
-
-		if showUser {
-			userCfg, _ := config.LoadUserConfig()
-			for name, mcp := range userCfg.MCPs {
-				allMCPs[name] = mcp
-			}
-		}
-		if showProject {
-			projectCfg, _ := config.LoadProjectConfig(cwd)
-			for name, mcp := range projectCfg.MCPs {
-				allMCPs[name] = mcp
-			}
-		}
-		if showLocal {
-			localCfg, _ := config.LoadLocalConfig(cwd)
-			for name, mcp := range localCfg.MCPs {
-				allMCPs[name] = mcp
-			}
+	if opts.outputJSON {
+		allMCPs, err := loadMCPListJSON(cwd, opts.showUser, opts.showProject, opts.showLocal)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
 		}
 
 		data, _ := json.MarshalIndent(allMCPs, "", "  ")
@@ -892,7 +954,7 @@ func cmdMCPList(args []string) {
 	}
 
 	// Load configs
-	if showLocal {
+	if opts.showLocal {
 		localCfg, err := config.LoadLocalConfig(cwd)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: could not load local config: %v\n", err)
@@ -903,7 +965,7 @@ func cmdMCPList(args []string) {
 		}
 	}
 
-	if showProject {
+	if opts.showProject {
 		projectCfg, err := config.LoadProjectConfig(cwd)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: could not load project config: %v\n", err)
@@ -914,20 +976,100 @@ func cmdMCPList(args []string) {
 		}
 	}
 
-	if showUser {
+	if opts.showUser {
 		userCfg, err := config.LoadUserConfig()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: could not load user config: %v\n", err)
 		} else if len(userCfg.MCPs) > 0 {
-			fmt.Println("User config (~/.config/slop-mcp/config.kdl):")
+			fmt.Println("User config ($XDG_CONFIG_HOME/slop-mcp/config.kdl or ~/.config/slop-mcp/config.kdl):")
 			printMCPList(userCfg)
 			fmt.Println()
 		}
 	}
 }
 
+type mcpListOptions struct {
+	showLocal   bool
+	showProject bool
+	showUser    bool
+	outputJSON  bool
+	showHelp    bool
+}
+
+func parseMCPListArgs(args []string) (mcpListOptions, error) {
+	opts := mcpListOptions{showLocal: true, showProject: true, showUser: true}
+	for _, arg := range args {
+		switch arg {
+		case "--local":
+			opts.showLocal = true
+			opts.showProject = false
+			opts.showUser = false
+		case "--project":
+			opts.showLocal = false
+			opts.showProject = true
+			opts.showUser = false
+		case "--user":
+			opts.showLocal = false
+			opts.showProject = false
+			opts.showUser = true
+		case "--all":
+			opts.showLocal = true
+			opts.showProject = true
+			opts.showUser = true
+		case "--json":
+			opts.outputJSON = true
+		case "--help", "-h":
+			opts.showHelp = true
+		default:
+			return opts, fmt.Errorf("unknown list option %q", arg)
+		}
+	}
+	return opts, nil
+}
+
+func loadMCPListJSON(cwd string, showUser, showProject, showLocal bool) (map[string]config.MCPConfig, error) {
+	allMCPs := make(map[string]config.MCPConfig)
+
+	if showUser {
+		userCfg, err := config.LoadUserConfig()
+		if err != nil {
+			return nil, fmt.Errorf("could not load user config: %w", err)
+		}
+		for name, mcp := range userCfg.MCPs {
+			allMCPs[name] = mcp
+		}
+	}
+	if showProject {
+		projectCfg, err := config.LoadProjectConfig(cwd)
+		if err != nil {
+			return nil, fmt.Errorf("could not load project config: %w", err)
+		}
+		for name, mcp := range projectCfg.MCPs {
+			allMCPs[name] = mcp
+		}
+	}
+	if showLocal {
+		localCfg, err := config.LoadLocalConfig(cwd)
+		if err != nil {
+			return nil, fmt.Errorf("could not load local config: %w", err)
+		}
+		for name, mcp := range localCfg.MCPs {
+			allMCPs[name] = mcp
+		}
+	}
+
+	return allMCPs, nil
+}
+
 func printMCPList(cfg *config.Config) {
-	for name, mcp := range cfg.MCPs {
+	names := make([]string, 0, len(cfg.MCPs))
+	for name := range cfg.MCPs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		mcp := cfg.MCPs[name]
 		fmt.Printf("  %s:\n", name)
 		fmt.Printf("    type: %s\n", mcp.Type)
 		if mcp.Command != "" {
@@ -954,7 +1096,7 @@ Usage:
 Options:
   --local      Show only local config (.slop-mcp.local.kdl)
   --project    Show only project config (.slop-mcp.kdl)
-  --user       Show only user config (~/.config/slop-mcp/config.kdl)
+  --user       Show only user config ($XDG_CONFIG_HOME/slop-mcp/config.kdl or ~/.config/slop-mcp/config.kdl)
   --all        Show all configs [default]
   --json       Output as JSON
   --help, -h   Show this help
@@ -967,14 +1109,22 @@ Examples:
 }
 
 func cmdMCPPaths(args []string) {
-	for _, arg := range args {
-		if arg == "--help" || arg == "-h" {
-			printMCPPathsUsage()
-			return
-		}
+	showHelp, err := parseMCPPathsArgs(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		printMCPPathsUsage()
+		os.Exit(1)
+	}
+	if showHelp {
+		printMCPPathsUsage()
+		return
 	}
 
-	cwd, _ := os.Getwd()
+	cwd, err := currentWorkingDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
 	paths := config.ConfigPaths(cwd)
 
 	fmt.Println("Config file paths:")
@@ -999,6 +1149,18 @@ func cmdMCPPaths(args []string) {
 	}
 }
 
+func parseMCPPathsArgs(args []string) (bool, error) {
+	for _, arg := range args {
+		switch arg {
+		case "--help", "-h":
+			return true, nil
+		default:
+			return false, fmt.Errorf("unknown paths option %q", arg)
+		}
+	}
+	return false, nil
+}
+
 func printMCPPathsUsage() {
 	fmt.Print(`slop-mcp mcp paths - Show config file paths
 
@@ -1008,47 +1170,46 @@ Usage:
 Shows the paths to all config files and their existence status.
 
 Config file precedence (later overrides earlier):
-  1. User config (~/.config/slop-mcp/config.kdl)
+  1. User config ($XDG_CONFIG_HOME/slop-mcp/config.kdl or ~/.config/slop-mcp/config.kdl)
   2. Project config (.slop-mcp.kdl)
   3. Local config (.slop-mcp.local.kdl)
 `)
 }
 
 func cmdMCPDump(args []string) {
-	scope := ""
-	outputJSON := false
-
-	for _, arg := range args {
-		switch arg {
-		case "--local":
-			scope = "local"
-		case "--project":
-			scope = "project"
-		case "--user":
-			scope = "user"
-		case "--claude-desktop":
-			scope = "claude_desktop"
-		case "--claude-code":
-			scope = "claude_code"
-		case "--json":
-			outputJSON = true
-		case "--help", "-h":
-			printMCPDumpUsage()
-			return
-		}
+	scope, outputJSON, showHelp, err := parseMCPDumpArgs(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		printMCPDumpUsage()
+		os.Exit(1)
+	}
+	if showHelp {
+		printMCPDumpUsage()
+		return
 	}
 
-	cwd, _ := os.Getwd()
+	cwd, err := currentWorkingDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
 	paths := config.ConfigPaths(cwd)
+
+	if outputJSON {
+		output, err := buildMCPDumpJSON(paths, scope)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		pretty, _ := json.MarshalIndent(output, "", "  ")
+		fmt.Println(string(pretty))
+		return
+	}
 
 	dumpFile := func(name, path string) {
 		data, err := os.ReadFile(path)
 		if os.IsNotExist(err) {
-			if outputJSON {
-				fmt.Printf("{\"error\": \"%s config not found at %s\"}\n", name, path)
-			} else {
-				fmt.Printf("# %s config not found at %s\n", name, path)
-			}
+			fmt.Printf("# %s config not found at %s\n", name, path)
 			return
 		}
 		if err != nil {
@@ -1056,35 +1217,8 @@ func cmdMCPDump(args []string) {
 			return
 		}
 
-		if outputJSON {
-			// Try to parse and re-output as JSON
-			if name == "claude_desktop" || name == "claude_code" {
-				var jsonCfg config.ClaudeCodeSettings
-				if err := json.Unmarshal(data, &jsonCfg); err == nil && jsonCfg.MCPServers != nil {
-					pretty, _ := json.MarshalIndent(jsonCfg.MCPServers, "", "  ")
-					fmt.Println(string(pretty))
-					return
-				}
-				// Also try Claude Desktop format
-				var desktopCfg config.JSONConfig
-				if err := json.Unmarshal(data, &desktopCfg); err == nil && desktopCfg.MCPServers != nil {
-					pretty, _ := json.MarshalIndent(desktopCfg.MCPServers, "", "  ")
-					fmt.Println(string(pretty))
-					return
-				}
-			}
-			// For KDL files, load and convert to JSON
-			cfg, err := config.ParseKDLConfig(string(data), config.SourceProject)
-			if err == nil {
-				pretty, _ := json.MarshalIndent(cfg.MCPs, "", "  ")
-				fmt.Println(string(pretty))
-				return
-			}
-			fmt.Printf("{\"raw\": %q}\n", string(data))
-		} else {
-			fmt.Printf("# %s (%s)\n", name, path)
-			fmt.Println(string(data))
-		}
+		fmt.Printf("# %s (%s)\n", name, path)
+		fmt.Println(string(data))
 	}
 
 	if scope != "" {
@@ -1096,6 +1230,85 @@ func cmdMCPDump(args []string) {
 			fmt.Println()
 		}
 	}
+}
+
+func parseMCPDumpArgs(args []string) (scope string, outputJSON bool, showHelp bool, err error) {
+	for _, arg := range args {
+		switch arg {
+		case "--local":
+			scope, err = setMCPDumpScope(scope, "local")
+		case "--project":
+			scope, err = setMCPDumpScope(scope, "project")
+		case "--user":
+			scope, err = setMCPDumpScope(scope, "user")
+		case "--claude-desktop":
+			scope, err = setMCPDumpScope(scope, "claude_desktop")
+		case "--claude-code":
+			scope, err = setMCPDumpScope(scope, "claude_code")
+		case "--json":
+			outputJSON = true
+		case "--help", "-h":
+			showHelp = true
+		default:
+			return "", false, false, fmt.Errorf("unknown dump option %q", arg)
+		}
+		if err != nil {
+			return "", false, false, err
+		}
+	}
+	return scope, outputJSON, showHelp, nil
+}
+
+func setMCPDumpScope(current, next string) (string, error) {
+	if current != "" && current != next {
+		return "", fmt.Errorf("only one dump scope may be provided")
+	}
+	return next, nil
+}
+
+func buildMCPDumpJSON(paths map[string]string, scope string) (any, error) {
+	if scope != "" {
+		return loadMCPDumpJSON(scope, paths[scope])
+	}
+
+	output := make(map[string]any, len(mcpDumpScopes))
+	for _, name := range mcpDumpScopes {
+		value, err := loadMCPDumpJSON(name, paths[name])
+		if err != nil {
+			return nil, err
+		}
+		output[name] = value
+	}
+	return output, nil
+}
+
+var mcpDumpScopes = []string{"local", "project", "user", "claude_desktop", "claude_code"}
+
+func loadMCPDumpJSON(name, path string) (any, error) {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return map[string]string{"error": fmt.Sprintf("%s config not found at %s", name, path)}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", path, err)
+	}
+
+	if name == "claude_desktop" || name == "claude_code" {
+		var jsonCfg config.ClaudeCodeSettings
+		if err := json.Unmarshal(data, &jsonCfg); err == nil && jsonCfg.MCPServers != nil {
+			return jsonCfg.MCPServers, nil
+		}
+		var desktopCfg config.JSONConfig
+		if err := json.Unmarshal(data, &desktopCfg); err == nil && desktopCfg.MCPServers != nil {
+			return desktopCfg.MCPServers, nil
+		}
+	}
+
+	cfg, err := config.ParseKDLConfig(string(data), config.SourceProject)
+	if err == nil {
+		return cfg.MCPs, nil
+	}
+	return map[string]string{"raw": string(data)}, nil
 }
 
 func printMCPDumpUsage() {
@@ -1123,26 +1336,19 @@ Examples:
 }
 
 func cmdMCPStatus(args []string) {
-	port := 8080
-	outputJSON := false
-
-	for i := 0; i < len(args); i++ {
-		switch {
-		case args[i] == "--json":
-			outputJSON = true
-		case strings.HasPrefix(args[i], "--port="):
-			_, _ = fmt.Sscanf(args[i], "--port=%d", &port)
-		case args[i] == "--port" && i+1 < len(args):
-			_, _ = fmt.Sscanf(args[i+1], "%d", &port)
-			i++
-		case args[i] == "--help" || args[i] == "-h":
-			printMCPStatusUsage()
-			return
-		}
+	opts, err := parseMCPStatusArgs(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		printMCPStatusUsage()
+		os.Exit(1)
+	}
+	if opts.showHelp {
+		printMCPStatusUsage()
+		return
 	}
 
 	// Query the running server via HTTP
-	url := fmt.Sprintf("http://localhost:%d/", port)
+	url := fmt.Sprintf("http://localhost:%d/", opts.port)
 
 	// Build MCP tool call request
 	reqBody := map[string]any{
@@ -1167,7 +1373,7 @@ func cmdMCPStatus(args []string) {
 	resp, err := client.Post(url, "application/json", bytes.NewReader(reqJSON))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error connecting to server at %s: %v\n", url, err)
-		fmt.Fprintf(os.Stderr, "Make sure slop-mcp is running with: slop-mcp serve --port %d\n", port)
+		fmt.Fprintf(os.Stderr, "Make sure slop-mcp is running with: slop-mcp serve --port %d\n", opts.port)
 		os.Exit(1)
 	}
 	defer resp.Body.Close()
@@ -1215,14 +1421,14 @@ func cmdMCPStatus(args []string) {
 		os.Exit(1)
 	}
 
-	if outputJSON {
+	if opts.outputJSON {
 		pretty, _ := json.MarshalIndent(output.Status, "", "  ")
 		fmt.Println(string(pretty))
 		return
 	}
 
 	// Print formatted status
-	fmt.Printf("MCP Status (via localhost:%d):\n\n", port)
+	fmt.Printf("MCP Status (via localhost:%d):\n\n", opts.port)
 	if len(output.Status) == 0 {
 		fmt.Println("  No MCPs configured")
 		return
@@ -1240,6 +1446,51 @@ func cmdMCPStatus(args []string) {
 		}
 		fmt.Println()
 	}
+}
+
+type mcpStatusOptions struct {
+	port       int
+	outputJSON bool
+	showHelp   bool
+}
+
+func parseMCPStatusArgs(args []string) (mcpStatusOptions, error) {
+	opts := mcpStatusOptions{port: 8080}
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--json":
+			opts.outputJSON = true
+		case strings.HasPrefix(args[i], "--port="):
+			port, err := parseMCPPort(strings.TrimPrefix(args[i], "--port="))
+			if err != nil {
+				return opts, err
+			}
+			opts.port = port
+		case args[i] == "--port":
+			if i+1 >= len(args) {
+				return opts, fmt.Errorf("--port requires a value")
+			}
+			port, err := parseMCPPort(args[i+1])
+			if err != nil {
+				return opts, err
+			}
+			opts.port = port
+			i++
+		case args[i] == "--help" || args[i] == "-h":
+			opts.showHelp = true
+		default:
+			return opts, fmt.Errorf("unknown status option %q", args[i])
+		}
+	}
+	return opts, nil
+}
+
+func parseMCPPort(raw string) (int, error) {
+	port, err := strconv.Atoi(raw)
+	if err != nil || port <= 0 || port > 65535 {
+		return 0, fmt.Errorf("invalid --port value %q: expected a port number (1-65535)", raw)
+	}
+	return port, nil
 }
 
 func printMCPStatusUsage() {
@@ -1407,7 +1658,10 @@ func cmdMCPAuth(args []string) {
 }
 
 func findMCPConfigFromFiles(name string) (*config.MCPConfig, error) {
-	cwd, _ := os.Getwd()
+	cwd, err := currentWorkingDir()
+	if err != nil {
+		return nil, err
+	}
 
 	// Check all config sources
 	sources := []struct {
@@ -1452,49 +1706,30 @@ Examples:
 
 Notes:
   - OAuth requires the MCP to have an HTTP URL configured
-  - Tokens are stored in ~/.config/slop-mcp/auth.json
+  - Tokens are stored in $XDG_CONFIG_HOME/slop-mcp/auth.json or ~/.config/slop-mcp/auth.json
   - This command works without a running server
 `)
 }
 
 func cmdMCPMetadata(args []string) {
-	port := 8080
-	outputJSON := false
-	outputFile := ""
-	mcpName := ""
-
-	for i := 0; i < len(args); i++ {
-		switch {
-		case args[i] == "--json":
-			outputJSON = true
-		case strings.HasPrefix(args[i], "--port="):
-			_, _ = fmt.Sscanf(args[i], "--port=%d", &port)
-		case args[i] == "--port" && i+1 < len(args):
-			_, _ = fmt.Sscanf(args[i+1], "%d", &port)
-			i++
-		case strings.HasPrefix(args[i], "--output="):
-			outputFile = strings.TrimPrefix(args[i], "--output=")
-		case args[i] == "--output" && i+1 < len(args):
-			outputFile = args[i+1]
-			i++
-		case strings.HasPrefix(args[i], "--mcp="):
-			mcpName = strings.TrimPrefix(args[i], "--mcp=")
-		case args[i] == "--mcp" && i+1 < len(args):
-			mcpName = args[i+1]
-			i++
-		case args[i] == "--help" || args[i] == "-h":
-			printMCPMetadataUsage()
-			return
-		}
+	opts, err := parseMCPMetadataArgs(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		printMCPMetadataUsage()
+		os.Exit(1)
+	}
+	if opts.showHelp {
+		printMCPMetadataUsage()
+		return
 	}
 
 	// Query the running server via HTTP
-	url := fmt.Sprintf("http://localhost:%d/", port)
+	url := fmt.Sprintf("http://localhost:%d/", opts.port)
 
 	// Build MCP tool call request
 	arguments := map[string]any{}
-	if mcpName != "" {
-		arguments["mcp_name"] = mcpName
+	if opts.mcpName != "" {
+		arguments["mcp_name"] = opts.mcpName
 	}
 
 	reqBody := map[string]any{
@@ -1517,7 +1752,7 @@ func cmdMCPMetadata(args []string) {
 	resp, err := client.Post(url, "application/json", bytes.NewReader(reqJSON))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error connecting to server at %s: %v\n", url, err)
-		fmt.Fprintf(os.Stderr, "Make sure slop-mcp is running with: slop-mcp serve --port %d\n", port)
+		fmt.Fprintf(os.Stderr, "Make sure slop-mcp is running with: slop-mcp serve --port %d\n", opts.port)
 		os.Exit(1)
 	}
 	defer resp.Body.Close()
@@ -1568,25 +1803,93 @@ func cmdMCPMetadata(args []string) {
 
 	// Format output
 	var formattedData []byte
-	if outputJSON {
+	if opts.outputJSON {
 		formattedData, _ = json.MarshalIndent(output.Metadata, "", "  ")
 	} else {
 		formattedData, _ = json.MarshalIndent(output.Metadata, "", "  ")
 	}
 
 	// Write to file or stdout
-	if outputFile != "" {
-		if err := os.WriteFile(outputFile, formattedData, 0644); err != nil {
+	if opts.outputFile != "" {
+		if err := writeCLIOutputFile(opts.outputFile, formattedData); err != nil {
 			fmt.Fprintf(os.Stderr, "Error writing to file: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("Metadata written to %s (%d MCPs)\n", outputFile, output.Total)
+		fmt.Printf("Metadata written to %s (%d MCPs)\n", opts.outputFile, output.Total)
 	} else {
-		if !outputJSON {
+		if !opts.outputJSON {
 			fmt.Printf("MCP Metadata (%d servers):\n\n", output.Total)
 		}
 		fmt.Println(string(formattedData))
 	}
+}
+
+type mcpMetadataOptions struct {
+	port       int
+	outputJSON bool
+	outputFile string
+	mcpName    string
+	showHelp   bool
+}
+
+func parseMCPMetadataArgs(args []string) (mcpMetadataOptions, error) {
+	opts := mcpMetadataOptions{port: 8080}
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--json":
+			opts.outputJSON = true
+		case strings.HasPrefix(args[i], "--port="):
+			port, err := parseMCPPort(strings.TrimPrefix(args[i], "--port="))
+			if err != nil {
+				return opts, err
+			}
+			opts.port = port
+		case args[i] == "--port":
+			if i+1 >= len(args) {
+				return opts, fmt.Errorf("--port requires a value")
+			}
+			port, err := parseMCPPort(args[i+1])
+			if err != nil {
+				return opts, err
+			}
+			opts.port = port
+			i++
+		case strings.HasPrefix(args[i], "--output="):
+			opts.outputFile = strings.TrimPrefix(args[i], "--output=")
+			if opts.outputFile == "" {
+				return opts, fmt.Errorf("--output requires a value")
+			}
+		case args[i] == "--output":
+			if i+1 >= len(args) {
+				return opts, fmt.Errorf("--output requires a value")
+			}
+			opts.outputFile = args[i+1]
+			i++
+		case strings.HasPrefix(args[i], "--mcp="):
+			opts.mcpName = strings.TrimPrefix(args[i], "--mcp=")
+			if opts.mcpName == "" {
+				return opts, fmt.Errorf("--mcp requires a value")
+			}
+		case args[i] == "--mcp":
+			if i+1 >= len(args) {
+				return opts, fmt.Errorf("--mcp requires a value")
+			}
+			opts.mcpName = args[i+1]
+			i++
+		case args[i] == "--help" || args[i] == "-h":
+			opts.showHelp = true
+		default:
+			return opts, fmt.Errorf("unknown metadata option %q", args[i])
+		}
+	}
+	return opts, nil
+}
+
+func writeCLIOutputFile(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	return atomicfile.WriteFile(path, data, 0644)
 }
 
 func printMCPMetadataUsage() {

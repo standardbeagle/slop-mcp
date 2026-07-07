@@ -15,52 +15,23 @@ import (
 )
 
 func cmdRun(args []string) {
-	if len(args) < 1 {
+	opts, err := parseRunArgs(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		printRunUsage()
 		os.Exit(1)
 	}
-
-	var scriptFile string
-	var inlineScript string
-	timeout := 5 * time.Minute
-	outputJSON := false
-
-	for i := 0; i < len(args); i++ {
-		switch {
-		case args[i] == "-e" && i+1 < len(args):
-			inlineScript = args[i+1]
-			i++
-		case args[i] == "--json":
-			outputJSON = true
-		case strings.HasPrefix(args[i], "--timeout="):
-			d, err := parseTimeoutValue(strings.TrimPrefix(args[i], "--timeout="))
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-				os.Exit(1)
-			}
-			timeout = d
-		case args[i] == "--help" || args[i] == "-h":
-			printRunUsage()
-			return
-		case !strings.HasPrefix(args[i], "-"):
-			if scriptFile == "" {
-				scriptFile = args[i]
-			}
-		}
-	}
-
-	if scriptFile == "" && inlineScript == "" {
-		fmt.Fprintln(os.Stderr, "Error: either script file or -e '<script>' is required")
+	if opts.showHelp {
 		printRunUsage()
-		os.Exit(1)
+		return
 	}
 
 	// Get script content
 	var script string
-	if inlineScript != "" {
-		script = inlineScript
+	if opts.inlineScript != "" {
+		script = opts.inlineScript
 	} else {
-		data, err := os.ReadFile(scriptFile)
+		data, err := os.ReadFile(opts.scriptFile)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error reading script file: %v\n", err)
 			os.Exit(1)
@@ -69,7 +40,11 @@ func cmdRun(args []string) {
 	}
 
 	// Load merged three-tier config (same path as serve)
-	cwd, _ := os.Getwd()
+	cwd, err := currentWorkingDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
 	cfg, err := config.Load(cwd)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
@@ -86,7 +61,7 @@ func cmdRun(args []string) {
 	builtins.RegisterJWT(rt)
 	builtins.RegisterTemplate(rt)
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout)
 	defer cancel()
 
 	// Connect all configured MCPs
@@ -126,7 +101,7 @@ func cmdRun(args []string) {
 		emitted = append(emitted, convertValue(v))
 	}
 
-	if outputJSON {
+	if opts.outputJSON {
 		output := map[string]any{
 			"result":  convertValue(result),
 			"emitted": emitted,
@@ -147,6 +122,69 @@ func cmdRun(args []string) {
 			}
 		}
 	}
+}
+
+type runOptions struct {
+	scriptFile   string
+	inlineScript string
+	timeout      time.Duration
+	outputJSON   bool
+	showHelp     bool
+}
+
+func parseRunArgs(args []string) (runOptions, error) {
+	opts := runOptions{timeout: 5 * time.Minute}
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--help" || arg == "-h":
+			opts.showHelp = true
+		case arg == "-e":
+			if i+1 >= len(args) {
+				return opts, fmt.Errorf("-e requires a script value")
+			}
+			i++
+			opts.inlineScript = args[i]
+		case arg == "--json":
+			opts.outputJSON = true
+		case arg == "--timeout":
+			if i+1 >= len(args) {
+				return opts, fmt.Errorf("--timeout requires a value")
+			}
+			i++
+			timeout, err := parseTimeoutValue(args[i])
+			if err != nil {
+				return opts, err
+			}
+			opts.timeout = timeout
+		case strings.HasPrefix(arg, "--timeout="):
+			timeout, err := parseTimeoutValue(strings.TrimPrefix(arg, "--timeout="))
+			if err != nil {
+				return opts, err
+			}
+			opts.timeout = timeout
+		case strings.HasPrefix(arg, "-"):
+			return opts, fmt.Errorf("unknown option %q", arg)
+		default:
+			if opts.scriptFile != "" {
+				return opts, fmt.Errorf("only one script file may be provided")
+			}
+			opts.scriptFile = arg
+		}
+	}
+
+	if opts.showHelp {
+		return opts, nil
+	}
+	if opts.scriptFile == "" && opts.inlineScript == "" {
+		return opts, fmt.Errorf("either script file or -e '<script>' is required")
+	}
+	if opts.scriptFile != "" && opts.inlineScript != "" {
+		return opts, fmt.Errorf("script file and -e cannot both be provided")
+	}
+
+	return opts, nil
 }
 
 // parseTimeoutValue parses a --timeout value: either a Go duration string
@@ -231,7 +269,8 @@ Usage:
 Options:
   -e '<script>'      Execute inline script
   --json             Output as JSON
-  --timeout=<value>  Execution timeout: seconds or duration like "30s", "5m"
+  --timeout <value>  Execution timeout: seconds or duration like "30s", "5m"
+  --timeout=<value>  Same as --timeout <value>
                      (default: 300)
   --help, -h         Show this help
 

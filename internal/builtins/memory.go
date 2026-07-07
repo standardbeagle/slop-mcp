@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/standardbeagle/slop-mcp/internal/atomicfile"
+	"github.com/standardbeagle/slop-mcp/internal/config"
 	"github.com/standardbeagle/slop-mcp/internal/overrides"
 	"github.com/standardbeagle/slop/pkg/slop"
 )
@@ -47,7 +48,7 @@ func checkBank(fn, name string) error {
 }
 
 // MemoryStore provides disk-backed persistent memory for SLOP scripts.
-// Data is stored as JSON files in ~/.config/slop-mcp/memory/<bank>.json,
+// Data is stored as JSON files in the XDG-aware slop-mcp config directory,
 // compatible with the memory-cli data format.
 type MemoryStore struct {
 	mu      sync.Mutex
@@ -77,9 +78,12 @@ type memoryEntry struct {
 
 // NewMemoryStore creates a MemoryStore using the default directory.
 func NewMemoryStore() *MemoryStore {
-	home, _ := os.UserHomeDir()
+	configDir := config.UserConfigDirPath()
+	if configDir == "" {
+		return &MemoryStore{}
+	}
 	return &MemoryStore{
-		baseDir: filepath.Join(home, ".config", "slop-mcp", "memory"),
+		baseDir: filepath.Join(configDir, "memory"),
 	}
 }
 

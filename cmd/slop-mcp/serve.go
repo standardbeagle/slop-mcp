@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/standardbeagle/slop-mcp/internal/config"
@@ -13,29 +14,13 @@ import (
 )
 
 func cmdServe(args []string) {
-	port := 0
-	showHelp := false
-
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--port", "-p":
-			if i+1 >= len(args) {
-				fmt.Fprintln(os.Stderr, "Error: --port requires a value")
-				os.Exit(1)
-			}
-			p, err := strconv.Atoi(args[i+1])
-			if err != nil || p <= 0 || p > 65535 {
-				fmt.Fprintf(os.Stderr, "Error: invalid --port value %q: expected a port number (1-65535)\n", args[i+1])
-				os.Exit(1)
-			}
-			port = p
-			i++
-		case "--help", "-h":
-			showHelp = true
-		}
+	opts, err := parseServeArgs(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
 	}
 
-	if showHelp {
+	if opts.showHelp {
 		printServeUsage()
 		return
 	}
@@ -75,8 +60,8 @@ func cmdServe(args []string) {
 
 	// Run with appropriate transport
 	var runErr error
-	if port > 0 {
-		runErr = srv.RunHTTP(ctx, port)
+	if opts.port > 0 {
+		runErr = srv.RunHTTP(ctx, opts.port)
 	} else {
 		runErr = srv.RunStdio(ctx)
 	}
@@ -85,6 +70,48 @@ func cmdServe(args []string) {
 		fmt.Fprintf(os.Stderr, "Server error: %v\n", runErr)
 		os.Exit(1)
 	}
+}
+
+type serveOptions struct {
+	port     int
+	showHelp bool
+}
+
+func parseServeArgs(args []string) (serveOptions, error) {
+	var opts serveOptions
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--port" || args[i] == "-p":
+			if i+1 >= len(args) {
+				return opts, fmt.Errorf("--port requires a value")
+			}
+			port, err := parseServePort(args[i+1])
+			if err != nil {
+				return opts, err
+			}
+			opts.port = port
+			i++
+		case strings.HasPrefix(args[i], "--port="):
+			port, err := parseServePort(strings.TrimPrefix(args[i], "--port="))
+			if err != nil {
+				return opts, err
+			}
+			opts.port = port
+		case args[i] == "--help" || args[i] == "-h":
+			opts.showHelp = true
+		default:
+			return opts, fmt.Errorf("unknown serve option %q", args[i])
+		}
+	}
+	return opts, nil
+}
+
+func parseServePort(raw string) (int, error) {
+	p, err := strconv.Atoi(raw)
+	if err != nil || p <= 0 || p > 65535 {
+		return 0, fmt.Errorf("invalid --port value %q: expected a port number (1-65535)", raw)
+	}
+	return p, nil
 }
 
 func printServeUsage() {
@@ -104,7 +131,7 @@ Examples:
 
 Configuration:
   The server loads MCP configurations from (later overrides earlier):
-  1. User config: ~/.config/slop-mcp/config.kdl
+  1. User config: $XDG_CONFIG_HOME/slop-mcp/config.kdl or ~/.config/slop-mcp/config.kdl
   2. Project config: .slop-mcp.kdl (in current directory)
   3. Local config: .slop-mcp.local.kdl (gitignored, for secrets)
 `)

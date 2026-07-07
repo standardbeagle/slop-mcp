@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // TestParseExecuteToolArgs_PreservesLargeIntegers is the regression test for the
@@ -55,5 +57,26 @@ func TestParseExecuteToolArgs_EmptyParameters(t *testing.T) {
 		if !isEmptyRawParams(args.Parameters) {
 			t.Errorf("isEmptyRawParams=false for body %s (raw=%q)", body, string(args.Parameters))
 		}
+	}
+}
+
+func TestWrapExecuteToolRejectsNonObjectParameters(t *testing.T) {
+	s := mockServer(nil)
+	req := &mcp.CallToolRequest{
+		Params: &mcp.CallToolParamsRaw{
+			Arguments: json.RawMessage(`{"mcp_name":"missing","tool_name":"x","parameters":["not","object"]}`),
+		},
+	}
+
+	result, err := s.wrapExecuteTool(t.Context(), req)
+	if err != nil {
+		t.Fatalf("wrapExecuteTool returned protocol error: %v", err)
+	}
+	if result == nil || !result.IsError {
+		t.Fatalf("expected error result, got %#v", result)
+	}
+	text := extractErrorText(t, result)
+	if !strings.Contains(text, "parameters must be a JSON object") {
+		t.Fatalf("error text = %q, want JSON object hint", text)
 	}
 }

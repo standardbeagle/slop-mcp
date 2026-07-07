@@ -40,7 +40,11 @@ func FindRepoRoot(start string) (string, error) {
 func ScopeRoot(scope Scope, userHome, cwd string) (string, error) {
 	switch scope {
 	case ScopeUser:
-		return filepath.Join(userHome, ".config", "slop-mcp", "memory", "_slop"), nil
+		configDir := os.Getenv("XDG_CONFIG_HOME")
+		if configDir == "" {
+			configDir = filepath.Join(userHome, ".config")
+		}
+		return filepath.Join(configDir, "slop-mcp", "memory", "_slop"), nil
 	case ScopeProject:
 		root, err := findRepoRoot(cwd)
 		if err != nil {

@@ -131,6 +131,9 @@ func buildIndex(snapshot map[string][]ToolInfo, provider OverrideProvider) *Tool
 	for mcpName, tools := range snapshot {
 		copied := make([]ToolInfo, len(tools))
 		for i, t := range tools {
+			if t.MCPName == "" {
+				t.MCPName = mcpName
+			}
 			if provider != nil {
 				if desc, _, _, ok := provider.OverrideFor(mcpName, t.Name); ok {
 					// Preserve the upstream description so downstream stale
@@ -183,6 +186,7 @@ func (idx *ToolIndex) Search(query, mcpName string) []ToolInfo {
 			}
 			results = append(results, tools...)
 		}
+		sortTools(results)
 		return results
 	}
 
@@ -208,9 +212,13 @@ func (idx *ToolIndex) Search(query, mcpName string) []ToolInfo {
 		}
 	}
 
-	// Sort by score descending
+	// Sort by score descending, then by stable keys so equal-scored matches
+	// remain deterministic across map iteration order.
 	sort.Slice(scored, func(i, j int) bool {
-		return scored[i].score > scored[j].score
+		if scored[i].score != scored[j].score {
+			return scored[i].score > scored[j].score
+		}
+		return lessTool(scored[i].tool, scored[j].tool)
 	})
 
 	// Extract tools from scored results
@@ -220,6 +228,19 @@ func (idx *ToolIndex) Search(query, mcpName string) []ToolInfo {
 	}
 
 	return results
+}
+
+func sortTools(tools []ToolInfo) {
+	sort.Slice(tools, func(i, j int) bool {
+		return lessTool(tools[i], tools[j])
+	})
+}
+
+func lessTool(a, b ToolInfo) bool {
+	if a.MCPName != b.MCPName {
+		return a.MCPName < b.MCPName
+	}
+	return a.Name < b.Name
 }
 
 // scoreTool calculates the relevance score for a tool given a query.

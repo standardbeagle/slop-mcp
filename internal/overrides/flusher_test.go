@@ -1,6 +1,7 @@
 package overrides
 
 import (
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -13,7 +14,7 @@ func TestFlusher_CoalescesBursts(t *testing.T) {
 		time.Sleep(10 * time.Millisecond) // simulate disk
 		return nil
 	})
-	defer f.close()
+	defer func() { _ = f.close() }()
 
 	// Burst of 100 dirty signals; flusher must coalesce.
 	for i := 0; i < 100; i++ {
@@ -35,9 +36,27 @@ func TestFlusher_ShutdownFlushesPending(t *testing.T) {
 		return nil
 	})
 	f.markDirty()
-	f.close() // Blocks until pending drain.
+	if err := f.close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
 
 	if atomic.LoadInt32(&writeCount) < 1 {
 		t.Error("shutdown should flush pending")
+	}
+}
+
+func TestFlusher_CloseReturnsPendingWriteError(t *testing.T) {
+	wantErr := errors.New("disk full")
+	f := newFlusher("test", func() error {
+		return wantErr
+	})
+	f.markDirty()
+
+	err := f.close()
+	if err == nil {
+		t.Fatal("expected close error")
+	}
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("close error = %v, want wrapped %v", err, wantErr)
 	}
 }

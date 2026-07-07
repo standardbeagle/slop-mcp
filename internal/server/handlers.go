@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/standardbeagle/slop-mcp/internal/atomicfile"
 	"github.com/standardbeagle/slop-mcp/internal/auth"
 	"github.com/standardbeagle/slop-mcp/internal/builtins"
 	"github.com/standardbeagle/slop-mcp/internal/cli"
@@ -222,6 +224,9 @@ func (s *Server) handleExecuteTool(
 		if err != nil {
 			return nil, nil, err
 		}
+		if result.Error != "" {
+			return cliToolErrorResult(result), nil, nil
+		}
 
 		// Return structured result
 		return nil, result, nil
@@ -245,6 +250,19 @@ func (s *Server) isCLIRoute(mcpName, toolName string) bool {
 		return true
 	}
 	return cli.IsCLITool(toolName) && s.registry.GetState(mcpName) == ""
+}
+
+func cliToolErrorResult(result *cli.ToolResult) *mcp.CallToolResult {
+	data, err := json.Marshal(result)
+	if err != nil {
+		return errorResult(fmt.Errorf("CLI tool failed: %s", result.Error))
+	}
+	return &mcp.CallToolResult{
+		IsError: true,
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: string(data)},
+		},
+	}
 }
 
 // RunSlopInput is the input for the run_slop tool.
@@ -409,18 +427,18 @@ type ManageMCPsInput struct {
 	Env     map[string]string `json:"env,omitempty" jsonschema:"Environment variables"`
 	URL     string            `json:"url,omitempty" jsonschema:"Server URL for HTTP transports"`
 	Headers map[string]string `json:"headers,omitempty" jsonschema:"HTTP headers for HTTP transports"`
-	Scope   string            `json:"scope,omitempty" jsonschema:"Where to save: memory (default, runtime only), user (~/.config/slop-mcp/config.kdl), or project (.slop-mcp.kdl)"`
+	Scope   string            `json:"scope,omitempty" jsonschema:"Where to save: memory (default, runtime only), user ($XDG_CONFIG_HOME/slop-mcp/config.kdl or ~/.config/slop-mcp/config.kdl), or project (.slop-mcp.kdl)"`
 	Dynamic bool              `json:"dynamic,omitempty" jsonschema:"Mark MCP as dynamic (always re-fetch tool list, never cache)"`
 }
 
 // ManageMCPsOutput is the output for the manage_mcps tool.
 type ManageMCPsOutput struct {
-	Message      string                        `json:"message,omitempty"`
-	MCPs         []registry.MCPStatus          `json:"mcps,omitempty"`
-	Status       []registry.MCPFullStatus      `json:"status,omitempty"`
-	HealthChecks []registry.HealthCheckResult  `json:"health_checks,omitempty"`
-	Affected     int                           `json:"affected,omitempty"`
-	Entries      []any                         `json:"entries,omitempty"`
+	Message      string                       `json:"message,omitempty"`
+	MCPs         []registry.MCPStatus         `json:"mcps,omitempty"`
+	Status       []registry.MCPFullStatus     `json:"status,omitempty"`
+	HealthChecks []registry.HealthCheckResult `json:"health_checks,omitempty"`
+	Affected     int                          `json:"affected,omitempty"`
+	Entries      []any                        `json:"entries,omitempty"`
 }
 
 func (s *Server) handleManageMCPs(
@@ -602,12 +620,12 @@ type AuthMCPOutput struct {
 
 // AuthStatusInfo contains authentication status information.
 type AuthStatusInfo struct {
-	ServerName  string `json:"server_name"`
-	ServerURL   string `json:"server_url,omitempty"`
-	IsAuth      bool   `json:"is_authenticated"`
-	ExpiresAt   string `json:"expires_at,omitempty"`
-	IsExpired   bool   `json:"is_expired,omitempty"`
-	HasRefresh  bool   `json:"has_refresh_token,omitempty"`
+	ServerName string `json:"server_name"`
+	ServerURL  string `json:"server_url,omitempty"`
+	IsAuth     bool   `json:"is_authenticated"`
+	ExpiresAt  string `json:"expires_at,omitempty"`
+	IsExpired  bool   `json:"is_expired,omitempty"`
+	HasRefresh bool   `json:"has_refresh_token,omitempty"`
 }
 
 func (s *Server) handleAuthMCP(
@@ -921,13 +939,20 @@ func (s *Server) handleGetMetadata(
 		if err != nil {
 			return nil, output, fmt.Errorf("failed to marshal metadata: %w", err)
 		}
-		if err := os.WriteFile(input.FilePath, data, 0644); err != nil {
+		if err := writeOutputFile(input.FilePath, data); err != nil {
 			return nil, output, fmt.Errorf("failed to write metadata file: %w", err)
 		}
 		output.FilePath = input.FilePath
 	}
 
 	return nil, output, nil
+}
+
+func writeOutputFile(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	return atomicfile.WriteFile(path, data, 0644)
 }
 
 // findMCPConfig looks up an MCP config by name from the loaded config.

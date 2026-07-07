@@ -16,10 +16,10 @@ type MCPConfig struct {
 	Env                 map[string]string `json:"env,omitempty"`
 	URL                 string            `json:"url,omitempty"`
 	Headers             map[string]string `json:"headers,omitempty"`
-	Timeout             string            `json:"timeout,omitempty"`              // Connection timeout (e.g., "30s", "1m")
-	MaxRetries          int               `json:"max_retries,omitempty"`          // Max auto-reconnect retries (default 5, 0 = disabled)
+	Timeout             string            `json:"timeout,omitempty"`               // Connection timeout (e.g., "30s", "1m")
+	MaxRetries          int               `json:"max_retries,omitempty"`           // Max auto-reconnect retries (default 5, 0 = disabled)
 	HealthCheckInterval string            `json:"health_check_interval,omitempty"` // Background health check interval (e.g., "30s", "1m"); 0 = disabled
-	Dynamic             bool              `json:"dynamic,omitempty"`              // If true, always re-fetch tool list (never use cache)
+	Dynamic             bool              `json:"dynamic,omitempty"`               // If true, always re-fetch tool list (never use cache)
 	Source              Source            `json:"-"`
 }
 
@@ -29,7 +29,7 @@ type Scope int
 const (
 	ScopeLocal   Scope = iota // ~/.claude.json style, project-specific but not shared
 	ScopeProject              // .slop-mcp.kdl in project root, shared via git
-	ScopeUser                 // ~/.config/slop-mcp/config.kdl, personal cross-project
+	ScopeUser                 // XDG config dir or ~/.config/slop-mcp/config.kdl, personal cross-project
 )
 
 func (s Scope) String() string {
@@ -98,15 +98,16 @@ type JSONConfig struct {
 
 // JSONMCPConfig represents a single MCP in JSON format.
 type JSONMCPConfig struct {
-	Type       string            `json:"type"`
-	Command    string            `json:"command,omitempty"`
-	Args       []string          `json:"args,omitempty"`
-	Env        map[string]string `json:"env,omitempty"`
-	URL        string            `json:"url,omitempty"`
-	Headers    map[string]string `json:"headers,omitempty"`
-	Timeout    string            `json:"timeout,omitempty"`
-	MaxRetries int               `json:"max_retries,omitempty"`
-	Dynamic    bool              `json:"dynamic,omitempty"`
+	Type                string            `json:"type"`
+	Command             string            `json:"command,omitempty"`
+	Args                []string          `json:"args,omitempty"`
+	Env                 map[string]string `json:"env,omitempty"`
+	URL                 string            `json:"url,omitempty"`
+	Headers             map[string]string `json:"headers,omitempty"`
+	Timeout             string            `json:"timeout,omitempty"`
+	MaxRetries          int               `json:"max_retries,omitempty"`
+	HealthCheckInterval string            `json:"health_check_interval,omitempty"`
+	Dynamic             bool              `json:"dynamic,omitempty"`
 }
 
 // ParseJSONConfig parses a JSON MCP config string.
@@ -116,17 +117,32 @@ func ParseJSONConfig(data string) (*MCPConfig, error) {
 		return nil, err
 	}
 
+	mcpType := inferMCPType(cfg.Type, cfg.Command, cfg.URL)
 	return &MCPConfig{
-		Type:       cfg.Type,
-		Command:    cfg.Command,
-		Args:       cfg.Args,
-		Env:        cfg.Env,
-		URL:        cfg.URL,
-		Headers:    cfg.Headers,
-		Timeout:    cfg.Timeout,
-		MaxRetries: cfg.MaxRetries,
-		Dynamic:    cfg.Dynamic,
+		Type:                mcpType,
+		Command:             cfg.Command,
+		Args:                cfg.Args,
+		Env:                 cfg.Env,
+		URL:                 cfg.URL,
+		Headers:             cfg.Headers,
+		Timeout:             cfg.Timeout,
+		MaxRetries:          cfg.MaxRetries,
+		HealthCheckInterval: cfg.HealthCheckInterval,
+		Dynamic:             cfg.Dynamic,
 	}, nil
+}
+
+func inferMCPType(mcpType, command, url string) string {
+	if mcpType != "" {
+		return mcpType
+	}
+	if command != "" {
+		return "stdio"
+	}
+	if url != "" {
+		return "http"
+	}
+	return "stdio"
 }
 
 // ToJSON converts an MCPConfig to JSON string.

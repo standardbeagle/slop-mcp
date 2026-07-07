@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
@@ -145,6 +146,9 @@ func (r *Registry) List() []*ToolConfig {
 	for _, tool := range r.tools {
 		tools = append(tools, tool)
 	}
+	sort.Slice(tools, func(i, j int) bool {
+		return tools[i].Name < tools[j].Name
+	})
 	return tools
 }
 
@@ -187,6 +191,9 @@ func (r *Registry) GetToolInfos() []ToolInfo {
 			InputSchema: tool.GenerateInputSchema(),
 		})
 	}
+	sort.Slice(infos, func(i, j int) bool {
+		return infos[i].Name < infos[j].Name
+	})
 	return infos
 }
 

@@ -6,10 +6,14 @@ import stat
 import subprocess
 import sys
 from pathlib import Path
+from importlib import metadata
 
 import httpx
 
-__version__ = "0.0.0"
+try:
+    __version__ = metadata.version("slop-mcp")
+except metadata.PackageNotFoundError:
+    __version__ = os.environ.get("SLOP_MCP_VERSION", "dev")
 
 REPO = "standardbeagle/slop-mcp"
 BINARY_NAME = "slop-mcp"
@@ -47,7 +51,8 @@ def get_binary_path() -> Path:
     goos, goarch = get_platform_info()
     ext = ".exe" if goos == "windows" else ""
 
-    return cache_dir / f"{BINARY_NAME}-{__version__}-{goos}-{goarch}{ext}"
+    version = package_version()
+    return cache_dir / f"{BINARY_NAME}-{version}-{goos}-{goarch}{ext}"
 
 
 def get_download_url() -> str:
@@ -55,11 +60,20 @@ def get_download_url() -> str:
     goos, goarch = get_platform_info()
     ext = ".exe" if goos == "windows" else ""
 
-    version = __version__
+    version = package_version()
+    if version in ("", "dev", "0.0.0"):
+        raise RuntimeError(
+            "Cannot determine released slop-mcp version; install a published package or set SLOP_MCP_VERSION"
+        )
     if not version.startswith("v"):
         version = f"v{version}"
 
     return f"https://github.com/{REPO}/releases/download/{version}/{BINARY_NAME}-{goos}-{goarch}{ext}"
+
+
+def package_version() -> str:
+    """Return the package version, allowing tests/source checkouts to override it."""
+    return os.environ.get("SLOP_MCP_VERSION", __version__)
 
 
 def download_binary(dest: Path) -> None:

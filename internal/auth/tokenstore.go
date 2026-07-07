@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/standardbeagle/slop-mcp/internal/atomicfile"
+	"github.com/standardbeagle/slop-mcp/internal/config"
 )
 
 // TokenStore manages OAuth tokens for MCP servers.
@@ -44,12 +45,12 @@ type TokenFile struct {
 
 // NewTokenStore creates a new token store.
 func NewTokenStore() *TokenStore {
-	configDir, err := os.UserConfigDir()
-	if err != nil {
-		configDir = os.Getenv("HOME")
+	configDir := config.UserConfigDirPath()
+	if configDir == "" {
+		return &TokenStore{}
 	}
 	return &TokenStore{
-		path: filepath.Join(configDir, "slop-mcp", "auth.json"),
+		path: filepath.Join(configDir, "auth.json"),
 	}
 }
 

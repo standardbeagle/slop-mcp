@@ -18,33 +18,13 @@ import (
 )
 
 func cmdMonitor(args []string) {
-	var scriptFile string
-	var inlineScript string
-	showHelp := false
-	var timeout time.Duration
-
-	for i := 0; i < len(args); i++ {
-		switch {
-		case args[i] == "-e" && i+1 < len(args):
-			inlineScript = args[i+1]
-			i++
-		case strings.HasPrefix(args[i], "--timeout="):
-			d, err := parseTimeoutValue(strings.TrimPrefix(args[i], "--timeout="))
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-				os.Exit(1)
-			}
-			timeout = d
-		case args[i] == "--help" || args[i] == "-h":
-			showHelp = true
-		case !strings.HasPrefix(args[i], "-"):
-			if scriptFile == "" {
-				scriptFile = args[i]
-			}
-		}
+	opts, err := parseMonitorArgs(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
 	}
 
-	if showHelp {
+	if opts.showHelp {
 		printMonitorUsage()
 		return
 	}
@@ -60,9 +40,9 @@ func cmdMonitor(args []string) {
 		cancel()
 	}()
 
-	if timeout > 0 {
+	if opts.timeout > 0 {
 		var tcancel context.CancelFunc
-		ctx, tcancel = context.WithTimeout(ctx, timeout)
+		ctx, tcancel = context.WithTimeout(ctx, opts.timeout)
 		defer tcancel()
 	}
 
@@ -70,16 +50,16 @@ func cmdMonitor(args []string) {
 	go watchMessages(ctx)
 
 	// If no script, just watch for messages until killed
-	if scriptFile == "" && inlineScript == "" {
+	if opts.scriptFile == "" && opts.inlineScript == "" {
 		<-ctx.Done()
 		return
 	}
 
 	var script string
-	if inlineScript != "" {
-		script = inlineScript
+	if opts.inlineScript != "" {
+		script = opts.inlineScript
 	} else {
-		data, err := os.ReadFile(scriptFile)
+		data, err := os.ReadFile(opts.scriptFile)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error reading script file: %v\n", err)
 			os.Exit(1)
@@ -88,7 +68,11 @@ func cmdMonitor(args []string) {
 	}
 
 	// Load merged three-tier config (same path as serve)
-	cwd, _ := os.Getwd()
+	cwd, err := currentWorkingDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
 	cfg, err := config.Load(cwd)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
@@ -141,6 +125,56 @@ func cmdMonitor(args []string) {
 		fmt.Fprintf(os.Stderr, "Monitor script error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+type monitorOptions struct {
+	scriptFile   string
+	inlineScript string
+	showHelp     bool
+	timeout      time.Duration
+}
+
+func parseMonitorArgs(args []string) (monitorOptions, error) {
+	var opts monitorOptions
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "-e":
+			if i+1 >= len(args) {
+				return opts, fmt.Errorf("-e requires a script value")
+			}
+			opts.inlineScript = args[i+1]
+			i++
+		case args[i] == "--timeout":
+			if i+1 >= len(args) {
+				return opts, fmt.Errorf("--timeout requires a value")
+			}
+			timeout, err := parseTimeoutValue(args[i+1])
+			if err != nil {
+				return opts, err
+			}
+			opts.timeout = timeout
+			i++
+		case strings.HasPrefix(args[i], "--timeout="):
+			timeout, err := parseTimeoutValue(strings.TrimPrefix(args[i], "--timeout="))
+			if err != nil {
+				return opts, err
+			}
+			opts.timeout = timeout
+		case args[i] == "--help" || args[i] == "-h":
+			opts.showHelp = true
+		case strings.HasPrefix(args[i], "-"):
+			return opts, fmt.Errorf("unknown monitor option %q", args[i])
+		default:
+			if opts.scriptFile != "" {
+				return opts, fmt.Errorf("unexpected extra argument %q", args[i])
+			}
+			opts.scriptFile = args[i]
+		}
+	}
+	if opts.scriptFile != "" && opts.inlineScript != "" {
+		return opts, fmt.Errorf("provide either a script file or -e, not both")
+	}
+	return opts, nil
 }
 
 // watchMessages polls the monitor messages file for new lines from 'slop-mcp message'.

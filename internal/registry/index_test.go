@@ -188,6 +188,57 @@ func TestToolIndex_Search_MCPFiltering(t *testing.T) {
 	}
 }
 
+func TestToolIndex_Search_DeterministicOrderAndMCPName(t *testing.T) {
+	idx := NewToolIndex()
+
+	idx.Add("zeta", []ToolInfo{
+		{Name: "same", Description: "same"},
+		{Name: "alpha", Description: "same"},
+	})
+	idx.Add("alpha", []ToolInfo{
+		{Name: "same", Description: "same"},
+		{Name: "beta", Description: "same"},
+	})
+
+	results := idx.Search("", "")
+	want := []struct {
+		mcp  string
+		name string
+	}{
+		{mcp: "alpha", name: "beta"},
+		{mcp: "alpha", name: "same"},
+		{mcp: "zeta", name: "alpha"},
+		{mcp: "zeta", name: "same"},
+	}
+	if len(results) != len(want) {
+		t.Fatalf("Search empty returned %d results, want %d", len(results), len(want))
+	}
+	for i, exp := range want {
+		if results[i].MCPName != exp.mcp || results[i].Name != exp.name {
+			t.Fatalf("result[%d] = %s.%s, want %s.%s", i, results[i].MCPName, results[i].Name, exp.mcp, exp.name)
+		}
+	}
+
+	results = idx.Search("same", "")
+	want = []struct {
+		mcp  string
+		name string
+	}{
+		{mcp: "alpha", name: "same"},
+		{mcp: "zeta", name: "same"},
+		{mcp: "alpha", name: "beta"},
+		{mcp: "zeta", name: "alpha"},
+	}
+	if len(results) != len(want) {
+		t.Fatalf("Search same returned %d results, want %d", len(results), len(want))
+	}
+	for i, exp := range want {
+		if results[i].MCPName != exp.mcp || results[i].Name != exp.name {
+			t.Fatalf("result[%d] = %s.%s, want %s.%s", i, results[i].MCPName, results[i].Name, exp.mcp, exp.name)
+		}
+	}
+}
+
 func TestToolIndex_GetTool(t *testing.T) {
 	idx := NewToolIndex()
 
@@ -463,9 +514,9 @@ func TestInvalidParameterError(t *testing.T) {
 func TestInvalidParameterError_MultipleErrors(t *testing.T) {
 	// Test with multiple unknown parameters and multiple missing required
 	err := &InvalidParameterError{
-		MCPName:       "test-mcp",
-		ToolName:      "complex_tool",
-		OriginalError: "validation failed",
+		MCPName:        "test-mcp",
+		ToolName:       "complex_tool",
+		OriginalError:  "validation failed",
 		ProvidedParams: []string{"qery", "limt", "ofset"},
 		ExpectedParams: []ParamInfo{
 			{Name: "query", Type: "string", Description: "Search query", Required: true},
@@ -731,10 +782,10 @@ func TestToolIndex_Search_Ranking(t *testing.T) {
 
 	// Add tools that will have different scores for the same query
 	idx.Add("test", []ToolInfo{
-		{Name: "search", Description: "Basic search", MCPName: "test"},                                       // exact name match
-		{Name: "search_advanced", Description: "Advanced search with filters", MCPName: "test"},              // prefix match
-		{Name: "find", Description: "Find things using search patterns", MCPName: "test"},                    // description match only
-		{Name: "locate", Description: "Locate items in the system", MCPName: "test"},                         // no match
+		{Name: "search", Description: "Basic search", MCPName: "test"},                          // exact name match
+		{Name: "search_advanced", Description: "Advanced search with filters", MCPName: "test"}, // prefix match
+		{Name: "find", Description: "Find things using search patterns", MCPName: "test"},       // description match only
+		{Name: "locate", Description: "Locate items in the system", MCPName: "test"},            // no match
 	})
 
 	results := idx.Search("search", "")

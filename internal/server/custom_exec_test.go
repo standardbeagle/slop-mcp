@@ -183,6 +183,19 @@ func TestExecuteCustomTool_AcceptsJSONInteger(t *testing.T) {
 	assert.Contains(t, text, "integer")
 }
 
+func TestValidateArgsAgainstSchemaRejectsUnsupportedType(t *testing.T) {
+	err := validateArgsAgainstSchema(
+		map[string]any{"name": "world"},
+		map[string]any{
+			"properties": map[string]any{
+				"name": map[string]any{"type": "strng"},
+			},
+		},
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported schema type")
+}
+
 // TestWrapExecuteTool_RoutesCustomTool is a regression test for the real MCP
 // protocol path: wrapExecuteTool must route mcp_name "_custom" to the override
 // store's custom tools, just like handleExecuteTool does.

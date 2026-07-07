@@ -1,7 +1,9 @@
 package overrides
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -140,5 +142,35 @@ func TestStore_PersistsAcrossReopen(t *testing.T) {
 	}
 	if got.Description != "persisted" {
 		t.Errorf("got %+v", got)
+	}
+}
+
+func TestStore_CloseReturnsFlushError(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "root")
+	if err := os.MkdirAll(root, 0755); err != nil {
+		t.Fatal(err)
+	}
+	s, err := OpenStore(StoreOptions{UserRoot: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(root, []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.SetOverride(ScopeUser, "k", OverrideEntry{Description: "will fail"}); err != nil {
+		t.Fatal(err)
+	}
+
+	err = s.Close()
+	if err == nil {
+		t.Fatal("expected close to report flush error")
+	}
+	if !strings.Contains(err.Error(), "not a directory") {
+		t.Fatalf("expected filesystem flush error, got %v", err)
 	}
 }

@@ -27,7 +27,6 @@ func customDepth(ctx context.Context) int {
 	return 0
 }
 
-
 // validateArgsAgainstSchema performs minimal validation: required fields present
 // and top-level type checks where schema.type is provided.
 func validateArgsAgainstSchema(args map[string]any, schema map[string]any) error {
@@ -99,7 +98,7 @@ func checkType(name string, val any, expectedType string) error {
 	case "object":
 		_, ok = val.(map[string]any)
 	default:
-		ok = true // unknown type — pass through
+		return fmt.Errorf("parameter %q has unsupported schema type %q", name, expectedType)
 	}
 	if !ok {
 		return fmt.Errorf("parameter %q must be of type %s", name, expectedType)

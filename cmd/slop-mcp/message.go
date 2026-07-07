@@ -5,15 +5,17 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/standardbeagle/slop-mcp/internal/config"
 )
 
 // monitorMessagesPath returns the path to the monitor messages file.
 func monitorMessagesPath() string {
-	configDir, err := os.UserConfigDir()
-	if err != nil {
-		configDir = filepath.Join(os.Getenv("HOME"), ".config")
+	configDir := config.UserConfigDirPath()
+	if configDir == "" {
+		return ""
 	}
-	return filepath.Join(configDir, "slop-mcp", "monitor-messages")
+	return filepath.Join(configDir, "monitor-messages")
 }
 
 func cmdMessage(args []string) {
@@ -24,6 +26,10 @@ func cmdMessage(args []string) {
 
 	msg := strings.Join(args, " ")
 	path := monitorMessagesPath()
+	if path == "" {
+		fmt.Fprintln(os.Stderr, "Error: user config path unavailable")
+		os.Exit(1)
+	}
 
 	// Ensure directory exists
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {

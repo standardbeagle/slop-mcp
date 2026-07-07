@@ -20,6 +20,15 @@ func newMemoryRuntime(t *testing.T) (*slop.Runtime, *MemoryStore) {
 	return rt, store
 }
 
+func TestNewMemoryStoreHonorsXDGConfigHome(t *testing.T) {
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+
+	store := NewMemoryStore()
+
+	assert.Equal(t, filepath.Join(xdg, "slop-mcp", "memory"), store.baseDir)
+}
+
 // mapGet extracts a Go value from a MapValue by key.
 func mapGet(m *slop.MapValue, key string) any {
 	v, _ := m.Get(key)

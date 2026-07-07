@@ -239,8 +239,8 @@ type Registry struct {
 	overrides         OverrideProvider          // optional; injected via SetOverrideProvider
 	logger            logging.Logger
 	mu                sync.RWMutex
-	healthCheckCancel context.CancelFunc     // cancels background health check goroutine
-	cache             *cache.Store           // disk cache for tool metadata
+	healthCheckCancel context.CancelFunc       // cancels background health check goroutine
+	cache             *cache.Store             // disk cache for tool metadata
 	connectMu         map[string]chan struct{} // per-MCP semaphore serializing lifecycle ops
 }
 
@@ -627,6 +627,9 @@ func (r *Registry) Status() []MCPFullStatus {
 		result = append(result, status)
 	}
 
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Name < result[j].Name
+	})
 	return result
 }
 
@@ -1033,6 +1036,7 @@ func (r *Registry) HealthCheck(ctx context.Context, name string) []HealthCheckRe
 		}
 	}
 	r.mu.RUnlock()
+	sort.Strings(toCheck)
 
 	if len(toCheck) == 0 {
 		return nil
@@ -1221,6 +1225,9 @@ func (r *Registry) List() []MCPStatus {
 		result = append(result, status)
 	}
 
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Name < result[j].Name
+	})
 	return result
 }
 
@@ -1359,6 +1366,9 @@ func (r *Registry) GetMetadata(ctx context.Context) []MCPMetadata {
 		result = append(result, metadata)
 	}
 
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Name < result[j].Name
+	})
 	return result
 }
 
@@ -1417,6 +1427,12 @@ func (r *Registry) ExecuteToolRaw(ctx context.Context, mcpName, toolName string,
 func (r *Registry) ExecuteToolRawJSON(ctx context.Context, mcpName, toolName string, params json.RawMessage) (*mcp.CallToolResult, error) {
 	var args any
 	if t := bytes.TrimSpace(params); len(t) > 0 && string(t) != "null" {
+		if t[0] != '{' {
+			return nil, fmt.Errorf("parameters must be a JSON object")
+		}
+		if !json.Valid(t) {
+			return nil, fmt.Errorf("parameters must be valid JSON")
+		}
 		args = params
 	}
 	return r.callRaw(ctx, mcpName, toolName, args)
@@ -1595,6 +1611,9 @@ func (r *Registry) GetConfigs() []config.MCPConfig {
 	for _, conn := range r.connections {
 		configs = append(configs, conn.config)
 	}
+	sort.Slice(configs, func(i, j int) bool {
+		return configs[i].Name < configs[j].Name
+	})
 	return configs
 }
 
@@ -1609,6 +1628,9 @@ func (r *Registry) AllConfigs() []config.MCPConfig {
 	for _, state := range r.states {
 		configs = append(configs, state.config)
 	}
+	sort.Slice(configs, func(i, j int) bool {
+		return configs[i].Name < configs[j].Name
+	})
 	return configs
 }
 
@@ -1631,6 +1653,7 @@ func (r *Registry) listNames() []string {
 			names = append(names, name)
 		}
 	}
+	sort.Strings(names)
 	return names
 }
 
@@ -1753,7 +1776,7 @@ func (e *MCPNotFoundError) Error() string {
 	sb.WriteString("Fix:\n")
 	sb.WriteString("1. Check the MCP name spelling\n")
 	sb.WriteString("2. Register the MCP with: register_mcp tool or slop-mcp mcp add\n")
-	sb.WriteString("3. Add to config: .slop-mcp.kdl or ~/.config/slop-mcp/config.kdl\n")
+	sb.WriteString("3. Add to config: .slop-mcp.kdl, $XDG_CONFIG_HOME/slop-mcp/config.kdl, or ~/.config/slop-mcp/config.kdl\n")
 
 	return sb.String()
 }

@@ -126,6 +126,70 @@ func TestCustomizeTools_DefineCustom_RejectsMetaToolCollision(t *testing.T) {
 	}
 }
 
+func TestCustomizeTools_DefineCustom_RejectsInvalidInputSchema(t *testing.T) {
+	s := newCustomizeTestServer(t)
+	store, err := overrides.OpenStore(overrides.StoreOptions{UserRoot: t.TempDir()})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	s.SetOverrideStoreForTesting(store)
+
+	tests := []struct {
+		name   string
+		schema map[string]any
+		want   string
+	}{
+		{
+			name:   "missing type",
+			schema: map[string]any{"properties": map[string]any{}},
+			want:   "inputSchema.type",
+		},
+		{
+			name:   "non object type",
+			schema: map[string]any{"type": "array"},
+			want:   `"object"`,
+		},
+		{
+			name:   "property is not object",
+			schema: map[string]any{"type": "object", "properties": map[string]any{"x": "bad"}},
+			want:   "properties.x",
+		},
+		{
+			name:   "property type is not string",
+			schema: map[string]any{"type": "object", "properties": map[string]any{"x": map[string]any{"type": 3}}},
+			want:   "properties.x.type",
+		},
+		{
+			name:   "property type is unsupported",
+			schema: map[string]any{"type": "object", "properties": map[string]any{"x": map[string]any{"type": "strng"}}},
+			want:   "one of string, number, integer, boolean, array, object",
+		},
+		{
+			name:   "required entry is not string",
+			schema: map[string]any{"type": "object", "required": []any{"x", 3}},
+			want:   "required[1]",
+		},
+		{
+			name:   "external ref",
+			schema: map[string]any{"type": "object", "$ref": "https://example.com/schema.json"},
+			want:   "external $ref",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, err := s.handleCustomizeTools(context.Background(), nil, CustomizeToolsInput{
+				Action:      "define_custom",
+				Name:        "schema_test",
+				Description: "t",
+				InputSchema: tt.schema,
+				Body:        "42",
+			})
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tt.want)
+		})
+	}
+}
+
 func TestCustomizeTools_DefineCustom_ReportsShorthandCollisions(t *testing.T) {
 	s := newCustomizeTestServer(t)
 	dir := t.TempDir()

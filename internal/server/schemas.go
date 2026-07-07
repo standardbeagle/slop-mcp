@@ -113,7 +113,7 @@ var manageMCPsInputSchema = json.RawMessage(`{
 		},
 		"scope": {
 			"type": "string",
-			"description": "Persistence: memory (default, runtime only), user (~/.config/slop-mcp/config.kdl), project (.slop-mcp.kdl)"
+			"description": "Persistence: memory (default, runtime only), user ($XDG_CONFIG_HOME/slop-mcp/config.kdl or ~/.config/slop-mcp/config.kdl), project (.slop-mcp.kdl)"
 		},
 		"dynamic": {
 			"type": "boolean",
@@ -283,4 +283,3 @@ var customizeToolsInputSchema = json.RawMessage(`{
 	"required": ["action"],
 	"additionalProperties": false
 }`)
-

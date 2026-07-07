@@ -3,9 +3,13 @@
 package auth
 
 import (
+	"context"
 	"encoding/json"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -13,6 +17,29 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
+func withDefaultTransport(t *testing.T, fn roundTripFunc) {
+	t.Helper()
+	original := http.DefaultTransport
+	http.DefaultTransport = fn
+	t.Cleanup(func() {
+		http.DefaultTransport = original
+	})
+}
+
+func jsonResponse(status int, body string) *http.Response {
+	return &http.Response{
+		StatusCode: status,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+}
 
 // =============================================================================
 // wellKnownURL Tests
@@ -116,6 +143,65 @@ func TestAuthServerMetaURLs(t *testing.T) {
 			assert.Equal(t, tc.want, got)
 		})
 	}
+}
+
+func TestExchangeCodeRejectsMissingAccessToken(t *testing.T) {
+	withDefaultTransport(t, func(r *http.Request) (*http.Response, error) {
+		assert.Equal(t, "POST", r.Method)
+		assert.Equal(t, "authorization_code", r.FormValue("grant_type"))
+		return jsonResponse(http.StatusOK, `{"token_type":"Bearer"}`), nil
+	})
+
+	flow := &OAuthFlow{}
+	token, err := flow.exchangeCode(context.Background(), "https://auth.example/token", "client", "", "code", "http://localhost/callback", "verifier", "https://resource.example/mcp")
+	require.Error(t, err)
+	assert.Nil(t, token)
+	assert.Contains(t, err.Error(), "missing access_token")
+}
+
+func TestExchangeCodeReportsOAuthErrorResponse(t *testing.T) {
+	withDefaultTransport(t, func(r *http.Request) (*http.Response, error) {
+		return jsonResponse(http.StatusOK, `{"error":"invalid_grant","error_description":"code expired"}`), nil
+	})
+
+	flow := &OAuthFlow{}
+	token, err := flow.exchangeCode(context.Background(), "https://auth.example/token", "client", "", "code", "http://localhost/callback", "verifier", "https://resource.example/mcp")
+	require.Error(t, err)
+	assert.Nil(t, token)
+	assert.Contains(t, err.Error(), "invalid_grant")
+	assert.Contains(t, err.Error(), "code expired")
+}
+
+func TestRefreshTokenRejectsMissingAccessToken(t *testing.T) {
+	withDefaultTransport(t, func(r *http.Request) (*http.Response, error) {
+		assert.Equal(t, "refresh_token", r.FormValue("grant_type"))
+		return jsonResponse(http.StatusOK, `{"refresh_token":"new-refresh"}`), nil
+	})
+
+	token := &MCPToken{
+		ServerName:    "server",
+		ServerURL:     "https://resource.example/mcp",
+		ClientID:      "client",
+		RefreshToken:  "old-refresh",
+		TokenEndpoint: "https://auth.example/token",
+	}
+	refreshed, err := RefreshToken(context.Background(), token, "https://auth.example/token")
+	require.Error(t, err)
+	assert.Nil(t, refreshed)
+	assert.Contains(t, err.Error(), "missing access_token")
+}
+
+func TestDecodeTokenEndpointResponseIncludesErrorBody(t *testing.T) {
+	resp := &http.Response{
+		StatusCode: http.StatusBadRequest,
+		Body:       io.NopCloser(strings.NewReader(`{"error":"invalid_client"}`)),
+	}
+
+	token, err := decodeTokenEndpointResponse(resp, "token exchange")
+	require.Error(t, err)
+	assert.Nil(t, token)
+	assert.Contains(t, err.Error(), "400")
+	assert.Contains(t, err.Error(), "invalid_client")
 }
 
 // =============================================================================

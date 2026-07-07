@@ -28,19 +28,21 @@ type KDLConfig struct {
 
 // KDLMCPConfig represents an MCP node in KDL.
 type KDLMCPConfig struct {
-	Name    string            `kdl:",arg"`
-	Type    string            `kdl:"type"`
-	Command string            `kdl:"command"`
-	Args    []string          `kdl:"args"`
-	Env     map[string]string `kdl:"env"`
-	URL     string            `kdl:"url"`
-	Headers map[string]string `kdl:"headers"`
-	Timeout string            `kdl:"timeout"`
-	Dynamic bool              `kdl:"dynamic"`
+	Name                string            `kdl:",arg"`
+	Type                string            `kdl:"type"`
+	Command             string            `kdl:"command"`
+	Args                []string          `kdl:"args"`
+	Env                 map[string]string `kdl:"env"`
+	URL                 string            `kdl:"url"`
+	Headers             map[string]string `kdl:"headers"`
+	Timeout             string            `kdl:"timeout"`
+	MaxRetries          int               `kdl:"max_retries"`
+	HealthCheckInterval string            `kdl:"health_check_interval"`
+	Dynamic             bool              `kdl:"dynamic"`
 }
 
-// UserConfigPath returns the path to the user config file.
-func UserConfigPath() string {
+// UserConfigDirPath returns the path to slop-mcp's user config directory.
+func UserConfigDirPath() string {
 	configDir := os.Getenv("XDG_CONFIG_HOME")
 	if configDir == "" {
 		home, err := os.UserHomeDir()
@@ -49,7 +51,16 @@ func UserConfigPath() string {
 		}
 		configDir = filepath.Join(home, ".config")
 	}
-	return filepath.Join(configDir, UserConfigDir, UserConfigFile)
+	return filepath.Join(configDir, UserConfigDir)
+}
+
+// UserConfigPath returns the path to the user config file.
+func UserConfigPath() string {
+	configDir := UserConfigDirPath()
+	if configDir == "" {
+		return ""
+	}
+	return filepath.Join(configDir, UserConfigFile)
 }
 
 // LocalConfigPath returns the path to the local config file (project-specific, not shared).
@@ -173,23 +184,19 @@ func loadClaudeCodeMainConfig(path string, cfg *Config) error {
 	}
 
 	for name, mcp := range settings.MCPServers {
-		mcpType := mcp.Type
-		if mcpType == "" && mcp.Command != "" {
-			mcpType = "stdio"
-		}
-		if mcpType == "" && mcp.URL != "" {
-			mcpType = "http"
-		}
+		mcpType := inferMCPType(mcp.Type, mcp.Command, mcp.URL)
 		cfg.MCPs[name] = MCPConfig{
-			Name:    name,
-			Type:    mcpType,
-			Command: mcp.Command,
-			Args:    mcp.Args,
-			Env:     mcp.Env,
-			URL:     mcp.URL,
-			Headers: mcp.Headers,
-			Timeout: mcp.Timeout,
-			Dynamic: mcp.Dynamic,
+			Name:                name,
+			Type:                mcpType,
+			Command:             mcp.Command,
+			Args:                mcp.Args,
+			Env:                 mcp.Env,
+			URL:                 mcp.URL,
+			Headers:             mcp.Headers,
+			Timeout:             mcp.Timeout,
+			MaxRetries:          mcp.MaxRetries,
+			HealthCheckInterval: mcp.HealthCheckInterval,
+			Dynamic:             mcp.Dynamic,
 		}
 	}
 
@@ -247,23 +254,19 @@ func loadClaudeCodePluginMCPs(pluginsPath string, cfg *Config) error {
 					continue
 				}
 
-				mcpType := mcp.Type
-				if mcpType == "" && mcp.Command != "" {
-					mcpType = "stdio"
-				}
-				if mcpType == "" && mcp.URL != "" {
-					mcpType = "http"
-				}
+				mcpType := inferMCPType(mcp.Type, mcp.Command, mcp.URL)
 				cfg.MCPs[name] = MCPConfig{
-					Name:    name,
-					Type:    mcpType,
-					Command: mcp.Command,
-					Args:    mcp.Args,
-					Env:     mcp.Env,
-					URL:     mcp.URL,
-					Headers: mcp.Headers,
-					Timeout: mcp.Timeout,
-					Dynamic: mcp.Dynamic,
+					Name:                name,
+					Type:                mcpType,
+					Command:             mcp.Command,
+					Args:                mcp.Args,
+					Env:                 mcp.Env,
+					URL:                 mcp.URL,
+					Headers:             mcp.Headers,
+					Timeout:             mcp.Timeout,
+					MaxRetries:          mcp.MaxRetries,
+					HealthCheckInterval: mcp.HealthCheckInterval,
+					Dynamic:             mcp.Dynamic,
 				}
 			}
 		}
@@ -294,16 +297,19 @@ func LoadClaudeDesktopConfig() (*Config, error) {
 
 	cfg := NewConfig()
 	for name, mcp := range jsonCfg.MCPServers {
+		mcpType := inferMCPType(mcp.Type, mcp.Command, mcp.URL)
 		cfg.MCPs[name] = MCPConfig{
-			Name:    name,
-			Type:    mcp.Type,
-			Command: mcp.Command,
-			Args:    mcp.Args,
-			Env:     mcp.Env,
-			URL:     mcp.URL,
-			Headers: mcp.Headers,
-			Timeout: mcp.Timeout,
-			Dynamic: mcp.Dynamic,
+			Name:                name,
+			Type:                mcpType,
+			Command:             mcp.Command,
+			Args:                mcp.Args,
+			Env:                 mcp.Env,
+			URL:                 mcp.URL,
+			Headers:             mcp.Headers,
+			Timeout:             mcp.Timeout,
+			MaxRetries:          mcp.MaxRetries,
+			HealthCheckInterval: mcp.HealthCheckInterval,
+			Dynamic:             mcp.Dynamic,
 		}
 	}
 
@@ -361,16 +367,19 @@ func GetMCP(path, name string) (*MCPConfig, error) {
 	}
 
 	if jmcp, ok := jsonCfg.MCPServers[name]; ok {
+		mcpType := inferMCPType(jmcp.Type, jmcp.Command, jmcp.URL)
 		return &MCPConfig{
-			Name:    name,
-			Type:    jmcp.Type,
-			Command: jmcp.Command,
-			Args:    jmcp.Args,
-			Env:     jmcp.Env,
-			URL:     jmcp.URL,
-			Headers: jmcp.Headers,
-			Timeout: jmcp.Timeout,
-			Dynamic: jmcp.Dynamic,
+			Name:                name,
+			Type:                mcpType,
+			Command:             jmcp.Command,
+			Args:                jmcp.Args,
+			Env:                 jmcp.Env,
+			URL:                 jmcp.URL,
+			Headers:             jmcp.Headers,
+			Timeout:             jmcp.Timeout,
+			MaxRetries:          jmcp.MaxRetries,
+			HealthCheckInterval: jmcp.HealthCheckInterval,
+			Dynamic:             jmcp.Dynamic,
 		}, nil
 	}
 
@@ -410,17 +419,20 @@ func ParseKDLConfig(data string, source Source) (*Config, error) {
 
 	cfg := NewConfig()
 	for _, m := range kdlCfg.MCPs {
+		mcpType := inferMCPType(m.Type, m.Command, m.URL)
 		cfg.MCPs[m.Name] = MCPConfig{
-			Name:    m.Name,
-			Type:    m.Type,
-			Command: m.Command,
-			Args:    m.Args,
-			Env:     m.Env,
-			URL:     m.URL,
-			Headers: m.Headers,
-			Timeout: m.Timeout,
-			Dynamic: m.Dynamic,
-			Source:  source,
+			Name:                m.Name,
+			Type:                mcpType,
+			Command:             m.Command,
+			Args:                m.Args,
+			Env:                 m.Env,
+			URL:                 m.URL,
+			Headers:             m.Headers,
+			Timeout:             m.Timeout,
+			MaxRetries:          m.MaxRetries,
+			HealthCheckInterval: m.HealthCheckInterval,
+			Dynamic:             m.Dynamic,
+			Source:              source,
 		}
 	}
 
@@ -445,10 +457,7 @@ func AddMCPConfigToFile(path string, mcp MCPConfig) error {
 		return err
 	}
 
-	// Set default type if not specified
-	if mcp.Type == "" {
-		mcp.Type = "stdio"
-	}
+	mcp.Type = inferMCPType(mcp.Type, mcp.Command, mcp.URL)
 
 	// Add the new MCP
 	cfg.MCPs[mcp.Name] = mcp
@@ -457,11 +466,32 @@ func AddMCPConfigToFile(path string, mcp MCPConfig) error {
 	return WriteConfigFile(path, cfg)
 }
 
+// AddMCPConfigsToFile adds multiple MCP configurations to a KDL file with one
+// atomic write. Each MCP name is taken from the map key.
+func AddMCPConfigsToFile(path string, mcps map[string]MCPConfig) error {
+	cfg, err := loadConfigFile(path, SourceProject)
+	if err != nil {
+		return err
+	}
+
+	for name, mcp := range mcps {
+		mcp.Name = name
+		mcp.Type = inferMCPType(mcp.Type, mcp.Command, mcp.URL)
+		cfg.MCPs[name] = mcp
+	}
+
+	return WriteConfigFile(path, cfg)
+}
+
 // RemoveMCPFromFile removes an MCP configuration from a KDL file.
 func RemoveMCPFromFile(path, name string) error {
 	cfg, err := loadConfigFile(path, SourceProject)
 	if err != nil {
 		return err
+	}
+
+	if _, ok := cfg.MCPs[name]; !ok {
+		return fmt.Errorf("MCP %q not found in %s", name, path)
 	}
 
 	delete(cfg.MCPs, name)
@@ -537,6 +567,14 @@ func formatMCPBlock(mcp MCPConfig) string {
 
 	if mcp.Timeout != "" {
 		result += "    timeout " + kdlQuote(mcp.Timeout) + "\n"
+	}
+
+	if mcp.MaxRetries != 0 {
+		result += fmt.Sprintf("    max_retries %d\n", mcp.MaxRetries)
+	}
+
+	if mcp.HealthCheckInterval != "" {
+		result += "    health_check_interval " + kdlQuote(mcp.HealthCheckInterval) + "\n"
 	}
 
 	if mcp.Dynamic {

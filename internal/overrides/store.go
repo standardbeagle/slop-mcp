@@ -301,10 +301,13 @@ func (s *Store) Close() error {
 	s.flushers = map[string]*flusher{}
 	s.fmu.Unlock()
 
+	var errs []error
 	for _, f := range flushers {
-		f.close()
+		if err := f.close(); err != nil {
+			errs = append(errs, err)
+		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // scheduleFlush enqueues a flush for the given scope+bank.

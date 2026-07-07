@@ -20,15 +20,15 @@ var customToolNameRE = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 
 // metaToolNames is the set of built-in slop-mcp meta-tools that cannot be shadowed.
 var metaToolNames = map[string]struct{}{
-	"search_tools":   {},
-	"execute_tool":   {},
-	"run_slop":       {},
-	"manage_mcps":    {},
-	"auth_mcp":       {},
-	"get_metadata":   {},
-	"slop_reference": {},
-	"slop_help":      {},
-	"agnt_watch":     {},
+	"search_tools":    {},
+	"execute_tool":    {},
+	"run_slop":        {},
+	"manage_mcps":     {},
+	"auth_mcp":        {},
+	"get_metadata":    {},
+	"slop_reference":  {},
+	"slop_help":       {},
+	"agnt_watch":      {},
 	"customize_tools": {},
 }
 
@@ -51,12 +51,12 @@ var depScanRE = regexp.MustCompile(`\b([a-z_][a-z0-9_-]*)\.([a-z_][a-z0-9_]*)\(`
 
 // customToolEntry is the wire format for a single custom tool in list_custom responses.
 type customToolEntry struct {
-	Name      string               `json:"name"`
-	Scope     string               `json:"scope,omitempty"`
-	Description string             `json:"description,omitempty"`
-	DependsOn []overrides.Dependency `json:"depends_on,omitempty"`
-	Stale     bool                 `json:"stale,omitempty"`
-	StaleDeps []staleDep           `json:"stale_deps,omitempty"`
+	Name        string                 `json:"name"`
+	Scope       string                 `json:"scope,omitempty"`
+	Description string                 `json:"description,omitempty"`
+	DependsOn   []overrides.Dependency `json:"depends_on,omitempty"`
+	Stale       bool                   `json:"stale,omitempty"`
+	StaleDeps   []staleDep             `json:"stale_deps,omitempty"`
 	// UnknownDeps lists "mcp.tool" dependencies whose staleness could not be
 	// determined because the MCP is neither connected nor cached.
 	UnknownDeps []string `json:"unknown_deps,omitempty"`
@@ -354,21 +354,8 @@ func (s *Server) customizeDefineCustom(_ context.Context, in CustomizeToolsInput
 		return nil, customizeToolsOutput{}, fmt.Errorf("body exceeds maximum size of %d bytes", bodyLimit())
 	}
 
-	// Validate InputSchema minimally.
-	if t, ok := in.InputSchema["type"]; ok {
-		if _, isStr := t.(string); !isStr {
-			return nil, customizeToolsOutput{}, fmt.Errorf("inputSchema.type must be a string")
-		}
-	}
-	if props, ok := in.InputSchema["properties"]; ok {
-		if _, isMap := props.(map[string]any); !isMap {
-			return nil, customizeToolsOutput{}, fmt.Errorf("inputSchema.properties must be an object")
-		}
-	}
-	if ref, ok := in.InputSchema["$ref"]; ok {
-		if refStr, isStr := ref.(string); isStr && !strings.HasPrefix(refStr, "#") {
-			return nil, customizeToolsOutput{}, fmt.Errorf("external $ref not allowed: %q", refStr)
-		}
+	if err := validateCustomInputSchema(in.InputSchema); err != nil {
+		return nil, customizeToolsOutput{}, err
 	}
 
 	// Detect shorthand collisions in property names.
@@ -435,6 +422,73 @@ func (s *Server) customizeDefineCustom(_ context.Context, in CustomizeToolsInput
 		ShorthandSkipped: shorthandSkipped,
 	}
 	return nil, out, nil
+}
+
+func validateCustomInputSchema(schema map[string]any) error {
+	t, ok := schema["type"].(string)
+	if !ok {
+		return fmt.Errorf("inputSchema.type must be \"object\"")
+	}
+	if t != "object" {
+		return fmt.Errorf("inputSchema.type must be \"object\", got %q", t)
+	}
+
+	if propsRaw, ok := schema["properties"]; ok {
+		props, ok := propsRaw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("inputSchema.properties must be an object")
+		}
+		for name, raw := range props {
+			prop, ok := raw.(map[string]any)
+			if !ok {
+				return fmt.Errorf("inputSchema.properties.%s must be an object", name)
+			}
+			if typ, ok := prop["type"]; ok {
+				typStr, isStr := typ.(string)
+				if !isStr {
+					return fmt.Errorf("inputSchema.properties.%s.type must be a string", name)
+				}
+				if !isSupportedCustomSchemaType(typStr) {
+					return fmt.Errorf("inputSchema.properties.%s.type must be one of string, number, integer, boolean, array, object", name)
+				}
+			}
+		}
+	}
+
+	if requiredRaw, ok := schema["required"]; ok {
+		switch required := requiredRaw.(type) {
+		case []any:
+			for i, raw := range required {
+				if _, ok := raw.(string); !ok {
+					return fmt.Errorf("inputSchema.required[%d] must be a string", i)
+				}
+			}
+		case []string:
+		default:
+			return fmt.Errorf("inputSchema.required must be an array of strings")
+		}
+	}
+
+	if ref, ok := schema["$ref"]; ok {
+		refStr, isStr := ref.(string)
+		if !isStr {
+			return fmt.Errorf("inputSchema.$ref must be a string")
+		}
+		if !strings.HasPrefix(refStr, "#") {
+			return fmt.Errorf("external $ref not allowed: %q", refStr)
+		}
+	}
+
+	return nil
+}
+
+func isSupportedCustomSchemaType(typ string) bool {
+	switch typ {
+	case "string", "number", "integer", "boolean", "array", "object":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) customizeRemoveCustom(in CustomizeToolsInput) (*mcp.CallToolResult, customizeToolsOutput, error) {

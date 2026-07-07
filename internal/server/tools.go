@@ -154,9 +154,23 @@ Use slop_reference to browse built-in functions (map, filter, reduce, json_parse
 
 // Wrapper handlers that parse JSON manually and call the typed handlers.
 
+func callToolArguments(req *mcp.CallToolRequest) (json.RawMessage, error) {
+	if req == nil || req.Params == nil {
+		return nil, fmt.Errorf("invalid parameters: missing params")
+	}
+	if len(bytes.TrimSpace(req.Params.Arguments)) == 0 {
+		return json.RawMessage(`{}`), nil
+	}
+	return req.Params.Arguments, nil
+}
+
 func (s *Server) wrapSearchTools(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args, err := callToolArguments(req)
+	if err != nil {
+		return errorResult(err), nil
+	}
 	var input SearchToolsInput
-	if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
+	if err := json.Unmarshal(args, &input); err != nil {
 		return errorResult(fmt.Errorf("invalid parameters: %w", err)), nil
 	}
 
@@ -195,8 +209,23 @@ func isEmptyRawParams(raw json.RawMessage) bool {
 	return len(t) == 0 || string(t) == "null" || string(t) == "{}"
 }
 
+func validateExecuteToolParameters(raw json.RawMessage) error {
+	t := bytes.TrimSpace(raw)
+	if len(t) == 0 || string(t) == "null" {
+		return nil
+	}
+	if t[0] != '{' {
+		return fmt.Errorf("parameters must be a JSON object")
+	}
+	return nil
+}
+
 func (s *Server) wrapExecuteTool(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	input, err := parseExecuteToolArgs(req.Params.Arguments)
+	args, err := callToolArguments(req)
+	if err != nil {
+		return errorResult(err), nil
+	}
+	input, err := parseExecuteToolArgs(args)
 	if err != nil {
 		return errorResult(fmt.Errorf("invalid parameters: %w", err)), nil
 	}
@@ -208,12 +237,15 @@ func (s *Server) wrapExecuteTool(ctx context.Context, req *mcp.CallToolRequest) 
 	// non-empty object payload — empty/null wrong-keys are ignored so they
 	// don't mask registry-level errors.
 	if isEmptyRawParams(input.Parameters) {
-		if wrong, ok := detectWrongParametersKey(req.Params.Arguments); ok {
+		if wrong, ok := detectWrongParametersKey(args); ok {
 			return errorResult(fmt.Errorf(
 				"unexpected field %q -- execute_tool expects 'parameters' (not %q). "+
 					"Did you mean: {\"mcp_name\":..., \"tool_name\":..., \"parameters\":{...}}?",
 				wrong, wrong)), nil
 		}
+	}
+	if err := validateExecuteToolParameters(input.Parameters); err != nil {
+		return errorResult(fmt.Errorf("invalid parameters: %w", err)), nil
 	}
 
 	if input.MCPName == "" {
@@ -259,8 +291,12 @@ func (s *Server) wrapExecuteTool(ctx context.Context, req *mcp.CallToolRequest) 
 }
 
 func (s *Server) wrapRunSlop(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args, err := callToolArguments(req)
+	if err != nil {
+		return errorResult(err), nil
+	}
 	var input RunSlopInput
-	if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
+	if err := json.Unmarshal(args, &input); err != nil {
 		return errorResult(fmt.Errorf("invalid parameters: %w", err)), nil
 	}
 
@@ -273,8 +309,12 @@ func (s *Server) wrapRunSlop(ctx context.Context, req *mcp.CallToolRequest) (*mc
 }
 
 func (s *Server) wrapManageMCPs(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args, err := callToolArguments(req)
+	if err != nil {
+		return errorResult(err), nil
+	}
 	var input ManageMCPsInput
-	if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
+	if err := json.Unmarshal(args, &input); err != nil {
 		return errorResult(fmt.Errorf("invalid parameters: %w", err)), nil
 	}
 
@@ -287,8 +327,12 @@ func (s *Server) wrapManageMCPs(ctx context.Context, req *mcp.CallToolRequest) (
 }
 
 func (s *Server) wrapAuthMCP(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args, err := callToolArguments(req)
+	if err != nil {
+		return errorResult(err), nil
+	}
 	var input AuthMCPInput
-	if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
+	if err := json.Unmarshal(args, &input); err != nil {
 		return errorResult(fmt.Errorf("invalid parameters: %w", err)), nil
 	}
 
@@ -301,8 +345,12 @@ func (s *Server) wrapAuthMCP(ctx context.Context, req *mcp.CallToolRequest) (*mc
 }
 
 func (s *Server) wrapGetMetadata(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args, err := callToolArguments(req)
+	if err != nil {
+		return errorResult(err), nil
+	}
 	var input GetMetadataInput
-	if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
+	if err := json.Unmarshal(args, &input); err != nil {
 		return errorResult(fmt.Errorf("invalid parameters: %w", err)), nil
 	}
 
@@ -315,8 +363,12 @@ func (s *Server) wrapGetMetadata(ctx context.Context, req *mcp.CallToolRequest) 
 }
 
 func (s *Server) wrapSlopReference(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args, err := callToolArguments(req)
+	if err != nil {
+		return errorResult(err), nil
+	}
 	var input SlopReferenceInput
-	if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
+	if err := json.Unmarshal(args, &input); err != nil {
 		return errorResult(fmt.Errorf("invalid parameters: %w", err)), nil
 	}
 
@@ -329,8 +381,12 @@ func (s *Server) wrapSlopReference(ctx context.Context, req *mcp.CallToolRequest
 }
 
 func (s *Server) wrapSlopHelp(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args, err := callToolArguments(req)
+	if err != nil {
+		return errorResult(err), nil
+	}
 	var input SlopHelpInput
-	if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
+	if err := json.Unmarshal(args, &input); err != nil {
 		return errorResult(fmt.Errorf("invalid parameters: %w", err)), nil
 	}
 
@@ -343,8 +399,12 @@ func (s *Server) wrapSlopHelp(ctx context.Context, req *mcp.CallToolRequest) (*m
 }
 
 func (s *Server) wrapAgntWatch(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args, err := callToolArguments(req)
+	if err != nil {
+		return errorResult(err), nil
+	}
 	var input AgntWatchInput
-	if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
+	if err := json.Unmarshal(args, &input); err != nil {
 		return errorResult(fmt.Errorf("invalid parameters: %w", err)), nil
 	}
 
@@ -360,8 +420,12 @@ func (s *Server) wrapAgntWatch(ctx context.Context, req *mcp.CallToolRequest) (*
 }
 
 func (s *Server) wrapCustomizeTools(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args, err := callToolArguments(req)
+	if err != nil {
+		return errorResult(err), nil
+	}
 	var input CustomizeToolsInput
-	if err := json.Unmarshal(req.Params.Arguments, &input); err != nil {
+	if err := json.Unmarshal(args, &input); err != nil {
 		return errorResult(fmt.Errorf("invalid parameters: %w", err)), nil
 	}
 

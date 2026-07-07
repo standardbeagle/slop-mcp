@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -43,12 +44,12 @@ type Server struct {
 // openOverrideStore builds and opens the overrides store using standard config paths,
 // then wires the registry override provider.
 func openOverrideStore(reg *registry.Registry) (*overrides.Store, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, fmt.Errorf("user home: %w", err)
+	userConfigPath := config.UserConfigPath()
+	if userConfigPath == "" {
+		return nil, fmt.Errorf("user config path unavailable")
 	}
 	opts := overrides.StoreOptions{
-		UserRoot: filepath.Join(home, ".config", "slop-mcp", "memory", "_slop"),
+		UserRoot: filepath.Join(filepath.Dir(userConfigPath), "memory", "_slop"),
 	}
 	if cwd, err := os.Getwd(); err == nil {
 		if root, err := overrides.FindRepoRoot(cwd); err == nil {
@@ -149,6 +150,11 @@ func NewFromConfig(cfg *config.Config) (*Server, error) {
 // MCP connections are established asynchronously.
 // Cached MCPs are loaded from disk immediately and lazy-connect on demand.
 func (s *Server) Start(ctx context.Context) error {
+	interval, err := healthCheckInterval(s.config)
+	if err != nil {
+		return err
+	}
+
 	// Register all configured MCPs first (so status shows them immediately)
 	for _, cfg := range s.config.MCPs {
 		s.registry.SetConfigured(cfg)
@@ -164,6 +170,12 @@ func (s *Server) Start(ctx context.Context) error {
 		s.logger.Info("loaded MCPs from cache", "count", cached)
 	}
 
+	if interval != "" {
+		if err := s.registry.StartBackgroundHealthCheck(interval); err != nil {
+			return err
+		}
+	}
+
 	// Connect to MCPs in background to avoid blocking server startup
 	// Cached MCPs are skipped (ConnectFromConfig checks for StateCached)
 	go func() {
@@ -175,13 +187,42 @@ func (s *Server) Start(ctx context.Context) error {
 	return nil
 }
 
+func healthCheckInterval(cfg *config.Config) (string, error) {
+	if cfg == nil {
+		return "", nil
+	}
+
+	var shortest time.Duration
+	for name, mcpCfg := range cfg.MCPs {
+		raw := mcpCfg.HealthCheckInterval
+		if raw == "" || raw == "0" {
+			continue
+		}
+		interval, err := time.ParseDuration(raw)
+		if err != nil {
+			return "", fmt.Errorf("invalid health_check_interval for MCP %s: %w", name, err)
+		}
+		if interval <= 0 {
+			return "", fmt.Errorf("invalid health_check_interval for MCP %s: must be positive", name)
+		}
+		if shortest == 0 || interval < shortest {
+			shortest = interval
+		}
+	}
+	if shortest == 0 {
+		return "", nil
+	}
+	return shortest.String(), nil
+}
+
 // loadCLITools loads CLI tool definitions from standard directories.
 func (s *Server) loadCLITools() {
-	// User-level CLI tools: ~/.config/slop-mcp/cli/
-	userConfigDir := filepath.Dir(config.UserConfigPath())
-	userCLIDir := filepath.Join(userConfigDir, "cli")
-	if err := s.cliRegistry.LoadFromDirectory(userCLIDir); err != nil {
-		s.logger.Debug("failed to load user CLI tools", "dir", userCLIDir, "error", err)
+	// User-level CLI tools: $XDG_CONFIG_HOME/slop-mcp/cli/ or ~/.config/slop-mcp/cli/
+	if userConfigDir := config.UserConfigDirPath(); userConfigDir != "" {
+		userCLIDir := filepath.Join(userConfigDir, "cli")
+		if err := s.cliRegistry.LoadFromDirectory(userCLIDir); err != nil {
+			s.logger.Debug("failed to load user CLI tools", "dir", userCLIDir, "error", err)
+		}
 	}
 
 	// Project-level CLI tools: .slop-mcp/cli/
@@ -257,10 +298,16 @@ func (s *Server) RunHTTP(ctx context.Context, port int) error {
 
 // Close closes all MCP connections and the override store.
 func (s *Server) Close() error {
+	var errs []error
 	if s.overrideStore != nil {
-		_ = s.overrideStore.Close()
+		if err := s.overrideStore.Close(); err != nil {
+			errs = append(errs, err)
+		}
 	}
-	return s.registry.Close()
+	if err := s.registry.Close(); err != nil {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
 }
 
 // SetOverrideStoreForTesting replaces the override store (closing any existing one)

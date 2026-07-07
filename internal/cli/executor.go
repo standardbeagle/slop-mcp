@@ -13,17 +13,21 @@ import (
 	"time"
 )
 
+var getwd = os.Getwd
+
 // Executor executes CLI tools.
 type Executor struct {
-	workdir string
+	workdir    string
+	workdirErr error
 }
 
 // NewExecutor creates a new CLI tool executor.
 func NewExecutor(workdir string) *Executor {
+	var err error
 	if workdir == "" {
-		workdir, _ = os.Getwd()
+		workdir, err = getwd()
 	}
-	return &Executor{workdir: workdir}
+	return &Executor{workdir: workdir, workdirErr: err}
 }
 
 // Execute runs a CLI tool with the given parameters.
@@ -59,6 +63,9 @@ func (e *Executor) Execute(ctx context.Context, tool *ToolConfig, params map[str
 	// Set working directory
 	workdir := tool.Workdir
 	if workdir == "" || workdir == "." {
+		if e.workdirErr != nil {
+			return nil, fmt.Errorf("failed to determine CLI tool working directory: %w", e.workdirErr)
+		}
 		workdir = e.workdir
 	}
 	cmd.Dir = workdir
@@ -180,13 +187,36 @@ func (e *Executor) buildArgs(tool *ToolConfig, params map[string]any) ([]string,
 		}
 
 		// Handle array type
-		if arg.Type == "array" {
-			vals := parseArrayValue(val)
+		switch arg.Type {
+		case "array":
+			vals, err := parseArrayValue(val)
+			if err != nil {
+				return nil, fmt.Errorf("invalid argument '%s': %w", arg.Name, err)
+			}
 			if err := validateEnum("argument", arg.Name, arg.Enum, vals...); err != nil {
 				return nil, err
 			}
 			args = append(args, vals...)
-		} else {
+		case "boolean":
+			bVal, err := parseBoolValue(val)
+			if err != nil {
+				return nil, fmt.Errorf("invalid argument '%s': %w", arg.Name, err)
+			}
+			sVal := strconv.FormatBool(bVal)
+			if err := validateEnum("argument", arg.Name, arg.Enum, sVal); err != nil {
+				return nil, err
+			}
+			args = append(args, sVal)
+		case "number":
+			sVal, err := parseNumberValue(val)
+			if err != nil {
+				return nil, fmt.Errorf("invalid argument '%s': %w", arg.Name, err)
+			}
+			if err := validateEnum("argument", arg.Name, arg.Enum, sVal); err != nil {
+				return nil, err
+			}
+			args = append(args, sVal)
+		default:
 			sVal := fmt.Sprintf("%v", val)
 			if err := validateEnum("argument", arg.Name, arg.Enum, sVal); err != nil {
 				return nil, err
@@ -219,12 +249,19 @@ func (e *Executor) buildArgs(tool *ToolConfig, params map[string]any) ([]string,
 
 		switch flag.Type {
 		case "boolean":
-			if parseBoolValue(val) {
+			bVal, err := parseBoolValue(val)
+			if err != nil {
+				return nil, fmt.Errorf("invalid flag '%s': %w", flag.Name, err)
+			}
+			if bVal {
 				args = append(args, flagStr)
 			}
 
 		case "array":
-			arrVals := parseArrayValue(val)
+			arrVals, err := parseArrayValue(val)
+			if err != nil {
+				return nil, fmt.Errorf("invalid flag '%s': %w", flag.Name, err)
+			}
 			if err := validateEnum("flag", flag.Name, flag.Enum, arrVals...); err != nil {
 				return nil, err
 			}
@@ -243,15 +280,9 @@ func (e *Executor) buildArgs(tool *ToolConfig, params map[string]any) ([]string,
 			}
 
 		case "number":
-			// Handle number formatting
-			var sVal string
-			switch v := val.(type) {
-			case float64:
-				sVal = strconv.FormatFloat(v, 'f', -1, 64)
-			case int:
-				sVal = strconv.Itoa(v)
-			default:
-				sVal = fmt.Sprintf("%v", val)
+			sVal, err := parseNumberValue(val)
+			if err != nil {
+				return nil, fmt.Errorf("invalid flag '%s': %w", flag.Name, err)
 			}
 			if err := validateEnum("flag", flag.Name, flag.Enum, sVal); err != nil {
 				return nil, err

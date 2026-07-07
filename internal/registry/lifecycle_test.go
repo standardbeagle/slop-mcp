@@ -34,6 +34,35 @@ func installFakeConnection(r *Registry, cfg config.MCPConfig, toolsIndexed bool)
 	r.mu.Unlock()
 }
 
+func TestRegistryListStyleOutputsAreSorted(t *testing.T) {
+	r, _ := newTestRegistryWithCache(t)
+	r.SetConfigured(config.MCPConfig{Name: "zeta", Type: "stdio", Command: "z"})
+	r.SetCached(config.MCPConfig{Name: "alpha", Type: "stdio", Command: "a"}, []ToolInfo{{Name: "ta"}})
+	installFakeConnection(r, config.MCPConfig{Name: "middle", Type: "stdio", Command: "m"}, false)
+
+	list := r.List()
+	require.Len(t, list, 3)
+	assert.Equal(t, []string{"alpha", "middle", "zeta"}, []string{list[0].Name, list[1].Name, list[2].Name})
+
+	status := r.Status()
+	require.Len(t, status, 3)
+	assert.Equal(t, []string{"alpha", "middle", "zeta"}, []string{status[0].Name, status[1].Name, status[2].Name})
+
+	metadata := r.GetMetadata(context.Background())
+	require.Len(t, metadata, 3)
+	assert.Equal(t, []string{"alpha", "middle", "zeta"}, []string{metadata[0].Name, metadata[1].Name, metadata[2].Name})
+
+	allConfigs := r.AllConfigs()
+	require.Len(t, allConfigs, 3)
+	assert.Equal(t, []string{"alpha", "middle", "zeta"}, []string{allConfigs[0].Name, allConfigs[1].Name, allConfigs[2].Name})
+
+	connConfigs := r.GetConfigs()
+	require.Len(t, connConfigs, 1)
+	assert.Equal(t, "middle", connConfigs[0].Name)
+
+	assert.Equal(t, []string{"alpha", "middle", "zeta"}, r.listNames())
+}
+
 func TestUpdateCache_SkipsWhenToolsNotIndexed(t *testing.T) {
 	r, store := newTestRegistryWithCache(t)
 	cfg := config.MCPConfig{Name: "m", Type: "stdio", Command: "x"}

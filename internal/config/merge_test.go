@@ -104,16 +104,16 @@ func TestMerge_ProjectOverridesUser(t *testing.T) {
 
 	project := configWithMCPs(map[string]MCPConfig{
 		"shared-mcp": {
-			Name:    "shared-mcp",
-			Type:    "sse",
-			URL:     "https://project.example.com/sse",
-			Source:  SourceProject,
+			Name:   "shared-mcp",
+			Type:   "sse",
+			URL:    "https://project.example.com/sse",
+			Source: SourceProject,
 		},
 		"project-only": {
-			Name:    "project-only",
-			Type:    "http",
-			URL:     "https://project-only.example.com",
-			Source:  SourceProject,
+			Name:   "project-only",
+			Type:   "http",
+			URL:    "https://project-only.example.com",
+			Source: SourceProject,
 		},
 	})
 
@@ -220,17 +220,17 @@ func TestMerge_EmptyConfigs(t *testing.T) {
 func TestThreeTierMerge_LocalOverridesProjectOverridesUser(t *testing.T) {
 	// Simulate three-tier merge as done in cmd/slop-mcp/run.go
 	user := configWithMCPs(map[string]MCPConfig{
-		"shared": {Name: "shared", Type: "stdio", Command: "user-cmd", Source: SourceUser},
+		"shared":    {Name: "shared", Type: "stdio", Command: "user-cmd", Source: SourceUser},
 		"user-only": {Name: "user-only", Type: "stdio", Command: "user-only-cmd", Source: SourceUser},
 	})
 
 	project := configWithMCPs(map[string]MCPConfig{
-		"shared": {Name: "shared", Type: "sse", URL: "https://project.example.com", Source: SourceProject},
+		"shared":       {Name: "shared", Type: "sse", URL: "https://project.example.com", Source: SourceProject},
 		"project-only": {Name: "project-only", Type: "http", URL: "https://proj.example.com", Source: SourceProject},
 	})
 
 	local := configWithMCPs(map[string]MCPConfig{
-		"shared": {Name: "shared", Type: "http", URL: "https://local.example.com", Source: SourceLocal},
+		"shared":     {Name: "shared", Type: "http", URL: "https://local.example.com", Source: SourceLocal},
 		"local-only": {Name: "local-only", Type: "stdio", Command: "local-cmd", Source: SourceLocal},
 	})
 
@@ -467,6 +467,8 @@ func TestLoadClaudeDesktopConfig_ValidJSON(t *testing.T) {
         "github": {
             "url": "https://mcp.github.com/sse",
             "type": "sse",
+            "max_retries": -1,
+            "health_check_interval": "45s",
             "headers": {
                 "Authorization": "Bearer gh-token"
             }
@@ -494,6 +496,8 @@ func TestLoadClaudeDesktopConfig_ValidJSON(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "https://mcp.github.com/sse", gh.URL)
 	assert.Equal(t, "sse", gh.Type)
+	assert.Equal(t, -1, gh.MaxRetries)
+	assert.Equal(t, "45s", gh.HealthCheckInterval)
 	assert.Equal(t, "Bearer gh-token", gh.Headers["Authorization"])
 }
 
@@ -511,6 +515,8 @@ func TestLoadClaudeCodeConfig_Structure(t *testing.T) {
         },
         "remote-mcp": {
             "url": "https://remote.example.com/mcp",
+            "max_retries": 3,
+            "health_check_interval": "1m",
             "headers": {
                 "X-Code-Header": "code-value"
             }
@@ -534,6 +540,8 @@ func TestLoadClaudeCodeConfig_Structure(t *testing.T) {
 	remoteMCP, ok := settings.MCPServers["remote-mcp"]
 	require.True(t, ok)
 	assert.Equal(t, "https://remote.example.com/mcp", remoteMCP.URL)
+	assert.Equal(t, 3, remoteMCP.MaxRetries)
+	assert.Equal(t, "1m", remoteMCP.HealthCheckInterval)
 	assert.Equal(t, "code-value", remoteMCP.Headers["X-Code-Header"])
 }
 
@@ -691,6 +699,23 @@ func TestParseJSONConfig(t *testing.T) {
 			},
 		},
 		{
+			name: "infers stdio from command",
+			json: `{"command": "server", "args": ["--flag"]}`,
+			expected: &MCPConfig{
+				Type:    "stdio",
+				Command: "server",
+				Args:    []string{"--flag"},
+			},
+		},
+		{
+			name: "infers http from url",
+			json: `{"url": "https://api.example.com/mcp"}`,
+			expected: &MCPConfig{
+				Type: "http",
+				URL:  "https://api.example.com/mcp",
+			},
+		},
+		{
 			name: "with env vars",
 			json: `{"type": "stdio", "command": "server", "env": {"KEY": "value"}}`,
 			expected: &MCPConfig{
@@ -699,6 +724,16 @@ func TestParseJSONConfig(t *testing.T) {
 				Env: map[string]string{
 					"KEY": "value",
 				},
+			},
+		},
+		{
+			name: "with retry and health settings",
+			json: `{"type": "http", "url": "https://api.example.com/mcp", "max_retries": -1, "health_check_interval": "30s"}`,
+			expected: &MCPConfig{
+				Type:                "http",
+				URL:                 "https://api.example.com/mcp",
+				MaxRetries:          -1,
+				HealthCheckInterval: "30s",
 			},
 		},
 		{
@@ -722,6 +757,8 @@ func TestParseJSONConfig(t *testing.T) {
 			assert.Equal(t, tt.expected.Args, cfg.Args)
 			assert.Equal(t, tt.expected.Env, cfg.Env)
 			assert.Equal(t, tt.expected.Headers, cfg.Headers)
+			assert.Equal(t, tt.expected.MaxRetries, cfg.MaxRetries)
+			assert.Equal(t, tt.expected.HealthCheckInterval, cfg.HealthCheckInterval)
 		})
 	}
 }
@@ -794,6 +831,9 @@ func TestGetMCP_FromJSONFile(t *testing.T) {
             "type": "stdio",
             "command": "json-cmd",
             "args": ["--json"]
+        },
+        "url-only": {
+            "url": "https://example.com/mcp"
         }
     }
 }`
@@ -806,6 +846,13 @@ func TestGetMCP_FromJSONFile(t *testing.T) {
 	assert.Equal(t, "json-server", mcp.Name)
 	assert.Equal(t, "json-cmd", mcp.Command)
 	assert.Equal(t, []string{"--json"}, mcp.Args)
+
+	mcp, err = GetMCP(configPath, "url-only")
+	require.NoError(t, err)
+	require.NotNil(t, mcp)
+	assert.Equal(t, "url-only", mcp.Name)
+	assert.Equal(t, "http", mcp.Type)
+	assert.Equal(t, "https://example.com/mcp", mcp.URL)
 
 	// Get non-existing MCP
 	mcp, err = GetMCP(configPath, "nonexistent")
@@ -867,6 +914,22 @@ func TestAddMCPConfigToFile(t *testing.T) {
 	assert.Equal(t, "value", loaded.Env["KEY"])
 }
 
+func TestAddMCPConfigToFileInfersHTTPForURLOnlyConfig(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.kdl")
+
+	err := AddMCPConfigToFile(configPath, MCPConfig{
+		Name: "url-only",
+		URL:  "https://example.com/mcp",
+	})
+	require.NoError(t, err)
+
+	cfg, err := loadConfigFile(configPath, SourceProject)
+	require.NoError(t, err)
+	require.Contains(t, cfg.MCPs, "url-only")
+	assert.Equal(t, "http", cfg.MCPs["url-only"].Type)
+	assert.Equal(t, "https://example.com/mcp", cfg.MCPs["url-only"].URL)
+}
+
 // TestRemoveMCPFromFile tests removing an MCP from a config file.
 func TestRemoveMCPFromFile(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -888,6 +951,24 @@ func TestRemoveMCPFromFile(t *testing.T) {
 	assert.Len(t, cfg.MCPs, 1)
 	assert.Contains(t, cfg.MCPs, "keep")
 	assert.NotContains(t, cfg.MCPs, "remove")
+}
+
+func TestRemoveMCPFromFileReturnsErrorWhenMissing(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.kdl")
+
+	cfg := NewConfig()
+	cfg.MCPs["keep"] = MCPConfig{Name: "keep", Type: "stdio", Command: "keep-cmd"}
+	require.NoError(t, WriteConfigFile(configPath, cfg))
+
+	err := RemoveMCPFromFile(configPath, "missing")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing")
+
+	loaded, loadErr := loadConfigFile(configPath, SourceProject)
+	require.NoError(t, loadErr)
+	assert.Len(t, loaded.MCPs, 1)
+	assert.Contains(t, loaded.MCPs, "keep")
 }
 
 // TestWriteConfigFile tests writing config to file.

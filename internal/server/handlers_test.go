@@ -315,7 +315,7 @@ func TestHandleSearchTools_QueryVariations(t *testing.T) {
 		{
 			name:          "mcp name filter with query",
 			query:         "file",
-			mcpFilter:    "filesystem",
+			mcpFilter:     "filesystem",
 			wantMinCount:  2,
 			wantToolNames: []string{"read_file", "write_file"},
 		},
@@ -593,11 +593,11 @@ func TestToolNotFoundError_Message(t *testing.T) {
 // TestInvalidParameterError_Message tests the error message format.
 func TestInvalidParameterError_Message(t *testing.T) {
 	err := &registry.InvalidParameterError{
-		MCPName:         "test-mcp",
-		ToolName:        "write_file",
-		OriginalError:   "missing required parameter: path",
-		ProvidedParams:  []string{"content", "pth"},
-		ExpectedParams:  []registry.ParamInfo{
+		MCPName:        "test-mcp",
+		ToolName:       "write_file",
+		OriginalError:  "missing required parameter: path",
+		ProvidedParams: []string{"content", "pth"},
+		ExpectedParams: []registry.ParamInfo{
 			{Name: "path", Type: "string", Description: "File path", Required: true},
 			{Name: "content", Type: "string", Description: "File content", Required: true},
 		},
@@ -817,6 +817,24 @@ func TestHandleGetMetadata_EmptyRegistry(t *testing.T) {
 	assert.Nil(t, result)
 	assert.Equal(t, 0, output.Total)
 	assert.Empty(t, output.Metadata)
+}
+
+func TestHandleGetMetadata_FilePathCreatesParents(t *testing.T) {
+	s := mockServer([]registry.ToolInfo{})
+	ctx := context.Background()
+	outPath := filepath.Join(t.TempDir(), "nested", "metadata.json")
+
+	result, output, err := s.handleGetMetadata(ctx, &mcp.CallToolRequest{}, GetMetadataInput{
+		FilePath: outPath,
+	})
+
+	require.NoError(t, err)
+	assert.Nil(t, result)
+	assert.Equal(t, outPath, output.FilePath)
+
+	data, err := os.ReadFile(outPath)
+	require.NoError(t, err)
+	assert.JSONEq(t, `[]`, string(data))
 }
 
 // TestHandleManageMCPs_ListAction tests manage_mcps list action.
@@ -1944,9 +1962,9 @@ func TestHandleSlopReference(t *testing.T) {
 	ctx := context.Background()
 
 	tests := []struct {
-		name        string
-		input       SlopReferenceInput
-		wantContain []string
+		name           string
+		input          SlopReferenceInput
+		wantContain    []string
 		wantNotContain []string
 	}{
 		{

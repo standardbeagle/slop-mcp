@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,6 +15,8 @@ import (
 )
 
 var Version = "0.1.0"
+
+var getwd = os.Getwd
 
 // Bank represents a memory bank structure.
 type Bank struct {
@@ -179,7 +182,7 @@ Flags:
   --verbose                Include metadata
 
 Storage Locations:
-  User:    ~/.config/slop-mcp/memory/<bank>.json
+  User:    $XDG_CONFIG_HOME/slop-mcp/memory/<bank>.json or ~/.config/slop-mcp/memory/<bank>.json
   Project: .slop-mcp/memory/<bank>.json
 
 Examples:
@@ -218,35 +221,45 @@ func getUserMemoryDir() string {
 	return filepath.Join(configDir, "slop-mcp", "memory")
 }
 
-func getProjectMemoryDir() string {
-	cwd, _ := os.Getwd()
-	return filepath.Join(cwd, ".slop-mcp", "memory")
+func getProjectMemoryDir() (string, error) {
+	cwd, err := getwd()
+	if err != nil {
+		return "", fmt.Errorf("getting current directory: %w", err)
+	}
+	return filepath.Join(cwd, ".slop-mcp", "memory"), nil
 }
 
-func getBankPath(bankName, scope string) string {
+func getBankPath(bankName, scope string) (string, error) {
 	var dir string
 	switch scope {
 	case "user":
 		dir = getUserMemoryDir()
 	case "project":
-		dir = getProjectMemoryDir()
+		projectDir, err := getProjectMemoryDir()
+		if err != nil {
+			return "", err
+		}
+		dir = projectDir
 	default:
 		// Auto-detect: prefer project if exists
-		projectDir := getProjectMemoryDir()
+		projectDir, err := getProjectMemoryDir()
+		if err != nil {
+			return "", err
+		}
 		projectPath := filepath.Join(projectDir, bankName+".json")
 		if _, err := os.Stat(projectPath); err == nil {
-			return projectPath
+			return projectPath, nil
 		}
 		// Check user
 		userDir := getUserMemoryDir()
 		userPath := filepath.Join(userDir, bankName+".json")
 		if _, err := os.Stat(userPath); err == nil {
-			return userPath
+			return userPath, nil
 		}
 		// Default to project for new banks
-		return filepath.Join(projectDir, bankName+".json")
+		return filepath.Join(projectDir, bankName+".json"), nil
 	}
-	return filepath.Join(dir, bankName+".json")
+	return filepath.Join(dir, bankName+".json"), nil
 }
 
 func loadBank(path string) (*Bank, error) {
@@ -304,28 +317,112 @@ func validateBankName(name string) error {
 	return builtins.ValidateBankName(name)
 }
 
-// Parse flags
-func parseFlags(args []string) (positional []string, flags map[string]string) {
-	flags = make(map[string]string)
-	for i := 0; i < len(args); i++ {
-		if strings.HasPrefix(args[i], "--") {
-			key := strings.TrimPrefix(args[i], "--")
-			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "--") {
-				flags[key] = args[i+1]
-				i++
-			} else {
-				flags[key] = "true"
-			}
-		} else {
-			positional = append(positional, args[i])
+func validateMemoryScope(scope string, allowAll bool) error {
+	switch scope {
+	case "", "user", "project":
+		return nil
+	case "all":
+		if allowAll {
+			return nil
 		}
 	}
-	return
+	if allowAll {
+		return fmt.Errorf("invalid scope %q: expected user, project, or all", scope)
+	}
+	return fmt.Errorf("invalid scope %q: expected user or project", scope)
+}
+
+// Parse flags
+func parseFlags(args []string, valueFlags, boolFlags []string) (positional []string, flags map[string]string, err error) {
+	flags = make(map[string]string)
+	valueFlagSet := stringSet(valueFlags)
+	boolFlagSet := stringSet(boolFlags)
+
+	for i := 0; i < len(args); i++ {
+		if !strings.HasPrefix(args[i], "--") {
+			positional = append(positional, args[i])
+			continue
+		}
+
+		raw := strings.TrimPrefix(args[i], "--")
+		key, value, hasValue := strings.Cut(raw, "=")
+		if key == "" {
+			return nil, nil, fmt.Errorf("invalid flag %q", args[i])
+		}
+
+		if _, ok := boolFlagSet[key]; ok {
+			if !hasValue {
+				flags[key] = "true"
+				continue
+			}
+			if value != "true" && value != "false" {
+				return nil, nil, fmt.Errorf("--%s expects true or false", key)
+			}
+			flags[key] = value
+			continue
+		}
+
+		if _, ok := valueFlagSet[key]; ok {
+			if hasValue {
+				flags[key] = value
+				continue
+			}
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "--") {
+				return nil, nil, fmt.Errorf("--%s requires a value", key)
+			}
+			flags[key] = args[i+1]
+			i++
+			continue
+		}
+
+		return nil, nil, fmt.Errorf("unknown flag --%s", key)
+	}
+	return positional, flags, nil
+}
+
+func stringSet(values []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		set[value] = struct{}{}
+	}
+	return set
+}
+
+func parseReadFlags(args []string) ([]string, map[string]string, error) {
+	return parseFlags(args, []string{"scope", "default"}, []string{"verbose"})
+}
+
+func parseWriteFlags(args []string) ([]string, map[string]string, error) {
+	return parseFlags(args, []string{"scope", "ttl"}, []string{"stdin"})
+}
+
+func parseScopeOnlyFlags(args []string) ([]string, map[string]string, error) {
+	return parseFlags(args, []string{"scope"}, nil)
+}
+
+func parseQueryFlags(args []string) ([]string, map[string]string, error) {
+	return parseFlags(args, []string{"scope"}, []string{"raw"})
+}
+
+func parseSearchFlags(args []string) ([]string, map[string]string, error) {
+	return parseFlags(args, []string{"scope"}, []string{"value"})
+}
+
+func parseOrPrintFlagError(args []string, parser func([]string) ([]string, map[string]string, error)) ([]string, map[string]string, error) {
+	positional, flags, err := parser(args)
+	if err != nil {
+		printError("INVALID_ARGS", err.Error(), "", "", "")
+		return nil, nil, err
+	}
+	return positional, flags, nil
 }
 
 // Commands
 func cmdRead(args []string) error {
-	positional, flags := parseFlags(args)
+	positional, flags, err := parseOrPrintFlagError(args, parseReadFlags)
+	if err != nil {
+		return err
+	}
 
 	if len(positional) < 1 {
 		printError("INVALID_ARGS", "Usage: memory-cli read <bank> [key]", "", "", "")
@@ -339,7 +436,15 @@ func cmdRead(args []string) error {
 	}
 
 	scope := flags["scope"]
-	path := getBankPath(bankName, scope)
+	if err := validateMemoryScope(scope, false); err != nil {
+		printError("INVALID_SCOPE", err.Error(), bankName, "", scope)
+		return err
+	}
+	path, err := getBankPath(bankName, scope)
+	if err != nil {
+		printError("PATH_ERROR", err.Error(), bankName, "", scope)
+		return err
+	}
 
 	bank, err := loadBank(path)
 	if err != nil {
@@ -350,8 +455,11 @@ func cmdRead(args []string) error {
 	if bank == nil {
 		// Check for default
 		if defaultVal, ok := flags["default"]; ok {
-			var v any
-			_ = json.Unmarshal([]byte(defaultVal), &v)
+			v, err := parseDefaultValue(defaultVal)
+			if err != nil {
+				printError("INVALID_DEFAULT", err.Error(), bankName, "", scope)
+				return err
+			}
 			printJSON(ReadResult{Value: v})
 			return nil
 		}
@@ -382,8 +490,11 @@ func cmdRead(args []string) error {
 	entry, ok := bank.Entries[key]
 	if !ok || entry.IsExpired() {
 		if defaultVal, ok := flags["default"]; ok {
-			var v any
-			_ = json.Unmarshal([]byte(defaultVal), &v)
+			v, err := parseDefaultValue(defaultVal)
+			if err != nil {
+				printError("INVALID_DEFAULT", err.Error(), bankName, key, scope)
+				return err
+			}
 			printJSON(ReadResult{Value: v})
 			return nil
 		}
@@ -407,8 +518,19 @@ func cmdRead(args []string) error {
 	return nil
 }
 
+func parseDefaultValue(raw string) (any, error) {
+	var v any
+	if err := json.Unmarshal([]byte(raw), &v); err != nil {
+		return nil, fmt.Errorf("invalid default JSON: %w", err)
+	}
+	return v, nil
+}
+
 func cmdWrite(args []string) error {
-	positional, flags := parseFlags(args)
+	positional, flags, err := parseOrPrintFlagError(args, parseWriteFlags)
+	if err != nil {
+		return err
+	}
 
 	if len(positional) < 2 {
 		printError("INVALID_ARGS", "Usage: memory-cli write <bank> <key> <value>", "", "", "")
@@ -452,9 +574,17 @@ func cmdWrite(args []string) error {
 	}
 
 	scope := flags["scope"]
+	if err := validateMemoryScope(scope, false); err != nil {
+		printError("INVALID_SCOPE", err.Error(), bankName, key, scope)
+		return err
+	}
 	if scope == "" {
 		// Default to project if .slop-mcp exists, else user
-		projectDir := getProjectMemoryDir()
+		projectDir, err := getProjectMemoryDir()
+		if err != nil {
+			printError("PATH_ERROR", err.Error(), bankName, key, scope)
+			return err
+		}
 		if _, err := os.Stat(filepath.Dir(projectDir)); err == nil {
 			scope = "project"
 		} else {
@@ -462,7 +592,11 @@ func cmdWrite(args []string) error {
 		}
 	}
 
-	path := getBankPath(bankName, scope)
+	path, err := getBankPath(bankName, scope)
+	if err != nil {
+		printError("PATH_ERROR", err.Error(), bankName, key, scope)
+		return err
+	}
 
 	bank, err := loadBank(path)
 	if err != nil {
@@ -499,8 +633,11 @@ func cmdWrite(args []string) error {
 
 	// Handle TTL
 	if ttlStr, ok := flags["ttl"]; ok {
-		var ttl int64
-		_, _ = fmt.Sscanf(ttlStr, "%d", &ttl)
+		ttl, err := parseTTL(ttlStr)
+		if err != nil {
+			printError("INVALID_TTL", err.Error(), bankName, key, scope)
+			return err
+		}
 		entry.TTL = &ttl
 	}
 
@@ -521,7 +658,10 @@ func cmdWrite(args []string) error {
 }
 
 func cmdDelete(args []string) error {
-	positional, flags := parseFlags(args)
+	positional, flags, err := parseOrPrintFlagError(args, parseScopeOnlyFlags)
+	if err != nil {
+		return err
+	}
 
 	if len(positional) < 1 {
 		printError("INVALID_ARGS", "Usage: memory-cli delete <bank> [key]", "", "", "")
@@ -540,7 +680,15 @@ func cmdDelete(args []string) error {
 	}
 
 	scope := flags["scope"]
-	path := getBankPath(bankName, scope)
+	if err := validateMemoryScope(scope, false); err != nil {
+		printError("INVALID_SCOPE", err.Error(), bankName, "", scope)
+		return err
+	}
+	path, err := getBankPath(bankName, scope)
+	if err != nil {
+		printError("PATH_ERROR", err.Error(), bankName, "", scope)
+		return err
+	}
 
 	// Delete entire bank
 	if len(positional) < 2 {
@@ -592,9 +740,16 @@ func cmdDelete(args []string) error {
 }
 
 func cmdList(args []string) error {
-	positional, flags := parseFlags(args)
+	positional, flags, err := parseOrPrintFlagError(args, parseScopeOnlyFlags)
+	if err != nil {
+		return err
+	}
 
 	scope := flags["scope"]
+	if err := validateMemoryScope(scope, len(positional) == 0); err != nil {
+		printError("INVALID_SCOPE", err.Error(), "", "", scope)
+		return err
+	}
 
 	// List keys in specific bank
 	if len(positional) > 0 {
@@ -604,7 +759,11 @@ func cmdList(args []string) error {
 			return err
 		}
 
-		path := getBankPath(bankName, scope)
+		path, err := getBankPath(bankName, scope)
+		if err != nil {
+			printError("PATH_ERROR", err.Error(), bankName, "", scope)
+			return err
+		}
 		bank, err := loadBank(path)
 		if err != nil {
 			printError("LOAD_ERROR", err.Error(), bankName, "", scope)
@@ -639,87 +798,90 @@ func cmdList(args []string) error {
 	// Scan user directory
 	if scope == "" || scope == "user" || scope == "all" {
 		userDir := getUserMemoryDir()
-		entries, _ := os.ReadDir(userDir)
-		for _, entry := range entries {
-			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
-				continue
-			}
-			name := strings.TrimSuffix(entry.Name(), ".json")
-			path := filepath.Join(userDir, entry.Name())
-			info, _ := entry.Info()
-			bank, _ := loadBank(path)
-
-			keyCount := 0
-			updatedAt := ""
-			if bank != nil {
-				for _, e := range bank.Entries {
-					if !e.IsExpired() {
-						keyCount++
-					}
-				}
-				updatedAt = bank.Meta.UpdatedAt.Format(time.RFC3339)
-			}
-
-			var size int64
-			if info != nil {
-				size = info.Size()
-			}
-
-			banks = append(banks, BankInfo{
-				Name:      name,
-				Scope:     "user",
-				KeyCount:  keyCount,
-				UpdatedAt: updatedAt,
-				SizeBytes: size,
-			})
+		infos, err := listBankInfos(userDir, "user")
+		if err != nil {
+			printError("LIST_ERROR", err.Error(), "", "", scope)
+			return err
 		}
+		banks = append(banks, infos...)
 	}
 
 	// Scan project directory
 	if scope == "" || scope == "project" || scope == "all" {
-		projectDir := getProjectMemoryDir()
-		entries, _ := os.ReadDir(projectDir)
-		for _, entry := range entries {
-			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
-				continue
-			}
-			name := strings.TrimSuffix(entry.Name(), ".json")
-			path := filepath.Join(projectDir, entry.Name())
-			info, _ := entry.Info()
-			bank, _ := loadBank(path)
-
-			keyCount := 0
-			updatedAt := ""
-			if bank != nil {
-				for _, e := range bank.Entries {
-					if !e.IsExpired() {
-						keyCount++
-					}
-				}
-				updatedAt = bank.Meta.UpdatedAt.Format(time.RFC3339)
-			}
-
-			var size int64
-			if info != nil {
-				size = info.Size()
-			}
-
-			banks = append(banks, BankInfo{
-				Name:      name,
-				Scope:     "project",
-				KeyCount:  keyCount,
-				UpdatedAt: updatedAt,
-				SizeBytes: size,
-			})
+		projectDir, err := getProjectMemoryDir()
+		if err != nil {
+			printError("PATH_ERROR", err.Error(), "", "", scope)
+			return err
 		}
+		infos, err := listBankInfos(projectDir, "project")
+		if err != nil {
+			printError("LIST_ERROR", err.Error(), "", "", scope)
+			return err
+		}
+		banks = append(banks, infos...)
 	}
 
 	printJSON(ListResult{Banks: banks})
 	return nil
 }
 
+func listBankInfos(dir, scope string) ([]BankInfo, error) {
+	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	banks := make([]BankInfo, 0)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		name := strings.TrimSuffix(entry.Name(), ".json")
+		path := filepath.Join(dir, entry.Name())
+		info, err := entry.Info()
+		if err != nil {
+			return nil, err
+		}
+		bank, err := loadBank(path)
+		if err != nil {
+			return nil, fmt.Errorf("loading bank %q: %w", name, err)
+		}
+
+		keyCount := 0
+		updatedAt := ""
+		if bank != nil {
+			for _, e := range bank.Entries {
+				if !e.IsExpired() {
+					keyCount++
+				}
+			}
+			updatedAt = bank.Meta.UpdatedAt.Format(time.RFC3339)
+		}
+
+		var size int64
+		if info != nil {
+			size = info.Size()
+		}
+
+		banks = append(banks, BankInfo{
+			Name:      name,
+			Scope:     scope,
+			KeyCount:  keyCount,
+			UpdatedAt: updatedAt,
+			SizeBytes: size,
+		})
+	}
+	return banks, nil
+}
+
 func cmdQuery(args []string) error {
-	positional, flags := parseFlags(args)
+	positional, flags, err := parseOrPrintFlagError(args, parseQueryFlags)
+	if err != nil {
+		return err
+	}
 
 	if len(positional) < 2 {
 		printError("INVALID_ARGS", "Usage: memory-cli query <bank> [key] <filter>", "", "", "")
@@ -733,7 +895,15 @@ func cmdQuery(args []string) error {
 	}
 
 	scope := flags["scope"]
-	path := getBankPath(bankName, scope)
+	if err := validateMemoryScope(scope, false); err != nil {
+		printError("INVALID_SCOPE", err.Error(), bankName, "", scope)
+		return err
+	}
+	path, err := getBankPath(bankName, scope)
+	if err != nil {
+		printError("PATH_ERROR", err.Error(), bankName, "", scope)
+		return err
+	}
 
 	bank, err := loadBank(path)
 	if err != nil {
@@ -812,8 +982,10 @@ func applyFilter(data any, filter string) (any, error) {
 			// Handle array index: [0]
 			if strings.HasPrefix(part, "[") && strings.HasSuffix(part, "]") {
 				indexStr := strings.TrimPrefix(strings.TrimSuffix(part, "]"), "[")
-				var index int
-				_, _ = fmt.Sscanf(indexStr, "%d", &index)
+				index, err := parseArrayIndex(indexStr)
+				if err != nil {
+					return nil, err
+				}
 
 				arr, ok := current.([]any)
 				if !ok {
@@ -858,8 +1030,27 @@ func applyFilter(data any, filter string) (any, error) {
 	return nil, fmt.Errorf("unsupported filter: %s", filter)
 }
 
+func parseTTL(raw string) (int64, error) {
+	ttl, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || ttl <= 0 {
+		return 0, fmt.Errorf("invalid ttl %q: expected a positive integer number of seconds", raw)
+	}
+	return ttl, nil
+}
+
+func parseArrayIndex(raw string) (int, error) {
+	index, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("invalid array index %q", raw)
+	}
+	return index, nil
+}
+
 func cmdSearch(args []string) error {
-	positional, flags := parseFlags(args)
+	positional, flags, err := parseOrPrintFlagError(args, parseSearchFlags)
+	if err != nil {
+		return err
+	}
 
 	if len(positional) < 1 {
 		printError("INVALID_ARGS", "Usage: memory-cli search <pattern>", "", "", "")
@@ -868,15 +1059,22 @@ func cmdSearch(args []string) error {
 
 	pattern := strings.ToLower(positional[0])
 	scope := flags["scope"]
+	if err := validateMemoryScope(scope, true); err != nil {
+		printError("INVALID_SCOPE", err.Error(), "", "", scope)
+		return err
+	}
 	searchValues := flags["value"] == "true"
 
 	matches := make([]SearchMatch, 0)
 
 	// Search function
-	searchBank := func(bankPath, bankName, bankScope string) {
+	searchBank := func(bankPath, bankName, bankScope string) error {
 		bank, err := loadBank(bankPath)
-		if err != nil || bank == nil {
-			return
+		if err != nil {
+			return fmt.Errorf("loading bank %q: %w", bankName, err)
+		}
+		if bank == nil {
+			return nil
 		}
 
 		for key, entry := range bank.Entries {
@@ -917,31 +1115,28 @@ func cmdSearch(args []string) error {
 				matches = append(matches, match)
 			}
 		}
+		return nil
 	}
 
 	// Search user banks
 	if scope == "" || scope == "user" || scope == "all" {
 		userDir := getUserMemoryDir()
-		entries, _ := os.ReadDir(userDir)
-		for _, entry := range entries {
-			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
-				continue
-			}
-			name := strings.TrimSuffix(entry.Name(), ".json")
-			searchBank(filepath.Join(userDir, entry.Name()), name, "user")
+		if err := searchBankFiles(userDir, "user", searchBank); err != nil {
+			printError("SEARCH_ERROR", err.Error(), "", "", scope)
+			return err
 		}
 	}
 
 	// Search project banks
 	if scope == "" || scope == "project" || scope == "all" {
-		projectDir := getProjectMemoryDir()
-		entries, _ := os.ReadDir(projectDir)
-		for _, entry := range entries {
-			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
-				continue
-			}
-			name := strings.TrimSuffix(entry.Name(), ".json")
-			searchBank(filepath.Join(projectDir, entry.Name()), name, "project")
+		projectDir, err := getProjectMemoryDir()
+		if err != nil {
+			printError("PATH_ERROR", err.Error(), "", "", scope)
+			return err
+		}
+		if err := searchBankFiles(projectDir, "project", searchBank); err != nil {
+			printError("SEARCH_ERROR", err.Error(), "", "", scope)
+			return err
 		}
 	}
 
@@ -949,5 +1144,25 @@ func cmdSearch(args []string) error {
 		Matches: matches,
 		Total:   len(matches),
 	})
+	return nil
+}
+
+func searchBankFiles(dir, scope string, searchBank func(path, name, scope string) error) error {
+	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		name := strings.TrimSuffix(entry.Name(), ".json")
+		if err := searchBank(filepath.Join(dir, entry.Name()), name, scope); err != nil {
+			return err
+		}
+	}
 	return nil
 }
