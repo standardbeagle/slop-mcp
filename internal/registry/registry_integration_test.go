@@ -368,17 +368,23 @@ func TestRegistry_DisconnectMCP(t *testing.T) {
 	list := reg.List()
 	require.Len(t, list, 1)
 
-	// Disconnect
+	// Disconnect keeps the state around for reconnection
 	err = reg.Disconnect("everything")
 	require.NoError(t, err)
 
-	// Verify disconnected
 	list = reg.List()
-	assert.Len(t, list, 0)
+	require.Len(t, list, 1)
+	assert.False(t, list[0].Connected)
+	assert.Equal(t, "disconnected", list[0].Error)
 
 	// Tools should no longer be searchable
 	tools := reg.SearchTools("echo", "")
 	assert.Empty(t, tools)
+
+	// Unregister removes the MCP entirely
+	err = reg.Unregister("everything")
+	require.NoError(t, err)
+	assert.Len(t, reg.List(), 0)
 }
 
 func TestRegistry_ExecuteNonexistentTool(t *testing.T) {
