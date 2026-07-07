@@ -189,9 +189,18 @@ func handleRequest(req Request) *Response {
 func handleToolCall(id any, params CallToolParams) *Response {
 	switch params.Name {
 	case "echo":
-		message := ""
-		if msg, ok := params.Arguments["message"].(string); ok {
-			message = msg
+		message, ok := params.Arguments["message"].(string)
+		if !ok {
+			// Mirror real servers (and the go-sdk), which reject calls that
+			// fail input-schema validation.
+			return &Response{
+				JSONRPC: "2.0",
+				ID:      id,
+				Error: &Error{
+					Code:    -32602,
+					Message: `invalid parameters: missing required parameter "message"`,
+				},
+			}
 		}
 		return &Response{
 			JSONRPC: "2.0",

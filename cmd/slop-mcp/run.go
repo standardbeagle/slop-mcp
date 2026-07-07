@@ -86,7 +86,7 @@ func cmdRun(args []string) {
 	}
 
 	// Create SLOP runtime
-	rt := slop.NewRuntime()
+	rt := builtins.NewRuntime()
 	defer rt.Close()
 
 	// Register built-in functions

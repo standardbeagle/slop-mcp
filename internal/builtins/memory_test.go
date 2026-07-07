@@ -15,7 +15,7 @@ import (
 func newMemoryRuntime(t *testing.T) (*slop.Runtime, *MemoryStore) {
 	t.Helper()
 	store := NewMemoryStoreWithDir(t.TempDir())
-	rt := slop.NewRuntime()
+	rt := NewRuntime()
 	RegisterMemory(rt, store)
 	return rt, store
 }
@@ -115,14 +115,14 @@ func TestMemoryStore_PersistsAcrossRuntimes(t *testing.T) {
 	store := NewMemoryStoreWithDir(t.TempDir())
 
 	// First runtime writes
-	rt1 := slop.NewRuntime()
+	rt1 := NewRuntime()
 	RegisterMemory(rt1, store)
 	_, err := rt1.Execute(`mem_save("persist", "greeting", "hello")`)
 	require.NoError(t, err)
 	rt1.Close()
 
 	// Second runtime reads
-	rt2 := slop.NewRuntime()
+	rt2 := NewRuntime()
 	RegisterMemory(rt2, store)
 	result, err := rt2.Execute(`mem_load("persist", "greeting")`)
 	require.NoError(t, err)
@@ -396,7 +396,7 @@ func TestMemoryStore_BackwardCompat(t *testing.T) {
 	require.NoError(t, os.MkdirAll(dir, 0755))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "compat.json"), data, 0644))
 
-	rt := slop.NewRuntime()
+	rt := NewRuntime()
 	RegisterMemory(rt, store)
 	defer rt.Close()
 

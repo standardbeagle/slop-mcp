@@ -4,14 +4,12 @@ import (
 	"os"
 	"strings"
 	"testing"
-
-	"github.com/standardbeagle/slop/pkg/slop"
 )
 
 func TestMemSave_RejectsReservedBank(t *testing.T) {
 	dir := t.TempDir()
 	store := NewMemoryStoreWithDir(dir)
-	rt := slop.NewRuntime()
+	rt := NewRuntime()
 	RegisterMemory(rt, store)
 	defer rt.Close()
 
@@ -27,7 +25,7 @@ func TestMemSave_RejectsReservedBank(t *testing.T) {
 func TestMemDelete_RejectsReservedBank(t *testing.T) {
 	dir := t.TempDir()
 	store := NewMemoryStoreWithDir(dir)
-	rt := slop.NewRuntime()
+	rt := NewRuntime()
 	RegisterMemory(rt, store)
 	defer rt.Close()
 
@@ -43,7 +41,7 @@ func TestMemDelete_RejectsReservedBank(t *testing.T) {
 func TestMemReadEntryPoints_RejectReservedBank(t *testing.T) {
 	dir := t.TempDir()
 	store := NewMemoryStoreWithDir(dir)
-	rt := slop.NewRuntime()
+	rt := NewRuntime()
 	RegisterMemory(rt, store)
 	defer rt.Close()
 
@@ -69,7 +67,7 @@ func TestMemReadEntryPoints_RejectReservedBank(t *testing.T) {
 func TestMemEntryPoints_RejectPathTraversalBankNames(t *testing.T) {
 	dir := t.TempDir()
 	store := NewMemoryStoreWithDir(dir)
-	rt := slop.NewRuntime()
+	rt := NewRuntime()
 	RegisterMemory(rt, store)
 	defer rt.Close()
 

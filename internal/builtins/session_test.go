@@ -11,7 +11,7 @@ import (
 
 func TestSessionStore_BasicOperations(t *testing.T) {
 	store := NewSessionStore()
-	rt := slop.NewRuntime()
+	rt := NewRuntime()
 	defer rt.Close()
 	RegisterSession(rt, store)
 
@@ -35,7 +35,7 @@ store_exists("k1")`)
 
 func TestSessionStore_GetMissing(t *testing.T) {
 	store := NewSessionStore()
-	rt := slop.NewRuntime()
+	rt := NewRuntime()
 	defer rt.Close()
 	RegisterSession(rt, store)
 
@@ -47,7 +47,7 @@ func TestSessionStore_GetMissing(t *testing.T) {
 
 func TestSessionStore_Keys(t *testing.T) {
 	store := NewSessionStore()
-	rt := slop.NewRuntime()
+	rt := NewRuntime()
 	defer rt.Close()
 	RegisterSession(rt, store)
 
@@ -72,7 +72,7 @@ func TestSessionStore_ConcurrentAccess(t *testing.T) {
 	for i := 0; i < goroutines; i++ {
 		go func(id int) {
 			defer wg.Done()
-			rt := slop.NewRuntime()
+			rt := NewRuntime()
 			defer rt.Close()
 			RegisterSession(rt, store)
 
@@ -101,14 +101,14 @@ func TestSessionStore_PersistsAcrossRuntimes(t *testing.T) {
 	store := NewSessionStore()
 
 	// First runtime writes
-	rt1 := slop.NewRuntime()
+	rt1 := NewRuntime()
 	RegisterSession(rt1, store)
 	_, err := rt1.Execute(`store_set("shared", "hello")`)
 	require.NoError(t, err)
 	rt1.Close()
 
 	// Second runtime reads
-	rt2 := slop.NewRuntime()
+	rt2 := NewRuntime()
 	RegisterSession(rt2, store)
 	result, err := rt2.Execute(`store_get("shared")`)
 	require.NoError(t, err)

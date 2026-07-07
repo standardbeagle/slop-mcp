@@ -104,7 +104,7 @@ func cmdMonitor(args []string) {
 	}
 
 	// Create SLOP runtime
-	rt := slop.NewRuntime()
+	rt := builtins.NewRuntime()
 	defer rt.Close()
 
 	// Register standard built-ins

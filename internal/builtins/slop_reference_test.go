@@ -7,7 +7,7 @@ import (
 )
 
 func TestRegisterSlopSearch(t *testing.T) {
-	rt := slop.NewRuntime()
+	rt := NewRuntime()
 	defer rt.Close()
 
 	RegisterSlopSearch(rt)
@@ -29,7 +29,7 @@ func TestRegisterSlopSearch(t *testing.T) {
 }
 
 func TestSlopSearch(t *testing.T) {
-	rt := slop.NewRuntime()
+	rt := NewRuntime()
 	defer rt.Close()
 	RegisterSlopSearch(rt)
 
@@ -80,7 +80,7 @@ func TestSlopSearch(t *testing.T) {
 }
 
 func TestSlopCategories(t *testing.T) {
-	rt := slop.NewRuntime()
+	rt := NewRuntime()
 	defer rt.Close()
 	RegisterSlopSearch(rt)
 
@@ -101,7 +101,7 @@ func TestSlopCategories(t *testing.T) {
 }
 
 func TestSlopHelp(t *testing.T) {
-	rt := slop.NewRuntime()
+	rt := NewRuntime()
 	defer rt.Close()
 	RegisterSlopSearch(rt)
 
@@ -128,7 +128,7 @@ func TestSlopHelp(t *testing.T) {
 }
 
 func TestSlopHelpNotFound(t *testing.T) {
-	rt := slop.NewRuntime()
+	rt := NewRuntime()
 	defer rt.Close()
 	RegisterSlopSearch(rt)
 

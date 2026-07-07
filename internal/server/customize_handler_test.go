@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
@@ -61,7 +62,6 @@ func TestCustomizeTools_UnknownAction(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unknown action")
 }
-
 
 func TestCustomizeTools_DefineCustom_Persists(t *testing.T) {
 	s := newCustomizeTestServer(t)
@@ -252,9 +252,9 @@ func TestCustomizeTools_SetOverride_MissingFields(t *testing.T) {
 	s.SetOverrideStoreForTesting(store)
 
 	cases := []CustomizeToolsInput{
-		{Action: "set_override", Tool: "tool_one", Description: "x"},          // missing mcp
-		{Action: "set_override", MCP: "mock", Description: "x"},               // missing tool
-		{Action: "set_override", MCP: "mock", Tool: "tool_one"},                // missing description
+		{Action: "set_override", Tool: "tool_one", Description: "x"}, // missing mcp
+		{Action: "set_override", MCP: "mock", Description: "x"},      // missing tool
+		{Action: "set_override", MCP: "mock", Tool: "tool_one"},      // missing description
 	}
 	for _, in := range cases {
 		_, _, err := s.handleCustomizeTools(context.Background(), nil, in)
@@ -457,4 +457,86 @@ func TestCustomizeTools_WrapperUnmarshal(t *testing.T) {
 	result, err := s.wrapCustomizeTools(context.Background(), req)
 	require.NoError(t, err)
 	require.False(t, result.IsError, "expected non-error result")
+}
+
+// newListNoConnectServer builds a server with an override store and one MCP
+// configured with a marker command: if any list action eagerly connects it,
+// the marker file appears.
+func newListNoConnectServer(t *testing.T) (*Server, string) {
+	t.Helper()
+	s := newCustomizeTestServer(t)
+	store, err := overrides.OpenStore(overrides.StoreOptions{UserRoot: t.TempDir()})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	s.SetOverrideStoreForTesting(store)
+
+	cfg, markerPath := markerMCPConfig(t, "ghost")
+	s.registry.SetConfigured(cfg)
+	return s, markerPath
+}
+
+// TestCustomizeTools_ListOverrides_UnknownMCP_NoConnect: listing overrides for
+// an MCP that is neither connected nor cached must not trigger a connection
+// and must honestly report stale status as unknown.
+func TestCustomizeTools_ListOverrides_UnknownMCP_NoConnect(t *testing.T) {
+	s, markerPath := newListNoConnectServer(t)
+
+	require.NoError(t, s.overrideStore.SetOverride(overrides.ScopeUser, "ghost.some_tool", overrides.OverrideEntry{
+		Description: "custom desc",
+		SourceHash:  "deadbeef",
+	}))
+
+	_, out, err := s.handleCustomizeTools(context.Background(), nil, CustomizeToolsInput{Action: "list_overrides"})
+	require.NoError(t, err)
+	require.Len(t, out.Entries, 1)
+	require.False(t, out.Entries[0].Stale, "unknown upstream must not be reported stale")
+	require.Equal(t, "unknown", out.Entries[0].StaleStatus)
+
+	_, statErr := os.Stat(markerPath)
+	require.True(t, os.IsNotExist(statErr), "list_overrides must not connect MCPs")
+}
+
+// TestCustomizeTools_ListOverrides_IndexedMCP_StillDetectsStale: stale
+// detection keeps working from the index without connecting.
+func TestCustomizeTools_ListOverrides_IndexedMCP_StillDetectsStale(t *testing.T) {
+	s, _ := newListNoConnectServer(t)
+
+	require.NoError(t, s.overrideStore.SetOverride(overrides.ScopeUser, "mock.tool_one", overrides.OverrideEntry{
+		Description: "custom desc",
+		SourceHash:  "stale-hash-that-wont-match",
+	}))
+
+	_, out, err := s.handleCustomizeTools(context.Background(), nil, CustomizeToolsInput{Action: "list_overrides"})
+	require.NoError(t, err)
+	require.Len(t, out.Entries, 1)
+	require.True(t, out.Entries[0].Stale)
+	require.Empty(t, out.Entries[0].StaleStatus)
+	require.NotNil(t, out.Entries[0].StaleSource)
+}
+
+// TestCustomizeTools_ListCustom_UnknownDeps_NoConnect: listing custom tools
+// with dependencies on unavailable MCPs must not connect them; the deps are
+// reported as unknown instead.
+func TestCustomizeTools_ListCustom_UnknownDeps_NoConnect(t *testing.T) {
+	s, markerPath := newListNoConnectServer(t)
+
+	require.NoError(t, s.overrideStore.SetCustom(overrides.ScopeUser, "combo", overrides.CustomTool{
+		Description: "combined tool",
+		InputSchema: map[string]any{"type": "object"},
+		Body:        `ghost.some_tool()`,
+		DependsOn: []overrides.Dependency{
+			{MCP: "ghost", Tool: "some_tool", Hash: "deadbeef"},
+		},
+	}))
+
+	_, out, err := s.handleCustomizeTools(context.Background(), nil, CustomizeToolsInput{Action: "list_custom"})
+	require.NoError(t, err)
+	require.Len(t, out.CustomEntries, 1)
+	entry := out.CustomEntries[0]
+	require.False(t, entry.Stale, "unknown deps must not be reported stale")
+	require.Empty(t, entry.StaleDeps)
+	require.Equal(t, []string{"ghost.some_tool"}, entry.UnknownDeps)
+
+	_, statErr := os.Stat(markerPath)
+	require.True(t, os.IsNotExist(statErr), "list_custom must not connect MCPs")
 }

@@ -7,7 +7,6 @@ import (
 	"math"
 
 	"github.com/standardbeagle/slop-mcp/internal/builtins"
-	"github.com/standardbeagle/slop-mcp/internal/cli"
 	"github.com/standardbeagle/slop-mcp/internal/overrides"
 	"github.com/standardbeagle/slop/pkg/slop"
 )
@@ -119,46 +118,9 @@ func (s *Server) executeCustomTool(ctx context.Context, ct overrides.CustomTool,
 		return nil, fmt.Errorf("args: %w", err)
 	}
 
-	rt := slop.NewRuntime()
+	// SLOP runtime with lazy, registry-backed MCP services (see newSlopRuntime).
+	rt := s.newSlopRuntime(ctx)
 	defer rt.Close()
-
-	// Register built-ins matching handleRunSlop.
-	builtins.RegisterCrypto(rt)
-	builtins.RegisterSlopSearch(rt)
-	builtins.RegisterJWT(rt)
-	builtins.RegisterTemplate(rt)
-	if s.sessionStore != nil {
-		builtins.RegisterSession(rt, s.sessionStore)
-	}
-	if s.memoryStore != nil {
-		builtins.RegisterMemory(rt, s.memoryStore)
-	}
-
-	// Connect MCPs.
-	for _, cfg := range s.registry.GetConfigs() {
-		transportType := cfg.Type
-		if transportType == "stdio" {
-			transportType = "command"
-		}
-		slopCfg := slop.MCPConfig{
-			Name:    cfg.Name,
-			Type:    transportType,
-			Command: cfg.Command,
-			Args:    cfg.Args,
-			Env:     mapToSlice(cfg.Env),
-			URL:     cfg.URL,
-			Headers: cfg.Headers,
-		}
-		if err := rt.ConnectMCP(ctx, slopCfg); err != nil {
-			s.logger.Debug("custom_tool: failed to connect MCP", "mcp", cfg.Name, "err", err)
-		}
-	}
-
-	// Register CLI tools.
-	if s.cliRegistry.Count() > 0 {
-		cliService := cli.NewSlopService(ctx, s.cliRegistry)
-		rt.RegisterExternalService("cli", cliService)
-	}
 
 	// Bind `args` (full params map) and shorthand per-key bindings for non-reserved names.
 	globals := rt.Context().Globals

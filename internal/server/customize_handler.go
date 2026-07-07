@@ -57,6 +57,9 @@ type customToolEntry struct {
 	DependsOn []overrides.Dependency `json:"depends_on,omitempty"`
 	Stale     bool                 `json:"stale,omitempty"`
 	StaleDeps []staleDep           `json:"stale_deps,omitempty"`
+	// UnknownDeps lists "mcp.tool" dependencies whose staleness could not be
+	// determined because the MCP is neither connected nor cached.
+	UnknownDeps []string `json:"unknown_deps,omitempty"`
 }
 
 // CustomizeToolsInput is the input for the customize_tools tool.
@@ -85,6 +88,7 @@ type customizeOverrideEntry struct {
 	Scope       string            `json:"scope,omitempty"`
 	Hash        string            `json:"hash,omitempty"`
 	Stale       bool              `json:"stale,omitempty"`
+	StaleStatus string            `json:"stale_status,omitempty"`
 	StaleSource map[string]any    `json:"stale_source,omitempty"`
 }
 
@@ -214,7 +218,7 @@ func (s *Server) customizeRemoveOverride(_ context.Context, in CustomizeToolsInp
 	return nil, out, nil
 }
 
-func (s *Server) customizeListOverrides(ctx context.Context, in CustomizeToolsInput) (*mcp.CallToolResult, customizeToolsOutput, error) {
+func (s *Server) customizeListOverrides(_ context.Context, in CustomizeToolsInput) (*mcp.CallToolResult, customizeToolsOutput, error) {
 	all := s.overrideStore.ListOverrides()
 
 	type flatEntry struct {
@@ -245,10 +249,14 @@ func (s *Server) customizeListOverrides(ctx context.Context, in CustomizeToolsIn
 			Hash:        f.e.SourceHash,
 		}
 
-		// Always compute stale status so callers get current information.
-		stale, upstreamDesc, upstreamParams := s.isStale(ctx, f.key, f.e.SourceHash)
-		ce.Stale = stale
-		if stale {
+		// Compute stale status from already-indexed tool info only; listing
+		// must not fan out connections to every referenced MCP.
+		status, upstreamDesc, upstreamParams := s.staleStatus(f.key, f.e.SourceHash)
+		ce.Stale = status == staleStatusStale
+		if status == staleStatusUnknown {
+			ce.StaleStatus = staleStatusUnknown
+		}
+		if ce.Stale {
 			ss := map[string]any{"description": upstreamDesc}
 			if upstreamParams != nil {
 				ss["params"] = upstreamParams
@@ -286,25 +294,35 @@ func (s *Server) upstreamToolInfo(mcpName, toolName string) (string, map[string]
 	return "", nil, fmt.Errorf("tool %q not found in MCP %q", toolName, mcpName)
 }
 
-// isStale computes whether the stored hash differs from the current upstream hash.
-// Returns stale flag plus upstream description and params for stale_source.
-func (s *Server) isStale(ctx context.Context, key, storedHash string) (bool, string, map[string]string) {
+// Stale statuses reported by list actions. Listing never triggers MCP
+// connections: when the tool is not in the index (MCP neither connected nor
+// cached), staleness is honestly reported as unknown instead of blocking on a
+// connection fan-out across every referenced MCP.
+const (
+	staleStatusFresh   = "fresh"
+	staleStatusStale   = "stale"
+	staleStatusUnknown = "unknown"
+)
+
+// staleStatus compares the stored hash against the current upstream hash using
+// only already-indexed tool info (connected or cached MCPs). Returns the
+// status plus upstream description and params for stale_source when stale.
+func (s *Server) staleStatus(key, storedHash string) (string, string, map[string]string) {
 	dot := strings.LastIndex(key, ".")
 	if dot < 0 {
-		return false, "", nil
+		return staleStatusUnknown, "", nil
 	}
 	mcpName := key[:dot]
 	toolName := key[dot+1:]
 
-	// Best-effort connect; if we can't, report not-stale rather than erroring.
-	_ = s.registry.EnsureConnected(ctx, mcpName)
-
 	upstreamDesc, upstreamParams, err := s.upstreamToolInfo(mcpName, toolName)
 	if err != nil {
-		return false, "", nil
+		return staleStatusUnknown, "", nil
 	}
-	currentHash := overrides.ComputeHash(upstreamDesc, upstreamParams)
-	return currentHash != storedHash, upstreamDesc, upstreamParams
+	if overrides.ComputeHash(upstreamDesc, upstreamParams) != storedHash {
+		return staleStatusStale, upstreamDesc, upstreamParams
+	}
+	return staleStatusFresh, "", nil
 }
 
 func (s *Server) customizeDefineCustom(_ context.Context, in CustomizeToolsInput) (*mcp.CallToolResult, customizeToolsOutput, error) {
@@ -439,7 +457,7 @@ func (s *Server) customizeRemoveCustom(in CustomizeToolsInput) (*mcp.CallToolRes
 	return nil, out, nil
 }
 
-func (s *Server) customizeListCustom(ctx context.Context, in CustomizeToolsInput) (*mcp.CallToolResult, customizeToolsOutput, error) {
+func (s *Server) customizeListCustom(_ context.Context, in CustomizeToolsInput) (*mcp.CallToolResult, customizeToolsOutput, error) {
 	all := s.overrideStore.ListCustom()
 
 	var entries []customToolEntry
@@ -461,12 +479,16 @@ func (s *Server) customizeListCustom(ctx context.Context, in CustomizeToolsInput
 				DependsOn:   ct.DependsOn,
 			}
 
+			// Stale detection uses already-indexed tool info only; listing
+			// must not trigger a connection per dependency. Deps whose MCP is
+			// neither connected nor cached are reported as unknown.
 			if in.StaleOnly || len(ct.DependsOn) > 0 {
 				var staleDeps []staleDep
+				var unknownDeps []string
 				for _, dep := range ct.DependsOn {
-					_ = s.registry.EnsureConnected(ctx, dep.MCP)
 					upDesc, upParams, err := s.upstreamToolInfo(dep.MCP, dep.Tool)
 					if err != nil {
+						unknownDeps = append(unknownDeps, dep.MCP+"."+dep.Tool)
 						continue
 					}
 					cur := overrides.ComputeHash(upDesc, upParams)
@@ -483,6 +505,7 @@ func (s *Server) customizeListCustom(ctx context.Context, in CustomizeToolsInput
 					entry.Stale = true
 					entry.StaleDeps = staleDeps
 				}
+				entry.UnknownDeps = unknownDeps
 			}
 
 			if in.StaleOnly && !entry.Stale {

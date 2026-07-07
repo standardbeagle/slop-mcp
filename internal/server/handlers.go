@@ -17,7 +17,6 @@ import (
 	"github.com/standardbeagle/slop-mcp/internal/overrides"
 	"github.com/standardbeagle/slop-mcp/internal/recipes"
 	"github.com/standardbeagle/slop-mcp/internal/registry"
-	"github.com/standardbeagle/slop/pkg/slop"
 )
 
 // DefaultSearchLimit is the default maximum number of tools to return from search_tools.
@@ -291,53 +290,10 @@ func (s *Server) handleRunSlop(
 		script = string(data)
 	}
 
-	// Create SLOP runtime
-	rt := slop.NewRuntime()
+	// Create SLOP runtime with lazy, registry-backed MCP services: no MCP is
+	// connected unless the script actually calls one of its tools.
+	rt := s.newSlopRuntime(ctx)
 	defer rt.Close()
-
-	// Register built-in functions
-	builtins.RegisterCrypto(rt)
-	builtins.RegisterSlopSearch(rt)
-	builtins.RegisterJWT(rt)
-	builtins.RegisterTemplate(rt)
-
-	// Register thread-safe session store (overrides SLOP's default store_*)
-	if s.sessionStore != nil {
-		builtins.RegisterSession(rt, s.sessionStore)
-	}
-
-	// Register persistent memory functions
-	if s.memoryStore != nil {
-		builtins.RegisterMemory(rt, s.memoryStore)
-	}
-
-	// Connect all MCP services to the slop runtime
-	for _, cfg := range s.registry.GetConfigs() {
-		// Normalize type for SLOP runtime (slop uses "command", not "stdio")
-		transportType := cfg.Type
-		if transportType == "stdio" {
-			transportType = "command"
-		}
-		slopCfg := slop.MCPConfig{
-			Name:    cfg.Name,
-			Type:    transportType,
-			Command: cfg.Command,
-			Args:    cfg.Args,
-			Env:     mapToSlice(cfg.Env),
-			URL:     cfg.URL,
-			Headers: cfg.Headers,
-		}
-		if err := rt.ConnectMCP(ctx, slopCfg); err != nil {
-			// Debug level: script execution continues, error reflected if MCP is used
-			s.logger.Debug("failed to connect MCP to slop runtime", "mcp_name", cfg.Name, "error", err)
-		}
-	}
-
-	// Register CLI tools as a service (accessible as cli.tool_name() in scripts)
-	if s.cliRegistry.Count() > 0 {
-		cliService := cli.NewSlopService(ctx, s.cliRegistry)
-		rt.RegisterExternalService("cli", cliService)
-	}
 
 	// Execute script
 	result, err := rt.Execute(script)
@@ -539,7 +495,7 @@ func (s *Server) handleManageMCPs(
 			return nil, ManageMCPsOutput{}, fmt.Errorf("name is required for unregister action")
 		}
 
-		if err := s.registry.Disconnect(input.Name); err != nil {
+		if err := s.registry.Unregister(input.Name); err != nil {
 			return nil, ManageMCPsOutput{}, err
 		}
 
@@ -960,18 +916,6 @@ func (s *Server) findMCPConfig(name string) (*config.MCPConfig, error) {
 		return &cfg, nil
 	}
 	return nil, fmt.Errorf("MCP '%s' not found in config", name)
-}
-
-// mapToSlice converts a map to a slice of "key=value" strings.
-func mapToSlice(m map[string]string) []string {
-	if m == nil {
-		return nil
-	}
-	result := make([]string, 0, len(m))
-	for k, v := range m {
-		result = append(result, k+"="+v)
-	}
-	return result
 }
 
 // valueToAny converts any value to a JSON-serializable type.

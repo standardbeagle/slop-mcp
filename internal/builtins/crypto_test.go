@@ -9,7 +9,7 @@ import (
 )
 
 func TestRegisterCrypto(t *testing.T) {
-	rt := slop.NewRuntime()
+	rt := NewRuntime()
 	defer rt.Close()
 
 	RegisterCrypto(rt)
@@ -62,7 +62,7 @@ func TestCryptoPassword(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rt := slop.NewRuntime()
+			rt := NewRuntime()
 			defer rt.Close()
 			RegisterCrypto(rt)
 
@@ -76,7 +76,7 @@ func TestCryptoPassword(t *testing.T) {
 }
 
 func TestCryptoPassphrase(t *testing.T) {
-	rt := slop.NewRuntime()
+	rt := NewRuntime()
 	defer rt.Close()
 	RegisterCrypto(rt)
 
@@ -93,7 +93,7 @@ func TestCryptoPassphrase(t *testing.T) {
 }
 
 func TestCryptoEd25519Keygen(t *testing.T) {
-	rt := slop.NewRuntime()
+	rt := NewRuntime()
 	defer rt.Close()
 	RegisterCrypto(rt)
 
@@ -123,7 +123,7 @@ func TestCryptoEd25519Keygen(t *testing.T) {
 }
 
 func TestCryptoRSAKeygen(t *testing.T) {
-	rt := slop.NewRuntime()
+	rt := NewRuntime()
 	defer rt.Close()
 	RegisterCrypto(rt)
 
@@ -145,7 +145,7 @@ func TestCryptoRSAKeygen(t *testing.T) {
 }
 
 func TestCryptoSHA256(t *testing.T) {
-	rt := slop.NewRuntime()
+	rt := NewRuntime()
 	defer rt.Close()
 	RegisterCrypto(rt)
 
@@ -163,7 +163,7 @@ func TestCryptoSHA256(t *testing.T) {
 }
 
 func TestCryptoRandomBytes(t *testing.T) {
-	rt := slop.NewRuntime()
+	rt := NewRuntime()
 	defer rt.Close()
 	RegisterCrypto(rt)
 
@@ -186,7 +186,7 @@ func TestCryptoRandomBytes(t *testing.T) {
 }
 
 func TestCryptoBase64(t *testing.T) {
-	rt := slop.NewRuntime()
+	rt := NewRuntime()
 	defer rt.Close()
 	RegisterCrypto(rt)
 
@@ -214,7 +214,7 @@ func TestCryptoBase64(t *testing.T) {
 }
 
 func TestCryptoHex(t *testing.T) {
-	rt := slop.NewRuntime()
+	rt := NewRuntime()
 	defer rt.Close()
 	RegisterCrypto(rt)
 
@@ -242,7 +242,7 @@ func TestCryptoHex(t *testing.T) {
 }
 
 func TestCryptoHash(t *testing.T) {
-	rt := slop.NewRuntime()
+	rt := NewRuntime()
 	defer rt.Close()
 	RegisterCrypto(rt)
 
