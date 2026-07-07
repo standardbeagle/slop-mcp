@@ -50,6 +50,45 @@ func wellKnownURL(baseURL, wellKnownPath string) (string, error) {
 	return u.String(), nil
 }
 
+// authServerMetaURLs returns candidate metadata discovery URLs for an issuer,
+// in priority order:
+//  1. RFC 8414 path-insert form for oauth-authorization-server
+//  2. path-insert form for openid-configuration
+//  3. OIDC Discovery path-appended form (<issuer>/.well-known/openid-configuration),
+//     the standard location for path-bearing issuers such as Keycloak realms.
+//
+// When the issuer has no path, the appended form equals the insert form and is
+// deduplicated.
+func authServerMetaURLs(issuer string) ([]string, error) {
+	var urls []string
+	for _, wk := range []string{"/.well-known/oauth-authorization-server", "/.well-known/openid-configuration"} {
+		u, err := wellKnownURL(issuer, wk)
+		if err != nil {
+			return nil, err
+		}
+		urls = append(urls, u)
+	}
+
+	// Path-appended OIDC form.
+	u, err := url.Parse(issuer)
+	if err != nil {
+		return nil, err
+	}
+	u.Path = path.Join(u.Path, "/.well-known/openid-configuration")
+	u.RawPath = ""
+	u.RawQuery = ""
+	u.Fragment = ""
+	u.RawFragment = ""
+	appended := u.String()
+
+	for _, existing := range urls {
+		if existing == appended {
+			return urls, nil
+		}
+	}
+	return append(urls, appended), nil
+}
+
 // DiscoverAndAuth discovers OAuth configuration and initiates the auth flow.
 func (f *OAuthFlow) DiscoverAndAuth(ctx context.Context) (*AuthResult, error) {
 	// Step 1: Try to get protected resource metadata.
@@ -72,18 +111,18 @@ func (f *OAuthFlow) DiscoverAndAuth(ctx context.Context) (*AuthResult, error) {
 	}
 
 	// Step 2: Get authorization server metadata.
-	// Derive well-known metadata URLs from the issuer (auth server) URL, trying
-	// RFC 8414 (oauth-authorization-server) first, then OpenID Connect Discovery
-	// (openid-configuration). GetAuthServerMeta returns (nil, nil) on a 4xx
-	// response, so a nil result means "not found here" rather than a hard error.
+	// Derive well-known metadata URLs from the issuer (auth server) URL; see
+	// authServerMetaURLs for the candidate order. GetAuthServerMeta returns
+	// (nil, nil) on a 4xx response, so a nil result means "not found here"
+	// rather than a hard error.
 	authServerURL := prm.AuthorizationServers[0]
+	asmURLs, err := authServerMetaURLs(authServerURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid authorization server URL: %w", err)
+	}
 	var asm *oauthex.AuthServerMeta
 	var asmErrs []string
-	for _, wk := range []string{"/.well-known/oauth-authorization-server", "/.well-known/openid-configuration"} {
-		asmURL, err := wellKnownURL(authServerURL, wk)
-		if err != nil {
-			return nil, fmt.Errorf("invalid authorization server URL: %w", err)
-		}
+	for _, asmURL := range asmURLs {
 		asm, err = oauthex.GetAuthServerMeta(ctx, asmURL, authServerURL, nil)
 		if err != nil {
 			asmErrs = append(asmErrs, fmt.Sprintf("%s: %v", asmURL, err))
@@ -217,11 +256,29 @@ func (f *OAuthFlow) startCallbackServer() (string, <-chan callbackResult, func()
 		state := r.URL.Query().Get("state")
 		errParam := r.URL.Query().Get("error")
 
+		var res callbackResult
 		if errParam != "" {
 			errDesc := r.URL.Query().Get("error_description")
-			codeChan <- callbackResult{err: fmt.Errorf("%s: %s", errParam, errDesc)}
+			res = callbackResult{err: fmt.Errorf("%s: %s", errParam, errDesc)}
 		} else {
-			codeChan <- callbackResult{code: code, state: state}
+			res = callbackResult{code: code, state: state}
+		}
+
+		// Non-blocking send: a second callback (e.g. browser retry/refresh)
+		// must not block the handler forever while shutdown waits on it.
+		select {
+		case codeChan <- res:
+		default:
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(w, `<!DOCTYPE html>
+<html>
+<head><title>Already Processed</title></head>
+<body>
+<h1>Authorization Already Processed</h1>
+<p>This authorization response was already handled. You can close this window.</p>
+</body>
+</html>`)
+			return
 		}
 
 		w.Header().Set("Content-Type", "text/html")
@@ -394,6 +451,7 @@ func RefreshToken(ctx context.Context, token *MCPToken, tokenEndpoint string) (*
 		TokenType    string `json:"token_type"`
 		ExpiresIn    int    `json:"expires_in"`
 		RefreshToken string `json:"refresh_token"`
+		Scope        string `json:"scope"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
 		return nil, err
@@ -406,7 +464,11 @@ func RefreshToken(ctx context.Context, token *MCPToken, tokenEndpoint string) (*
 		ClientSecret:  token.ClientSecret,
 		AccessToken:   tokenResp.AccessToken,
 		TokenType:     tokenResp.TokenType,
+		Scope:         token.Scope,         // Preserve scope unless the response narrows it
 		TokenEndpoint: token.TokenEndpoint, // Preserve token endpoint
+	}
+	if tokenResp.Scope != "" {
+		newToken.Scope = tokenResp.Scope
 	}
 	// No expires_in means no known expiry: leave ExpiresAt as the zero time,
 	// which IsExpired treats as "never expires" (matches exchangeCode).

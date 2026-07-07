@@ -72,6 +72,53 @@ func TestWellKnownURL(t *testing.T) {
 }
 
 // =============================================================================
+// authServerMetaURLs Tests
+// =============================================================================
+
+func TestAuthServerMetaURLs(t *testing.T) {
+	testCases := []struct {
+		name   string
+		issuer string
+		want   []string
+	}{
+		{
+			name:   "no path deduplicates appended form",
+			issuer: "https://auth.example.com",
+			want: []string{
+				"https://auth.example.com/.well-known/oauth-authorization-server",
+				"https://auth.example.com/.well-known/openid-configuration",
+			},
+		},
+		{
+			name:   "path-bearing issuer adds OIDC appended form",
+			issuer: "https://keycloak.example.com/realms/myrealm",
+			want: []string{
+				"https://keycloak.example.com/.well-known/oauth-authorization-server/realms/myrealm",
+				"https://keycloak.example.com/.well-known/openid-configuration/realms/myrealm",
+				"https://keycloak.example.com/realms/myrealm/.well-known/openid-configuration",
+			},
+		},
+		{
+			name:   "port preserved",
+			issuer: "https://auth.example.com:8443/tenant",
+			want: []string{
+				"https://auth.example.com:8443/.well-known/oauth-authorization-server/tenant",
+				"https://auth.example.com:8443/.well-known/openid-configuration/tenant",
+				"https://auth.example.com:8443/tenant/.well-known/openid-configuration",
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := authServerMetaURLs(tc.issuer)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// =============================================================================
 // TokenStore GetToken/SetToken/DeleteToken Tests
 // =============================================================================
 

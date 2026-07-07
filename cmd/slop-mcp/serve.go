@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 
 	"github.com/standardbeagle/slop-mcp/internal/config"
@@ -18,10 +19,17 @@ func cmdServe(args []string) {
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--port", "-p":
-			if i+1 < len(args) {
-				_, _ = fmt.Sscanf(args[i+1], "%d", &port)
-				i++
+			if i+1 >= len(args) {
+				fmt.Fprintln(os.Stderr, "Error: --port requires a value")
+				os.Exit(1)
 			}
+			p, err := strconv.Atoi(args[i+1])
+			if err != nil || p <= 0 || p > 65535 {
+				fmt.Fprintf(os.Stderr, "Error: invalid --port value %q: expected a port number (1-65535)\n", args[i+1])
+				os.Exit(1)
+			}
+			port = p
+			i++
 		case "--help", "-h":
 			showHelp = true
 		}

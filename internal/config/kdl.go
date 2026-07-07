@@ -2,12 +2,16 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 
 	kdl "github.com/sblinch/kdl-go"
+
+	"github.com/standardbeagle/slop-mcp/internal/atomicfile"
 )
 
 const (
@@ -122,7 +126,7 @@ type ClaudeCodeSettings struct {
 
 // ClaudeCodeInstalledPlugins represents installed_plugins.json structure.
 type ClaudeCodeInstalledPlugins struct {
-	Version int                                    `json:"version"`
+	Version int                                   `json:"version"`
 	Plugins map[string][]ClaudeCodePluginInstance `json:"plugins"`
 }
 
@@ -329,25 +333,31 @@ func LoadLocalConfig(dir string) (*Config, error) {
 
 // GetMCP returns a specific MCP config from a file.
 // Handles both KDL and JSON (Claude Desktop) configs.
+// A missing file or missing MCP name returns (nil, nil); read and parse
+// errors are returned as errors.
 func GetMCP(path, name string) (*MCPConfig, error) {
-	// Try loading as KDL first
-	cfg, err := loadConfigFile(path, SourceProject)
-	if err == nil {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	// Try parsing as KDL first
+	cfg, kdlErr := ParseKDLConfig(string(data), SourceProject)
+	if kdlErr == nil {
 		if mcp, ok := cfg.MCPs[name]; ok {
 			mcp.Name = name
 			return &mcp, nil
 		}
-	}
-
-	// Try loading as JSON (Claude Desktop format)
-	data, err := os.ReadFile(path)
-	if err != nil {
 		return nil, nil
 	}
 
+	// Fall back to JSON (Claude Desktop format)
 	var jsonCfg JSONConfig
-	if err := json.Unmarshal(data, &jsonCfg); err != nil {
-		return nil, nil
+	if jsonErr := json.Unmarshal(data, &jsonCfg); jsonErr != nil {
+		return nil, fmt.Errorf("parse %s: not valid KDL (%v) or JSON (%v)", path, kdlErr, jsonErr)
 	}
 
 	if jmcp, ok := jsonCfg.MCPServers[name]; ok {
@@ -458,7 +468,11 @@ func RemoveMCPFromFile(path, name string) error {
 	return WriteConfigFile(path, cfg)
 }
 
-// WriteConfigFile writes a config to a KDL file.
+// WriteConfigFile writes a config to a KDL file atomically, with MCP blocks
+// sorted by name for deterministic output.
+//
+// Known limitation: the file is regenerated from the parsed config, so
+// comments and unrecognized nodes in an existing file are not preserved.
 func WriteConfigFile(path string, cfg *Config) error {
 	// Ensure directory exists
 	dir := filepath.Dir(path)
@@ -466,13 +480,19 @@ func WriteConfigFile(path string, cfg *Config) error {
 		return err
 	}
 
+	names := make([]string, 0, len(cfg.MCPs))
+	for name := range cfg.MCPs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
 	// Build KDL content
 	var content string
-	for _, mcp := range cfg.MCPs {
-		content += formatMCPBlock(mcp)
+	for _, name := range names {
+		content += formatMCPBlock(cfg.MCPs[name])
 	}
 
-	return os.WriteFile(path, []byte(content), 0644)
+	return atomicfile.WriteFile(path, []byte(content), 0644)
 }
 
 // kdlEscaper escapes characters that are significant inside KDL quoted
@@ -525,20 +545,30 @@ func formatMCPBlock(mcp MCPConfig) string {
 
 	if len(mcp.Env) > 0 {
 		result += "    env {\n"
-		for k, v := range mcp.Env {
-			result += "        " + kdlQuote(k) + " " + kdlQuote(v) + "\n"
+		for _, k := range sortedKeys(mcp.Env) {
+			result += "        " + kdlQuote(k) + " " + kdlQuote(mcp.Env[k]) + "\n"
 		}
 		result += "    }\n"
 	}
 
 	if len(mcp.Headers) > 0 {
 		result += "    headers {\n"
-		for k, v := range mcp.Headers {
-			result += "        " + kdlQuote(k) + " " + kdlQuote(v) + "\n"
+		for _, k := range sortedKeys(mcp.Headers) {
+			result += "        " + kdlQuote(k) + " " + kdlQuote(mcp.Headers[k]) + "\n"
 		}
 		result += "    }\n"
 	}
 
 	result += "}\n\n"
 	return result
+}
+
+// sortedKeys returns the map's keys in sorted order for deterministic output.
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }

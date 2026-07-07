@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/standardbeagle/slop-mcp/internal/atomicfile"
 	"github.com/standardbeagle/slop-mcp/internal/config"
 )
 
@@ -193,14 +194,9 @@ func (s *Store) saveUnlocked(cf *CacheFile) error {
 		return fmt.Errorf("marshal cache: %w", err)
 	}
 
-	// Atomic write: write to temp file, then rename
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
-		return fmt.Errorf("write cache temp file: %w", err)
-	}
-	if err := os.Rename(tmp, s.path); err != nil {
-		os.Remove(tmp) // best-effort cleanup
-		return fmt.Errorf("rename cache file: %w", err)
+	// Atomic write (unique temp file + rename)
+	if err := atomicfile.WriteFile(s.path, data, 0644); err != nil {
+		return fmt.Errorf("write cache file: %w", err)
 	}
 
 	return nil

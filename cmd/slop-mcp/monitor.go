@@ -21,7 +21,7 @@ func cmdMonitor(args []string) {
 	var scriptFile string
 	var inlineScript string
 	showHelp := false
-	timeout := 0
+	var timeout time.Duration
 
 	for i := 0; i < len(args); i++ {
 		switch {
@@ -29,9 +29,12 @@ func cmdMonitor(args []string) {
 			inlineScript = args[i+1]
 			i++
 		case strings.HasPrefix(args[i], "--timeout="):
-			var secs int
-			_, _ = fmt.Sscanf(args[i], "--timeout=%d", &secs)
-			timeout = secs
+			d, err := parseTimeoutValue(strings.TrimPrefix(args[i], "--timeout="))
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			timeout = d
 		case args[i] == "--help" || args[i] == "-h":
 			showHelp = true
 		case !strings.HasPrefix(args[i], "-"):
@@ -59,7 +62,7 @@ func cmdMonitor(args []string) {
 
 	if timeout > 0 {
 		var tcancel context.CancelFunc
-		ctx, tcancel = context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
+		ctx, tcancel = context.WithTimeout(ctx, timeout)
 		defer tcancel()
 	}
 
@@ -84,23 +87,12 @@ func cmdMonitor(args []string) {
 		script = string(data)
 	}
 
-	// Load merged config
+	// Load merged three-tier config (same path as serve)
 	cwd, _ := os.Getwd()
-	cfg := config.NewConfig()
-	if userCfg, err := config.LoadUserConfig(); err == nil {
-		for name, mcp := range userCfg.MCPs {
-			cfg.MCPs[name] = mcp
-		}
-	}
-	if projectCfg, err := config.LoadProjectConfig(cwd); err == nil {
-		for name, mcp := range projectCfg.MCPs {
-			cfg.MCPs[name] = mcp
-		}
-	}
-	if localCfg, err := config.LoadLocalConfig(cwd); err == nil {
-		for name, mcp := range localCfg.MCPs {
-			cfg.MCPs[name] = mcp
-		}
+	cfg, err := config.Load(cwd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
+		os.Exit(1)
 	}
 
 	// Create SLOP runtime
@@ -141,7 +133,7 @@ func cmdMonitor(args []string) {
 	}
 
 	// Execute the monitor script — print() goes to stdout for Monitor tool
-	_, err := rt.Execute(script)
+	_, err = rt.Execute(script)
 	if err != nil {
 		if ctx.Err() != nil {
 			return
@@ -168,7 +160,14 @@ func watchMessages(ctx context.Context) {
 		}
 
 		info, err := os.Stat(path)
-		if err != nil || info.Size() <= offset {
+		if err != nil {
+			continue
+		}
+		if info.Size() < offset {
+			// File was truncated externally; start over from the beginning.
+			offset = 0
+		}
+		if info.Size() == offset {
 			continue
 		}
 
@@ -243,7 +242,8 @@ Usage:
 
 Options:
   -e '<script>'        Execute inline script
-  --timeout=<secs>     Stop after N seconds (default: no timeout)
+  --timeout=<value>    Stop after the given time: seconds or duration like
+                       "30s", "5m" (default: no timeout)
   --help, -h           Show this help
 
 Built-in Functions (in addition to standard SLOP built-ins):

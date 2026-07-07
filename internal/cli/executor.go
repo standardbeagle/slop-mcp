@@ -102,8 +102,14 @@ func (e *Executor) Execute(ctx context.Context, tool *ToolConfig, params map[str
 		}
 	}
 
-	// Check for failure conditions
-	if !tool.AllowFail && result.ExitCode != 0 {
+	// A deadline hit means the process was killed by the timeout: report that
+	// explicitly instead of a bare "exit code -1".
+	if err != nil && execCtx.Err() == context.DeadlineExceeded {
+		result.Error = fmt.Sprintf("command timed out after %s", timeout)
+	}
+
+	// Check for failure conditions (keep a more specific error if already set)
+	if !tool.AllowFail && result.ExitCode != 0 && result.Error == "" {
 		result.Error = fmt.Sprintf("command failed with exit code %d", result.ExitCode)
 	}
 
@@ -175,9 +181,17 @@ func (e *Executor) buildArgs(tool *ToolConfig, params map[string]any) ([]string,
 
 		// Handle array type
 		if arg.Type == "array" {
-			args = append(args, parseArrayValue(val)...)
+			vals := parseArrayValue(val)
+			if err := validateEnum("argument", arg.Name, arg.Enum, vals...); err != nil {
+				return nil, err
+			}
+			args = append(args, vals...)
 		} else {
-			args = append(args, fmt.Sprintf("%v", val))
+			sVal := fmt.Sprintf("%v", val)
+			if err := validateEnum("argument", arg.Name, arg.Enum, sVal); err != nil {
+				return nil, err
+			}
+			args = append(args, sVal)
 		}
 	}
 
@@ -211,6 +225,9 @@ func (e *Executor) buildArgs(tool *ToolConfig, params map[string]any) ([]string,
 
 		case "array":
 			arrVals := parseArrayValue(val)
+			if err := validateEnum("flag", flag.Name, flag.Enum, arrVals...); err != nil {
+				return nil, err
+			}
 			if flag.Repeat {
 				// Repeat flag for each value: -t js -t py
 				for _, v := range arrVals {
@@ -227,19 +244,49 @@ func (e *Executor) buildArgs(tool *ToolConfig, params map[string]any) ([]string,
 
 		case "number":
 			// Handle number formatting
+			var sVal string
 			switch v := val.(type) {
 			case float64:
-				args = append(args, flagStr, strconv.FormatFloat(v, 'f', -1, 64))
+				sVal = strconv.FormatFloat(v, 'f', -1, 64)
 			case int:
-				args = append(args, flagStr, strconv.Itoa(v))
+				sVal = strconv.Itoa(v)
 			default:
-				args = append(args, flagStr, fmt.Sprintf("%v", val))
+				sVal = fmt.Sprintf("%v", val)
 			}
+			if err := validateEnum("flag", flag.Name, flag.Enum, sVal); err != nil {
+				return nil, err
+			}
+			args = append(args, flagStr, sVal)
 
 		default: // string
-			args = append(args, flagStr, fmt.Sprintf("%v", val))
+			sVal := fmt.Sprintf("%v", val)
+			if err := validateEnum("flag", flag.Name, flag.Enum, sVal); err != nil {
+				return nil, err
+			}
+			args = append(args, flagStr, sVal)
 		}
 	}
 
 	return args, nil
+}
+
+// validateEnum returns a parameter error when any value is outside the
+// declared enum. An empty enum means unrestricted.
+func validateEnum(kind, name string, enum []string, values ...string) error {
+	if len(enum) == 0 {
+		return nil
+	}
+	for _, v := range values {
+		ok := false
+		for _, e := range enum {
+			if v == e {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return fmt.Errorf("invalid value %q for %s '%s': must be one of: %s", v, kind, name, strings.Join(enum, ", "))
+		}
+	}
+	return nil
 }

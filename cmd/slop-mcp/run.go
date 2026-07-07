@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -32,9 +33,12 @@ func cmdRun(args []string) {
 		case args[i] == "--json":
 			outputJSON = true
 		case strings.HasPrefix(args[i], "--timeout="):
-			var secs int
-			_, _ = fmt.Sscanf(args[i], "--timeout=%d", &secs)
-			timeout = time.Duration(secs) * time.Second
+			d, err := parseTimeoutValue(strings.TrimPrefix(args[i], "--timeout="))
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			timeout = d
 		case args[i] == "--help" || args[i] == "-h":
 			printRunUsage()
 			return
@@ -64,25 +68,12 @@ func cmdRun(args []string) {
 		script = string(data)
 	}
 
-	// Load merged config
+	// Load merged three-tier config (same path as serve)
 	cwd, _ := os.Getwd()
-	cfg := config.NewConfig()
-
-	// Load configs in order (user, project, local)
-	if userCfg, err := config.LoadUserConfig(); err == nil {
-		for name, mcp := range userCfg.MCPs {
-			cfg.MCPs[name] = mcp
-		}
-	}
-	if projectCfg, err := config.LoadProjectConfig(cwd); err == nil {
-		for name, mcp := range projectCfg.MCPs {
-			cfg.MCPs[name] = mcp
-		}
-	}
-	if localCfg, err := config.LoadLocalConfig(cwd); err == nil {
-		for name, mcp := range localCfg.MCPs {
-			cfg.MCPs[name] = mcp
-		}
+	cfg, err := config.Load(cwd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
+		os.Exit(1)
 	}
 
 	// Create SLOP runtime
@@ -158,6 +149,22 @@ func cmdRun(args []string) {
 	}
 }
 
+// parseTimeoutValue parses a --timeout value: either a Go duration string
+// ("30s", "5m") or a bare number of seconds ("300").
+func parseTimeoutValue(s string) (time.Duration, error) {
+	if d, err := time.ParseDuration(s); err == nil {
+		if d <= 0 {
+			return 0, fmt.Errorf("--timeout must be positive, got %q", s)
+		}
+		return d, nil
+	}
+	secs, err := strconv.Atoi(s)
+	if err != nil || secs <= 0 {
+		return 0, fmt.Errorf("invalid --timeout value %q: expected seconds (e.g. 300) or a duration (e.g. \"30s\", \"5m\")", s)
+	}
+	return time.Duration(secs) * time.Second, nil
+}
+
 func mapToSlice(m map[string]string) []string {
 	result := make([]string, 0, len(m))
 	for k, v := range m {
@@ -224,7 +231,8 @@ Usage:
 Options:
   -e '<script>'      Execute inline script
   --json             Output as JSON
-  --timeout=<secs>   Execution timeout in seconds (default: 300)
+  --timeout=<value>  Execution timeout: seconds or duration like "30s", "5m"
+                     (default: 300)
   --help, -h         Show this help
 
 This command executes SLOP scripts with access to all configured MCPs.

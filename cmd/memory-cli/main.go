@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/standardbeagle/slop-mcp/internal/atomicfile"
 	"github.com/standardbeagle/slop-mcp/internal/builtins"
 	"github.com/standardbeagle/slop-mcp/internal/overrides"
 )
@@ -281,13 +282,8 @@ func saveBank(path string, bank *Bank) error {
 		return err
 	}
 
-	// Write to temp file first, then rename (atomic)
-	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
-		return err
-	}
-
-	return os.Rename(tmpPath, path)
+	// Atomic write (unique temp file + rename)
+	return atomicfile.WriteFile(path, data, 0644)
 }
 
 func newBank() *Bank {

@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/standardbeagle/slop-mcp/internal/atomicfile"
 )
 
 // TokenStore manages OAuth tokens for MCP servers.
@@ -108,16 +110,8 @@ func (s *TokenStore) saveUnlocked(tf *TokenFile) error {
 		return err
 	}
 
-	// Atomic write with restricted permissions: temp file, then rename.
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0600); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, s.path); err != nil {
-		os.Remove(tmp) // best-effort cleanup
-		return err
-	}
-	return nil
+	// Atomic write with restricted permissions (unique temp file + rename).
+	return atomicfile.WriteFile(s.path, data, 0600)
 }
 
 // GetToken retrieves a token for an MCP server.

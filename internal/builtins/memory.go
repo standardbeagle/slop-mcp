@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/standardbeagle/slop-mcp/internal/atomicfile"
 	"github.com/standardbeagle/slop-mcp/internal/overrides"
 	"github.com/standardbeagle/slop/pkg/slop"
 )
@@ -117,12 +118,8 @@ func (m *MemoryStore) saveBank(bank string, b *memoryBank) error {
 	if err != nil {
 		return err
 	}
-	// Atomic write: write to temp file then rename
-	tmpPath := m.bankPath(bank) + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
-		return err
-	}
-	return os.Rename(tmpPath, m.bankPath(bank))
+	// Atomic write (unique temp file + rename)
+	return atomicfile.WriteFile(m.bankPath(bank), data, 0644)
 }
 
 // RegisterMemory registers persistent memory functions with the SLOP runtime.

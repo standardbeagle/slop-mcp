@@ -22,7 +22,8 @@ func Merge(user, project *Config) *Config {
 	return merged
 }
 
-// Load loads and merges user and project configs.
+// Load loads and merges the three-tier configs in precedence order:
+// local (.slop-mcp.local.kdl) > project (.slop-mcp.kdl) > user config.
 func Load(projectDir string) (*Config, error) {
 	user, err := LoadUserConfig()
 	if err != nil {
@@ -34,5 +35,10 @@ func Load(projectDir string) (*Config, error) {
 		return nil, err
 	}
 
-	return Merge(user, project), nil
+	local, err := LoadLocalConfig(projectDir)
+	if err != nil {
+		return nil, err
+	}
+
+	return Merge(Merge(user, project), local), nil
 }

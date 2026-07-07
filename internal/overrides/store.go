@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/standardbeagle/slop-mcp/internal/atomicfile"
 )
 
 // StoreOptions configures the on-disk roots. Empty values mean the scope is
@@ -25,6 +27,11 @@ type Store struct {
 	mu        sync.RWMutex
 	overrides map[Scope]map[string]OverrideEntry
 	custom    map[Scope]map[string]CustomTool
+	// touched tracks keys this process has written or deleted, keyed by
+	// "<scope>:<bank>". On flush, the on-disk file is re-read and only
+	// touched keys are overwritten (or deleted), so entries written by other
+	// processes survive. Guarded by mu.
+	touched map[string]map[string]bool
 
 	fmu      sync.Mutex
 	flushers map[string]*flusher // keyed by "<scope>:<bank>"
@@ -36,6 +43,7 @@ func OpenStore(opts StoreOptions) (*Store, error) {
 		opts:      opts,
 		overrides: map[Scope]map[string]OverrideEntry{},
 		custom:    map[Scope]map[string]CustomTool{},
+		touched:   map[string]map[string]bool{},
 		flushers:  map[string]*flusher{},
 	}
 	for _, scope := range AllScopes {
@@ -121,6 +129,7 @@ func (s *Store) SetOverride(scope Scope, key string, e OverrideEntry) error {
 		s.overrides[scope] = map[string]OverrideEntry{}
 	}
 	s.overrides[scope][key] = e
+	s.markTouched(scope, BankOverrides, key)
 	s.mu.Unlock()
 
 	s.scheduleFlush(scope, BankOverrides)
@@ -169,6 +178,9 @@ func (s *Store) RemoveOverride(scope Scope, key string) (int, error) {
 			}
 		}
 	}
+	for sc := range touched {
+		s.markTouched(sc, BankOverrides, key)
+	}
 	s.mu.Unlock()
 
 	for sc := range touched {
@@ -190,6 +202,7 @@ func (s *Store) SetCustom(scope Scope, name string, ct CustomTool) error {
 		s.custom[scope] = map[string]CustomTool{}
 	}
 	s.custom[scope][name] = ct
+	s.markTouched(scope, BankCustomTools, name)
 	s.mu.Unlock()
 
 	s.scheduleFlush(scope, BankCustomTools)
@@ -236,6 +249,9 @@ func (s *Store) RemoveCustom(scope Scope, name string) (int, error) {
 				touched[scope] = true
 			}
 		}
+	}
+	for sc := range touched {
+		s.markTouched(sc, BankCustomTools, name)
 	}
 	s.mu.Unlock()
 
@@ -304,32 +320,82 @@ func (s *Store) scheduleFlush(scope Scope, bank string) {
 	f.markDirty()
 }
 
-// writeBank snapshots the bank under a brief read lock, then writes without holding any lock.
+// markTouched records that this process modified (wrote or deleted) a key in
+// the given scope+bank. Caller must hold s.mu.
+func (s *Store) markTouched(scope Scope, bank, key string) {
+	fkey := string(scope) + ":" + bank
+	if s.touched[fkey] == nil {
+		s.touched[fkey] = map[string]bool{}
+	}
+	s.touched[fkey][key] = true
+}
+
+// writeBank snapshots the bank under a brief read lock, then writes without
+// holding any lock. Before writing, the current on-disk file is re-read and
+// merged: keys touched by this process win (including deletions); untouched
+// keys keep their on-disk value, so entries written by other processes since
+// startup survive the flush. A missing or unreadable file falls back to the
+// in-memory snapshot alone.
+//
+// Known cross-process limitation: entries written by other processes become
+// visible on disk but are not folded into this process's in-memory view.
 func (s *Store) writeBank(scope Scope, bank string) error {
 	root := s.rootFor(scope)
 	if root == "" {
 		return errors.New("scope root not set")
 	}
+	path := filepath.Join(root, bank+".json")
 
 	var data []byte
 	var err error
 
 	s.mu.RLock()
+	fkey := string(scope) + ":" + bank
+	touched := make(map[string]bool, len(s.touched[fkey]))
+	for k := range s.touched[fkey] {
+		touched[k] = true
+	}
 	switch bank {
 	case BankOverrides:
-		cp := make(map[string]OverrideEntry, len(s.overrides[scope]))
+		mem := make(map[string]OverrideEntry, len(s.overrides[scope]))
 		for k, v := range s.overrides[scope] {
-			cp[k] = v
+			mem[k] = v
 		}
 		s.mu.RUnlock()
-		data, err = json.MarshalIndent(cp, "", "  ")
+
+		merged := map[string]OverrideEntry{}
+		if err := readOverrides(path, merged); err != nil {
+			merged = mem
+		} else {
+			for k := range touched {
+				if v, ok := mem[k]; ok {
+					merged[k] = v
+				} else {
+					delete(merged, k)
+				}
+			}
+		}
+		data, err = json.MarshalIndent(merged, "", "  ")
 	case BankCustomTools:
-		cp := make(map[string]CustomTool, len(s.custom[scope]))
+		mem := make(map[string]CustomTool, len(s.custom[scope]))
 		for k, v := range s.custom[scope] {
-			cp[k] = v
+			mem[k] = v
 		}
 		s.mu.RUnlock()
-		data, err = json.MarshalIndent(cp, "", "  ")
+
+		merged := map[string]CustomTool{}
+		if err := readCustom(path, merged); err != nil {
+			merged = mem
+		} else {
+			for k := range touched {
+				if v, ok := mem[k]; ok {
+					merged[k] = v
+				} else {
+					delete(merged, k)
+				}
+			}
+		}
+		data, err = json.MarshalIndent(merged, "", "  ")
 	default:
 		s.mu.RUnlock()
 		return fmt.Errorf("unknown bank: %s", bank)
@@ -341,10 +407,5 @@ func (s *Store) writeBank(scope Scope, bank string) error {
 	if err := os.MkdirAll(root, 0755); err != nil {
 		return err
 	}
-	path := filepath.Join(root, bank+".json")
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return atomicfile.WriteFile(path, data, 0644)
 }
