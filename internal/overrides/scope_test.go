@@ -39,11 +39,20 @@ func TestFindRepoRoot_SlopMcpMarker(t *testing.T) {
 }
 
 func TestFindRepoRoot_NotFound(t *testing.T) {
-	// macOS resolves t.TempDir() under /private/var/folders/..., which has no
-	// .git ancestor. Linux CI typically puts TempDir under /tmp, also no .git
-	// ancestor. Guard: if the implementation walks to / without finding a
-	// marker, it must return ErrNoRepo.
+	// Verifies findRepoRoot returns ErrNoRepo when it walks to / without
+	// finding a marker. TempDir ancestors are outside our control (e.g. a
+	// stray /tmp/.git), so skip rather than fail if one carries a marker.
 	dir := t.TempDir()
+	for d := filepath.Dir(dir); ; d = filepath.Dir(d) {
+		for _, m := range []string{".git", ".slop-mcp.kdl"} {
+			if _, err := os.Stat(filepath.Join(d, m)); err == nil {
+				t.Skipf("ancestor %s contains %s; environment not hermetic", d, m)
+			}
+		}
+		if d == filepath.Dir(d) {
+			break
+		}
+	}
 	if _, err := findRepoRoot(dir); err == nil {
 		t.Error("expected error when no repo marker is present")
 	}
