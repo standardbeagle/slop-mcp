@@ -15,6 +15,63 @@ import (
 )
 
 // =============================================================================
+// wellKnownURL Tests
+// =============================================================================
+
+func TestWellKnownURL(t *testing.T) {
+	const prm = "/.well-known/oauth-protected-resource"
+	testCases := []struct {
+		name    string
+		baseURL string
+		want    string
+	}{
+		{
+			name:    "no path",
+			baseURL: "https://example.com",
+			want:    "https://example.com/.well-known/oauth-protected-resource",
+		},
+		{
+			name:    "with path",
+			baseURL: "https://example.com/mcp",
+			want:    "https://example.com/.well-known/oauth-protected-resource/mcp",
+		},
+		{
+			name:    "with port",
+			baseURL: "https://example.com:8443/mcp",
+			want:    "https://example.com:8443/.well-known/oauth-protected-resource/mcp",
+		},
+		{
+			name:    "trailing slash preserved",
+			baseURL: "https://example.com/mcp/",
+			want:    "https://example.com/.well-known/oauth-protected-resource/mcp/",
+		},
+		{
+			name:    "query stripped",
+			baseURL: "https://example.com/mcp?tenant=abc",
+			want:    "https://example.com/.well-known/oauth-protected-resource/mcp",
+		},
+		{
+			name:    "fragment stripped",
+			baseURL: "https://example.com/mcp#section",
+			want:    "https://example.com/.well-known/oauth-protected-resource/mcp",
+		},
+		{
+			name:    "query and fragment stripped, port kept",
+			baseURL: "http://127.0.0.1:3001/mcp?x=1#frag",
+			want:    "http://127.0.0.1:3001/.well-known/oauth-protected-resource/mcp",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := wellKnownURL(tc.baseURL, prm)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// =============================================================================
 // TokenStore GetToken/SetToken/DeleteToken Tests
 // =============================================================================
 

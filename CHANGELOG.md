@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Upgraded `modelcontextprotocol/go-sdk` from v1.2.0 to v1.6.1**. This raises the minimum Go toolchain to 1.25.0 (the SDK's new floor). The OAuth discovery flow was migrated to the SDK's revised `oauthex` API: `GetProtectedResourceMetadataFromID` is gone, so the RFC 9728 / RFC 8414 well-known metadata URLs are now derived locally and passed to `GetProtectedResourceMetadata`/`GetAuthServerMeta` alongside the resource/issuer for validation.
+
 ## [0.14.3] - 2026-05-31
 
 ### Fixed

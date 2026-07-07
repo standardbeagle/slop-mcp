@@ -15,207 +15,109 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
+	"path"
 	"runtime"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/oauthex"
 	"golang.org/x/oauth2"
 )
 
-// TokenStore manages OAuth tokens for MCP servers.
-type TokenStore struct {
-	path string
-	mu   sync.RWMutex
-}
-
-// MCPToken represents stored OAuth tokens for an MCP server.
-type MCPToken struct {
-	ServerName    string    `json:"server_name"`
-	ServerURL     string    `json:"server_url"`
-	ClientID      string    `json:"client_id"`
-	ClientSecret  string    `json:"client_secret,omitempty"`
-	AccessToken   string    `json:"access_token"`
-	RefreshToken  string    `json:"refresh_token,omitempty"`
-	TokenType     string    `json:"token_type"`
-	ExpiresAt     time.Time `json:"expires_at,omitempty"`
-	Scope         string    `json:"scope,omitempty"`
-	TokenEndpoint string    `json:"token_endpoint,omitempty"` // For refresh token flow
-}
-
-// TokenFile is the structure of the auth token file.
-type TokenFile struct {
-	Version int                  `json:"version"`
-	Tokens  map[string]*MCPToken `json:"tokens"` // keyed by server name
-}
-
-// NewTokenStore creates a new token store.
-func NewTokenStore() *TokenStore {
-	configDir, err := os.UserConfigDir()
+// wellKnownURL derives a metadata discovery URL by inserting the given
+// well-known path prefix ahead of the base URL's existing path, per the
+// "well-known URI" conventions of RFC 9728 (protected resource) and RFC 8414
+// (authorization server). For example, a base of "https://host/mcp" with
+// prefix "/.well-known/oauth-protected-resource" yields
+// "https://host/.well-known/oauth-protected-resource/mcp".
+// Query and fragment components of the base URL are dropped: well-known
+// metadata URLs are derived from the identifier's authority and path only.
+func wellKnownURL(baseURL, wellKnownPath string) (string, error) {
+	u, err := url.Parse(baseURL)
 	if err != nil {
-		configDir = os.Getenv("HOME")
+		return "", err
 	}
-	return &TokenStore{
-		path: filepath.Join(configDir, "slop-mcp", "auth.json"),
+	joined := path.Join(wellKnownPath, u.Path)
+	// path.Join strips trailing slashes; preserve one if the base path had it.
+	if strings.HasSuffix(u.Path, "/") && !strings.HasSuffix(joined, "/") {
+		joined += "/"
 	}
-}
-
-// NewTokenStoreWithPath creates a token store with a custom path.
-func NewTokenStoreWithPath(path string) *TokenStore {
-	return &TokenStore{path: path}
-}
-
-// Path returns the token store file path.
-func (s *TokenStore) Path() string {
-	return s.path
-}
-
-// Load reads tokens from disk.
-func (s *TokenStore) Load() (*TokenFile, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	data, err := os.ReadFile(s.path)
-	if os.IsNotExist(err) {
-		return &TokenFile{Version: 1, Tokens: make(map[string]*MCPToken)}, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	var tf TokenFile
-	if err := json.Unmarshal(data, &tf); err != nil {
-		return nil, err
-	}
-	if tf.Tokens == nil {
-		tf.Tokens = make(map[string]*MCPToken)
-	}
-	return &tf, nil
-}
-
-// Save writes tokens to disk.
-func (s *TokenStore) Save(tf *TokenFile) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// Ensure directory exists
-	dir := filepath.Dir(s.path)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return err
-	}
-
-	data, err := json.MarshalIndent(tf, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	// Write with restricted permissions
-	return os.WriteFile(s.path, data, 0600)
-}
-
-// GetToken retrieves a token for an MCP server.
-func (s *TokenStore) GetToken(serverName string) (*MCPToken, error) {
-	tf, err := s.Load()
-	if err != nil {
-		return nil, err
-	}
-	return tf.Tokens[serverName], nil
-}
-
-// SetToken stores a token for an MCP server.
-func (s *TokenStore) SetToken(token *MCPToken) error {
-	tf, err := s.Load()
-	if err != nil {
-		return err
-	}
-	tf.Tokens[token.ServerName] = token
-	return s.Save(tf)
-}
-
-// DeleteToken removes a token for an MCP server.
-func (s *TokenStore) DeleteToken(serverName string) error {
-	tf, err := s.Load()
-	if err != nil {
-		return err
-	}
-	delete(tf.Tokens, serverName)
-	return s.Save(tf)
-}
-
-// ListTokens returns all stored tokens.
-func (s *TokenStore) ListTokens() ([]*MCPToken, error) {
-	tf, err := s.Load()
-	if err != nil {
-		return nil, err
-	}
-	tokens := make([]*MCPToken, 0, len(tf.Tokens))
-	for _, t := range tf.Tokens {
-		tokens = append(tokens, t)
-	}
-	return tokens, nil
-}
-
-// IsExpired checks if a token is expired (with 5 minute buffer).
-func (t *MCPToken) IsExpired() bool {
-	if t.ExpiresAt.IsZero() {
-		return false // No expiry set
-	}
-	return time.Now().Add(5 * time.Minute).After(t.ExpiresAt)
-}
-
-// OAuthFlow handles the OAuth authorization flow for an MCP server.
-type OAuthFlow struct {
-	ServerName string
-	ServerURL  string
-	Store      *TokenStore
-}
-
-// AuthResult contains the result of an OAuth flow.
-type AuthResult struct {
-	Token       *MCPToken
-	AuthURL     string // If non-empty, user needs to visit this URL
-	CallbackURL string // The callback URL for the flow
+	u.Path = joined
+	u.RawPath = ""
+	u.RawQuery = ""
+	u.Fragment = ""
+	u.RawFragment = ""
+	return u.String(), nil
 }
 
 // DiscoverAndAuth discovers OAuth configuration and initiates the auth flow.
 func (f *OAuthFlow) DiscoverAndAuth(ctx context.Context) (*AuthResult, error) {
-	// Step 1: Try to get protected resource metadata
-	prm, err := oauthex.GetProtectedResourceMetadataFromID(ctx, f.ServerURL, nil)
+	// Step 1: Try to get protected resource metadata.
+	// Derive the RFC 9728 well-known metadata URL from the resource ID, then
+	// validate the returned metadata's resource matches f.ServerURL.
+	prmURL, err := wellKnownURL(f.ServerURL, "/.well-known/oauth-protected-resource")
+	if err != nil {
+		return nil, fmt.Errorf("invalid server URL: %w", err)
+	}
+	prm, err := oauthex.GetProtectedResourceMetadata(ctx, prmURL, f.ServerURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get protected resource metadata: %w", err)
+	}
+	if prm == nil {
+		return nil, fmt.Errorf("no protected resource metadata found at %s", prmURL)
 	}
 
 	if len(prm.AuthorizationServers) == 0 {
 		return nil, fmt.Errorf("no authorization servers found in metadata")
 	}
 
-	// Step 2: Get authorization server metadata
+	// Step 2: Get authorization server metadata.
+	// Derive well-known metadata URLs from the issuer (auth server) URL, trying
+	// RFC 8414 (oauth-authorization-server) first, then OpenID Connect Discovery
+	// (openid-configuration). GetAuthServerMeta returns (nil, nil) on a 4xx
+	// response, so a nil result means "not found here" rather than a hard error.
 	authServerURL := prm.AuthorizationServers[0]
-	asm, err := oauthex.GetAuthServerMeta(ctx, authServerURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get auth server metadata: %w", err)
+	var asm *oauthex.AuthServerMeta
+	var asmErrs []string
+	for _, wk := range []string{"/.well-known/oauth-authorization-server", "/.well-known/openid-configuration"} {
+		asmURL, err := wellKnownURL(authServerURL, wk)
+		if err != nil {
+			return nil, fmt.Errorf("invalid authorization server URL: %w", err)
+		}
+		asm, err = oauthex.GetAuthServerMeta(ctx, asmURL, authServerURL, nil)
+		if err != nil {
+			asmErrs = append(asmErrs, fmt.Sprintf("%s: %v", asmURL, err))
+			asm = nil
+			continue
+		}
+		if asm != nil {
+			break
+		}
+		asmErrs = append(asmErrs, fmt.Sprintf("%s: not found", asmURL))
+	}
+	if asm == nil {
+		return nil, fmt.Errorf("failed to get auth server metadata for %s: %s", authServerURL, strings.Join(asmErrs, "; "))
 	}
 
-	// Step 3: Dynamic client registration if supported
-	var clientID, clientSecret string
-	if asm.RegistrationEndpoint != "" {
-		regResp, err := f.registerClient(ctx, asm.RegistrationEndpoint)
-		if err != nil {
-			return nil, fmt.Errorf("failed to register client: %w", err)
-		}
-		clientID = regResp.ClientID
-		clientSecret = regResp.ClientSecret
-	} else {
+	if asm.RegistrationEndpoint == "" {
 		return nil, fmt.Errorf("server does not support dynamic client registration; manual registration required")
 	}
 
-	// Step 4: Start local callback server
-	callbackURL, codeChan, err := f.startCallbackServer()
+	// Step 3: Start local callback server first so the actual redirect URI
+	// (with the real bound port) can be used during client registration.
+	callbackURL, codeChan, shutdown, err := f.startCallbackServer()
 	if err != nil {
 		return nil, fmt.Errorf("failed to start callback server: %w", err)
 	}
+	defer shutdown()
+
+	// Step 4: Dynamic client registration with the actual redirect URI.
+	regResp, err := f.registerClient(ctx, asm.RegistrationEndpoint, callbackURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to register client: %w", err)
+	}
+	clientID := regResp.ClientID
+	clientSecret := regResp.ClientSecret
 
 	// Step 5: Generate PKCE verifier and challenge
 	verifier, challenge, err := generatePKCE()
@@ -277,9 +179,9 @@ func (f *OAuthFlow) DiscoverAndAuth(ctx context.Context) (*AuthResult, error) {
 	}
 }
 
-func (f *OAuthFlow) registerClient(ctx context.Context, endpoint string) (*oauthex.ClientRegistrationResponse, error) {
+func (f *OAuthFlow) registerClient(ctx context.Context, endpoint, redirectURI string) (*oauthex.ClientRegistrationResponse, error) {
 	meta := &oauthex.ClientRegistrationMetadata{
-		RedirectURIs:            []string{"http://localhost:0/callback"}, // Will be updated
+		RedirectURIs:            []string{redirectURI},
 		ClientName:              "slop-mcp",
 		TokenEndpointAuthMethod: "none", // Public client
 		GrantTypes:              []string{"authorization_code", "refresh_token"},
@@ -294,10 +196,10 @@ type callbackResult struct {
 	err   error
 }
 
-func (f *OAuthFlow) startCallbackServer() (string, <-chan callbackResult, error) {
+func (f *OAuthFlow) startCallbackServer() (string, <-chan callbackResult, func(), error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 
 	port := listener.Addr().(*net.TCPAddr).Port
@@ -340,7 +242,8 @@ func (f *OAuthFlow) startCallbackServer() (string, <-chan callbackResult, error)
 	})
 
 	go func() { _ = server.Serve(listener) }()
-	return callbackURL, codeChan, nil
+	shutdown := func() { _ = server.Shutdown(context.Background()) }
+	return callbackURL, codeChan, shutdown, nil
 }
 
 func (f *OAuthFlow) exchangeCode(ctx context.Context, tokenEndpoint, clientID, clientSecret, code, redirectURI, verifier, resource string) (*oauth2.Token, error) {
@@ -503,8 +406,12 @@ func RefreshToken(ctx context.Context, token *MCPToken, tokenEndpoint string) (*
 		ClientSecret:  token.ClientSecret,
 		AccessToken:   tokenResp.AccessToken,
 		TokenType:     tokenResp.TokenType,
-		ExpiresAt:     time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second),
 		TokenEndpoint: token.TokenEndpoint, // Preserve token endpoint
+	}
+	// No expires_in means no known expiry: leave ExpiresAt as the zero time,
+	// which IsExpired treats as "never expires" (matches exchangeCode).
+	if tokenResp.ExpiresIn > 0 {
+		newToken.ExpiresAt = time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
 	}
 	if tokenResp.RefreshToken != "" {
 		newToken.RefreshToken = tokenResp.RefreshToken
