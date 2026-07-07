@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/standardbeagle/slop-mcp/internal/auth"
@@ -210,8 +211,8 @@ func (s *Server) handleExecuteTool(
 		}
 	}
 
-	// Handle CLI tools (mcp_name is "cli" or tool_name has cli_ prefix)
-	if input.MCPName == "cli" || cli.IsCLITool(input.ToolName) {
+	// Handle CLI tools (see isCLIRoute for the routing contract)
+	if s.isCLIRoute(input.MCPName, input.ToolName) {
 		toolName := input.ToolName
 		if cli.IsCLITool(toolName) {
 			toolName = cli.StripCLIPrefix(toolName)
@@ -232,6 +233,18 @@ func (s *Server) handleExecuteTool(
 	}
 
 	return nil, result, nil
+}
+
+// isCLIRoute reports whether an execute_tool call should be routed to the
+// local CLI registry. An explicit mcp_name of "cli" always routes there; the
+// legacy cli_ tool-name prefix only routes there when mcp_name does not name
+// a registered MCP -- an explicitly addressed real MCP always wins over the
+// prefix convention (a downstream MCP may legitimately expose cli_* tools).
+func (s *Server) isCLIRoute(mcpName, toolName string) bool {
+	if mcpName == "cli" {
+		return true
+	}
+	return cli.IsCLITool(toolName) && s.registry.GetState(mcpName) == ""
 }
 
 // RunSlopInput is the input for the run_slop tool.
@@ -671,7 +684,7 @@ func (s *Server) handleAuthMCP(
 				ServerName: result.Token.ServerName,
 				ServerURL:  result.Token.ServerURL,
 				IsAuth:     true,
-				ExpiresAt:  result.Token.ExpiresAt.UTC().Format("2006-01-02T15:04:05Z"),
+				ExpiresAt:  formatTokenExpiry(result.Token.ExpiresAt),
 				HasRefresh: result.Token.RefreshToken != "",
 			},
 		}, nil
@@ -713,7 +726,7 @@ func (s *Server) handleAuthMCP(
 				ServerName: token.ServerName,
 				ServerURL:  token.ServerURL,
 				IsAuth:     true,
-				ExpiresAt:  token.ExpiresAt.UTC().Format("2006-01-02T15:04:05Z"),
+				ExpiresAt:  formatTokenExpiry(token.ExpiresAt),
 				IsExpired:  token.IsExpired(),
 				HasRefresh: token.RefreshToken != "",
 			},
@@ -731,7 +744,7 @@ func (s *Server) handleAuthMCP(
 				ServerName: t.ServerName,
 				ServerURL:  t.ServerURL,
 				IsAuth:     true,
-				ExpiresAt:  t.ExpiresAt.UTC().Format("2006-01-02T15:04:05Z"),
+				ExpiresAt:  formatTokenExpiry(t.ExpiresAt),
 				IsExpired:  t.IsExpired(),
 				HasRefresh: t.RefreshToken != "",
 			})
@@ -745,6 +758,16 @@ func (s *Server) handleAuthMCP(
 	default:
 		return nil, AuthMCPOutput{}, fmt.Errorf("invalid action: %s (must be login, logout, status, or list)", input.Action)
 	}
+}
+
+// formatTokenExpiry renders a token expiry timestamp as RFC 3339 UTC.
+// Zero times (tokens without an expiry) render as empty so the JSON field
+// is omitted instead of showing a bogus 0001-01-01 date.
+func formatTokenExpiry(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
 }
 
 // GetMetadataInput is the input for the get_metadata tool.

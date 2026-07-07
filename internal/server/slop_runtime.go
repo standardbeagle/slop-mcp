@@ -36,9 +36,11 @@ func (s *Server) newSlopRuntime(ctx context.Context) *slop.Runtime {
 		builtins.RegisterMemory(rt, s.memoryStore)
 	}
 
-	// One lazy forwarding service per configured MCP: keeps every MCP name in
+	// One lazy forwarding service per registered MCP -- including cached,
+	// configured-but-unconnected, and errored ones: keeps every MCP name in
 	// scope (so hyphenated identifiers still resolve) without connecting.
-	for _, cfg := range s.registry.GetConfigs() {
+	// EnsureConnected dials on first use.
+	for _, cfg := range s.registry.AllConfigs() {
 		rt.RegisterExternalService(cfg.Name, &registrySlopService{
 			server: s,
 			ctx:    ctx,
@@ -153,7 +155,39 @@ func contentItemToSlopValue(content mcp.Content) slop.Value {
 			"mimeType": c.MIMEType,
 			"data":     base64.StdEncoding.EncodeToString(c.Data),
 		})
+	case *mcp.EmbeddedResource:
+		m := map[string]any{"type": "resource"}
+		if c.Resource != nil {
+			m["uri"] = c.Resource.URI
+			if c.Resource.Text != "" {
+				m["text"] = c.Resource.Text
+			}
+			if c.Resource.MIMEType != "" {
+				m["mimeType"] = c.Resource.MIMEType
+			}
+			if len(c.Resource.Blob) > 0 {
+				m["blob"] = base64.StdEncoding.EncodeToString(c.Resource.Blob)
+			}
+		}
+		return slop.GoToValue(m)
+	case *mcp.ResourceLink:
+		m := map[string]any{
+			"type": "resourceLink",
+			"uri":  c.URI,
+		}
+		if c.Name != "" {
+			m["name"] = c.Name
+		}
+		return slop.GoToValue(m)
 	default:
+		// Unknown content type: marshal through the SDK's wire format so the
+		// script gets structured data instead of a Go pointer rendering.
+		if data, err := json.Marshal(content); err == nil {
+			var parsed any
+			if json.Unmarshal(data, &parsed) == nil {
+				return slop.GoToValue(parsed)
+			}
+		}
 		return slop.NewStringValue(fmt.Sprintf("%v", content))
 	}
 }

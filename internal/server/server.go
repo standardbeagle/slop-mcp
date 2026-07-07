@@ -22,6 +22,12 @@ const (
 	serverVersion = "0.14.3"
 )
 
+// Keep the downstream MCP client Implementation version in sync with the
+// server version instead of a stale hardcoded constant.
+func init() {
+	registry.ClientVersion = serverVersion
+}
+
 // Server is the slop-mcp server.
 type Server struct {
 	mcpServer     *mcp.Server

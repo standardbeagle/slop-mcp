@@ -127,6 +127,70 @@ func TestBuildMCPArguments(t *testing.T) {
 	})
 }
 
+// TestRunSlop_CachedMCPServiceReachable: MCPs whose tools were warm-loaded from
+// cache (StateCached, no live connection) must still be addressable from SLOP
+// scripts. Before the AllConfigs fix only connected MCPs were registered as
+// services, so scripts hit 'unknown service' for cache-warm MCPs.
+func TestRunSlop_CachedMCPServiceReachable(t *testing.T) {
+	s := mockServer(nil)
+	s.registry.AddToolsForTesting("cachedmcp", []registry.ToolInfo{
+		{Name: "get_data", Description: "d", MCPName: "cachedmcp"},
+	})
+	s.registry.MarkCachedForTesting("cachedmcp")
+
+	_, _, err := s.handleRunSlop(context.Background(), &mcp.CallToolRequest{}, RunSlopInput{
+		Script: "cachedmcp.get_data()",
+	})
+	// The lazy connect fails (no real command behind the test config), but the
+	// error must come from the MCP forwarding path -- proving the service was
+	// registered -- and name the MCP, not report an unknown identifier.
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "cachedmcp")
+	require.Contains(t, err.Error(), "get_data")
+	require.NotContains(t, err.Error(), "unknown service")
+}
+
+func TestContentItemToSlopValue_Resources(t *testing.T) {
+	t.Run("embedded resource becomes structured map", func(t *testing.T) {
+		v := contentItemToSlopValue(&mcp.EmbeddedResource{
+			Resource: &mcp.ResourceContents{
+				URI:      "file:///tmp/x.txt",
+				MIMEType: "text/plain",
+				Text:     "hello",
+			},
+		})
+		got, isMap := slop.ValueToGo(v).(map[string]any)
+		require.True(t, isMap, "embedded resource must convert to a map, not a pointer string")
+		require.Equal(t, "resource", got["type"])
+		require.Equal(t, "file:///tmp/x.txt", got["uri"])
+		require.Equal(t, "text/plain", got["mimeType"])
+		require.Equal(t, "hello", got["text"])
+	})
+
+	t.Run("embedded resource blob is base64", func(t *testing.T) {
+		v := contentItemToSlopValue(&mcp.EmbeddedResource{
+			Resource: &mcp.ResourceContents{
+				URI:  "file:///tmp/x.bin",
+				Blob: []byte{0x01, 0x02},
+			},
+		})
+		got := slop.ValueToGo(v).(map[string]any)
+		require.Equal(t, "AQI=", got["blob"])
+	})
+
+	t.Run("resource link becomes structured map", func(t *testing.T) {
+		v := contentItemToSlopValue(&mcp.ResourceLink{
+			URI:  "file:///tmp/y.txt",
+			Name: "y",
+		})
+		got, isMap := slop.ValueToGo(v).(map[string]any)
+		require.True(t, isMap)
+		require.Equal(t, "resourceLink", got["type"])
+		require.Equal(t, "file:///tmp/y.txt", got["uri"])
+		require.Equal(t, "y", got["name"])
+	})
+}
+
 func TestResultToSlopValue(t *testing.T) {
 	t.Run("structured content preferred", func(t *testing.T) {
 		v := resultToSlopValue(&mcp.CallToolResult{

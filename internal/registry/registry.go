@@ -43,6 +43,17 @@ type CustomToolDecl struct {
 // DefaultConnectionTimeout is the default timeout for connecting to an MCP server.
 const DefaultConnectionTimeout = 30 * time.Second
 
+// ErrorRetryInterval is the minimum time between lazy reconnect attempts for an
+// MCP in StateError. Within the window, EnsureConnected fails fast with the
+// stored error instead of re-dialing (each dial can block up to the connection
+// timeout, so unthrottled retries on every tool call would be a connect storm).
+const ErrorRetryInterval = 30 * time.Second
+
+// ClientVersion is the version reported in the MCP client Implementation info
+// when connecting to downstream servers. The server package sets this to the
+// slop-mcp server version at init; "dev" is the fallback for bare registry use.
+var ClientVersion = "dev"
+
 // TimeoutEnvVar is the environment variable name for global timeout configuration.
 const TimeoutEnvVar = "SLOP_MCP_TIMEOUT"
 
@@ -206,6 +217,7 @@ type mcpState struct {
 	toolsIndexed      bool         // True when the last connect successfully listed tools
 	reconnectAttempts int          // Number of reconnection attempts since last successful connect
 	lastReconnect     time.Time    // Time of last reconnection attempt
+	lastFailure       time.Time    // Time of last failed connect (gates lazy retry from StateError)
 	healthStatus      HealthStatus // Last health check result
 	lastHealthCheck   time.Time    // Time of last health check
 	healthError       error        // Error from last health check if unhealthy
@@ -417,56 +429,71 @@ func (r *Registry) getConnectMu(name string) *sync.Mutex {
 	return mu
 }
 
-// EnsureConnected ensures an MCP is connected, performing lazy connection if needed.
-// If the MCP is in StateCached or StateConfigured, it will attempt to connect.
-// The per-MCP mutex serializes concurrent lazy-connect attempts.
-func (r *Registry) EnsureConnected(ctx context.Context, mcpName string) error {
-	// Fast path: copy the fields we need while holding the lock -- state
-	// structs are mutated in place elsewhere (reconnect, health checks),
-	// so no field reads may happen after RUnlock.
+// ensureSnapshot copies the state fields EnsureConnected needs while holding
+// the read lock -- state structs are mutated in place elsewhere (reconnect,
+// health checks), so no field reads may happen after RUnlock.
+func (r *Registry) ensureSnapshot(mcpName string) (cur MCPState, cfg config.MCPConfig, lastFailure time.Time, lastErr error, exists bool) {
 	r.mu.RLock()
-	state, exists := r.states[mcpName]
-	var (
-		cur MCPState
-		cfg config.MCPConfig
-	)
-	if exists {
-		cur = state.state
-		cfg = state.config
+	defer r.mu.RUnlock()
+	state, ok := r.states[mcpName]
+	if !ok {
+		return "", config.MCPConfig{}, time.Time{}, nil, false
 	}
-	r.mu.RUnlock()
+	return state.state, state.config, state.lastFailure, state.err, true
+}
 
+// EnsureConnected ensures an MCP is connected, performing lazy connection if needed.
+// StateCached and StateConfigured MCPs connect on demand. StateConnecting waits
+// on the per-MCP connect mutex for the in-flight attempt and re-checks the
+// outcome. StateError retries at most once per ErrorRetryInterval; within the
+// window it fails fast with the stored error (no connect storm). StateDisconnected
+// is deliberately excluded: it only arises from an explicit unregister
+// (manage_mcps) or transiently during Reconnect, so auto-connecting would
+// resurrect MCPs the user removed.
+func (r *Registry) EnsureConnected(ctx context.Context, mcpName string) error {
+	cur, _, lastFailure, lastErr, exists := r.ensureSnapshot(mcpName)
 	if !exists {
 		return fmt.Errorf("MCP not configured: %s", mcpName)
 	}
-	if cur == StateConnected {
+	switch cur {
+	case StateConnected:
 		return nil
-	}
-	// Only cached/configured MCPs lazy-connect. StateDisconnected is
-	// deliberately excluded: it only arises from an explicit unregister
-	// (manage_mcps) or transiently during Reconnect, so auto-connecting would
-	// resurrect MCPs the user removed. StateError is excluded to avoid a
-	// connect storm (each attempt can block up to the connection timeout) on
-	// every tool call against a broken server; use manage_mcps reconnect or
-	// ReconnectWithBackoff to recover explicitly.
-	if cur != StateCached && cur != StateConfigured {
+	case StateCached, StateConfigured, StateConnecting:
+		// Proceed to the serialized section.
+	case StateError:
+		if !lastFailure.IsZero() && time.Since(lastFailure) < ErrorRetryInterval {
+			return fmt.Errorf("MCP %s is in error state (retry in %s): %w",
+				mcpName, (ErrorRetryInterval - time.Since(lastFailure)).Round(time.Second), lastErr)
+		}
+		// Backoff window elapsed: allow one reconnect attempt below.
+	default:
 		return fmt.Errorf("MCP %s is in state %s, cannot connect", mcpName, cur)
 	}
 
-	// Serialize concurrent lazy-connects for this MCP
+	// Serialize concurrent lazy-connects for this MCP. If a connect is
+	// in flight (StateConnecting), this blocks until it finishes.
 	mu := r.getConnectMu(mcpName)
 	mu.Lock()
 	defer mu.Unlock()
 
-	// Double-check: another goroutine may have connected while we waited
-	r.mu.RLock()
-	connected := false
-	if s, ok := r.states[mcpName]; ok {
-		connected = s.state == StateConnected
+	// Re-check: another goroutine may have finished (or failed) while we waited.
+	cur, cfg, lastFailure, lastErr, exists := r.ensureSnapshot(mcpName)
+	if !exists {
+		return fmt.Errorf("MCP not configured: %s", mcpName)
 	}
-	r.mu.RUnlock()
-	if connected {
+	switch cur {
+	case StateConnected:
 		return nil
+	case StateCached, StateConfigured:
+		// Proceed to connect.
+	case StateError:
+		// A concurrent attempt just failed; don't pile on within the window.
+		if !lastFailure.IsZero() && time.Since(lastFailure) < ErrorRetryInterval {
+			return fmt.Errorf("MCP %s is in error state (retry in %s): %w",
+				mcpName, (ErrorRetryInterval - time.Since(lastFailure)).Round(time.Second), lastErr)
+		}
+	default:
+		return fmt.Errorf("MCP %s is in state %s, cannot connect", mcpName, cur)
 	}
 
 	// Perform the connection (we already hold the per-MCP connect mutex)
@@ -624,6 +651,7 @@ func (r *Registry) connectLocked(ctx context.Context, cfg config.MCPConfig) erro
 			state:             state,
 			err:               err,
 			reconnectAttempts: prevAttempts,
+			lastFailure:       time.Now(),
 		}
 		r.mu.Unlock()
 		return err
@@ -632,7 +660,7 @@ func (r *Registry) connectLocked(ctx context.Context, cfg config.MCPConfig) erro
 	// Create MCP client
 	client := mcp.NewClient(&mcp.Implementation{
 		Name:    "slop-mcp",
-		Version: "0.5.0",
+		Version: ClientVersion,
 	}, nil)
 
 	// Create transport based on type
@@ -925,6 +953,7 @@ func (r *Registry) ReconnectWithBackoff(ctx context.Context, name string, maxRet
 	if s, ok := r.states[name]; ok {
 		s.state = StateError
 		s.err = fmt.Errorf("reconnection failed after %d attempts: %w", maxRetries, lastErr)
+		s.lastFailure = time.Now()
 	}
 	r.mu.Unlock()
 
@@ -1193,29 +1222,54 @@ func (r *Registry) SearchTools(query, mcpName string) []ToolInfo {
 }
 
 // GetMetadata returns full metadata for all connected MCPs.
+// The registry lock is only held to snapshot states and sessions; the
+// per-MCP list round-trips (network I/O) run after release so a slow MCP
+// cannot stall registry writers.
 func (r *Registry) GetMetadata(ctx context.Context) []MCPMetadata {
+	type metaSnapshot struct {
+		meta    MCPMetadata
+		session *mcp.ClientSession
+	}
+
 	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	result := make([]MCPMetadata, 0, len(r.states))
-
+	snaps := make([]metaSnapshot, 0, len(r.states))
 	for name, state := range r.states {
-		metadata := MCPMetadata{
+		snap := metaSnapshot{meta: MCPMetadata{
 			Name:   name,
 			Type:   state.config.Type,
 			State:  state.state,
 			Source: state.config.Source.String(),
-		}
+		}}
 
 		// For cached MCPs, return tools from index (without connecting)
 		if state.state == StateCached {
-			metadata.Tools = r.loadIndex().GetAllForMCP(name)
+			snap.meta.Tools = r.loadIndex().GetAllForMCP(name)
 		}
 
-		// If connected, fetch full metadata
+		// Add error message if in error state
+		if state.state == StateError && state.err != nil {
+			snap.meta.Error = state.err.Error()
+		}
+
 		if conn, ok := r.connections[name]; ok && state.state == StateConnected {
+			snap.session = conn.session
+		}
+
+		snaps = append(snaps, snap)
+	}
+	r.mu.RUnlock()
+
+	result := make([]MCPMetadata, 0, len(snaps))
+
+	for _, snap := range snaps {
+		metadata := snap.meta
+		name := metadata.Name
+
+		// If connected, fetch full metadata (no registry lock held; a session
+		// closed concurrently just makes the list calls error, which we skip)
+		if conn := snap.session; conn != nil {
 			// Fetch tools with full schema
-			if toolsResult, err := conn.session.ListTools(ctx, nil); err == nil {
+			if toolsResult, err := conn.ListTools(ctx, nil); err == nil {
 				metadata.Tools = make([]ToolInfo, 0, len(toolsResult.Tools))
 				for _, tool := range toolsResult.Tools {
 					var inputSchema map[string]any
@@ -1232,7 +1286,7 @@ func (r *Registry) GetMetadata(ctx context.Context) []MCPMetadata {
 			}
 
 			// Fetch prompts
-			if promptsResult, err := conn.session.ListPrompts(ctx, nil); err == nil {
+			if promptsResult, err := conn.ListPrompts(ctx, nil); err == nil {
 				metadata.Prompts = make([]PromptInfo, 0, len(promptsResult.Prompts))
 				for _, prompt := range promptsResult.Prompts {
 					promptInfo := PromptInfo{
@@ -1254,7 +1308,7 @@ func (r *Registry) GetMetadata(ctx context.Context) []MCPMetadata {
 			}
 
 			// Fetch resources
-			if resourcesResult, err := conn.session.ListResources(ctx, nil); err == nil {
+			if resourcesResult, err := conn.ListResources(ctx, nil); err == nil {
 				metadata.Resources = make([]ResourceInfo, 0, len(resourcesResult.Resources))
 				for _, resource := range resourcesResult.Resources {
 					metadata.Resources = append(metadata.Resources, ResourceInfo{
@@ -1267,7 +1321,7 @@ func (r *Registry) GetMetadata(ctx context.Context) []MCPMetadata {
 			}
 
 			// Fetch resource templates
-			if templatesResult, err := conn.session.ListResourceTemplates(ctx, nil); err == nil {
+			if templatesResult, err := conn.ListResourceTemplates(ctx, nil); err == nil {
 				metadata.ResourceTemplates = make([]ResourceTemplateInfo, 0, len(templatesResult.ResourceTemplates))
 				for _, template := range templatesResult.ResourceTemplates {
 					metadata.ResourceTemplates = append(metadata.ResourceTemplates, ResourceTemplateInfo{
@@ -1280,11 +1334,6 @@ func (r *Registry) GetMetadata(ctx context.Context) []MCPMetadata {
 			}
 		}
 
-		// Add error message if in error state
-		if state.state == StateError && state.err != nil {
-			metadata.Error = state.err.Error()
-		}
-
 		result = append(result, metadata)
 	}
 
@@ -1293,50 +1342,14 @@ func (r *Registry) GetMetadata(ctx context.Context) []MCPMetadata {
 
 // ExecuteTool executes a tool on a specific MCP.
 func (r *Registry) ExecuteTool(ctx context.Context, mcpName, toolName string, params map[string]any) (any, error) {
-	// Lazy-connect if cached
-	if state := r.GetState(mcpName); state == StateCached || state == StateConfigured {
-		if err := r.EnsureConnected(ctx, mcpName); err != nil {
-			return nil, fmt.Errorf("lazy-connect failed for MCP %s: %w", mcpName, err)
-		}
-	}
-
-	r.mu.RLock()
-	conn, ok := r.connections[mcpName]
-	r.mu.RUnlock()
-
-	if !ok {
-		return nil, &MCPNotFoundError{
-			Name:          mcpName,
-			AvailableMCPs: r.listNames(),
-		}
-	}
-
 	// Normalize nil params to empty map (MCP protocol requires object, not null)
 	if params == nil {
 		params = make(map[string]any)
 	}
 
-	// Call tool
-	result, err := conn.session.CallTool(ctx, &mcp.CallToolParams{
-		Name:      toolName,
-		Arguments: params,
-	})
+	result, err := r.callRaw(ctx, mcpName, toolName, params)
 	if err != nil {
-		// Check for tool not found errors
-		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "unknown") {
-			availableTools := r.loadIndex().ListForMCP(mcpName)
-			return nil, &ToolNotFoundError{
-				MCPName:        mcpName,
-				ToolName:       toolName,
-				AvailableTools: availableTools,
-				SimilarTools:   findSimilarTools(toolName, availableTools),
-			}
-		}
-		// Check for protocol/validation errors
-		if protocolErr := parseProtocolError(mcpName, toolName, err); protocolErr != nil {
-			return nil, protocolErr
-		}
-		return nil, fmt.Errorf("error calling tool '%s' on '%s': %w", toolName, mcpName, err)
+		return nil, err
 	}
 
 	if result.IsError {
@@ -1391,8 +1404,11 @@ func (r *Registry) ExecuteToolRawJSON(ctx context.Context, mcpName, toolName str
 // response. args is passed straight to the SDK as CallToolParams.Arguments; a
 // nil interface lets the SDK normalize it to an empty object.
 func (r *Registry) callRaw(ctx context.Context, mcpName, toolName string, args any) (*mcp.CallToolResult, error) {
-	// Lazy-connect if cached
-	if state := r.GetState(mcpName); state == StateCached || state == StateConfigured {
+	// Lazy-connect through EnsureConnected: cached/configured MCPs dial on
+	// demand, an in-flight connect (StateConnecting) is awaited instead of
+	// racing past it, and StateError retries once per ErrorRetryInterval.
+	switch r.GetState(mcpName) {
+	case StateCached, StateConfigured, StateConnecting, StateError:
 		if err := r.EnsureConnected(ctx, mcpName); err != nil {
 			return nil, fmt.Errorf("lazy-connect failed for MCP %s: %w", mcpName, err)
 		}
@@ -1548,7 +1564,7 @@ func (r *Registry) Close() error {
 	return lastErr
 }
 
-// GetConfigs returns all MCP configs for use with slop runtime.
+// GetConfigs returns the configs of all currently connected MCPs.
 func (r *Registry) GetConfigs() []config.MCPConfig {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -1560,7 +1576,27 @@ func (r *Registry) GetConfigs() []config.MCPConfig {
 	return configs
 }
 
+// AllConfigs returns the configs of every registered MCP regardless of state
+// (connected, cached, configured, error, ...). Use this when lazily addressable
+// MCPs must stay reachable, e.g. registering SLOP runtime services.
+func (r *Registry) AllConfigs() []config.MCPConfig {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	configs := make([]config.MCPConfig, 0, len(r.states))
+	for _, state := range r.states {
+		configs = append(configs, state.config)
+	}
+	return configs
+}
+
+// listNames returns the names of connected, cached, and configured MCPs.
+// Takes the read lock itself: callers invoke it with no lock held, and an
+// unlocked map iteration would race with concurrent connection changes.
 func (r *Registry) listNames() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
 	// Include both connected and cached MCPs
 	seen := make(map[string]bool)
 	names := make([]string, 0, len(r.states))
@@ -1637,7 +1673,39 @@ func contentItemToAny(content mcp.Content) any {
 			"mimeType": c.MIMEType,
 			"data":     c.Data,
 		}
+	case *mcp.EmbeddedResource:
+		m := map[string]any{"type": "resource"}
+		if c.Resource != nil {
+			m["uri"] = c.Resource.URI
+			if c.Resource.MIMEType != "" {
+				m["mimeType"] = c.Resource.MIMEType
+			}
+			if c.Resource.Text != "" {
+				m["text"] = c.Resource.Text
+			}
+			if len(c.Resource.Blob) > 0 {
+				m["blob"] = c.Resource.Blob
+			}
+		}
+		return m
+	case *mcp.ResourceLink:
+		m := map[string]any{
+			"type": "resourceLink",
+			"uri":  c.URI,
+		}
+		if c.Name != "" {
+			m["name"] = c.Name
+		}
+		return m
 	default:
+		// Unknown content type: marshal through the SDK's wire format so the
+		// caller gets structured data instead of a Go pointer rendering.
+		if data, err := json.Marshal(content); err == nil {
+			var parsed any
+			if json.Unmarshal(data, &parsed) == nil {
+				return parsed
+			}
+		}
 		return fmt.Sprintf("%v", content)
 	}
 }

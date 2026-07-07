@@ -100,6 +100,122 @@ func TestEnsureConnected_RaceWithStateMutation(t *testing.T) {
 	assert.Equal(t, StateError, r.GetState("race-mcp"))
 }
 
+// TestEnsureConnected_WaitsForInFlightConnect verifies that a caller hitting
+// StateConnecting waits on the per-MCP connect mutex for the in-flight attempt
+// instead of failing immediately with a "cannot connect" error.
+func TestEnsureConnected_WaitsForInFlightConnect(t *testing.T) {
+	r, _ := newTestRegistryWithCache(t)
+	cfg := config.MCPConfig{Name: "inflight", Type: "stdio", Command: "x"}
+	r.SetConfigured(cfg)
+
+	// Simulate an in-flight connect exactly as connectLocked does: hold the
+	// per-MCP connect mutex and set StateConnecting.
+	mu := r.getConnectMu("inflight")
+	mu.Lock()
+	r.mu.Lock()
+	r.states["inflight"].state = StateConnecting
+	r.mu.Unlock()
+
+	done := make(chan error, 1)
+	go func() { done <- r.EnsureConnected(context.Background(), "inflight") }()
+
+	// Must not return while the connect is in flight.
+	select {
+	case err := <-done:
+		t.Fatalf("EnsureConnected returned during in-flight connect: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	// Finish the in-flight connect successfully, then release the mutex.
+	r.mu.Lock()
+	r.states["inflight"].state = StateConnected
+	r.connections["inflight"] = &mcpConnection{config: cfg}
+	r.mu.Unlock()
+	mu.Unlock()
+
+	select {
+	case err := <-done:
+		assert.NoError(t, err, "waiter must observe the finished connect")
+	case <-time.After(2 * time.Second):
+		t.Fatal("EnsureConnected did not return after in-flight connect finished")
+	}
+}
+
+// TestEnsureConnected_ErrorStateBackoff verifies that StateError fails fast
+// within ErrorRetryInterval and permits one fresh dial after the window.
+func TestEnsureConnected_ErrorStateBackoff(t *testing.T) {
+	r, _ := newTestRegistryWithCache(t)
+	cfg := config.MCPConfig{
+		Name:    "err-mcp",
+		Type:    "stdio",
+		Command: "/nonexistent-slop-mcp-test-binary",
+		Timeout: "1s",
+	}
+	r.SetConfigured(cfg)
+	ctx := context.Background()
+
+	// First lazy connect dials and fails, recording lastFailure.
+	err := r.EnsureConnected(ctx, "err-mcp")
+	require.Error(t, err)
+	require.Equal(t, StateError, r.GetState("err-mcp"))
+
+	// Within the backoff window: fail fast with the stored error, no re-dial.
+	err = r.EnsureConnected(ctx, "err-mcp")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "error state")
+
+	// Age the failure past the window: one retry attempt is allowed (it dials,
+	// fails again, and re-arms the window).
+	r.mu.Lock()
+	r.states["err-mcp"].lastFailure = time.Now().Add(-ErrorRetryInterval - time.Second)
+	r.mu.Unlock()
+
+	err = r.EnsureConnected(ctx, "err-mcp")
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "error state", "elapsed window must trigger a real dial, not fail-fast")
+
+	// Fresh failure re-armed the window.
+	err = r.EnsureConnected(ctx, "err-mcp")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "error state")
+}
+
+// TestExecuteToolRaw_ConcurrentFirstUse hammers the lazy-connect tool-call path
+// from many goroutines (run with -race). Exactly one dial happens; the rest
+// fail fast on the recorded error state without racing map iteration.
+func TestExecuteToolRaw_ConcurrentFirstUse(t *testing.T) {
+	r, _ := newTestRegistryWithCache(t)
+	cfg := config.MCPConfig{
+		Name:    "first-use",
+		Type:    "stdio",
+		Command: "/nonexistent-slop-mcp-test-binary",
+		Timeout: "1s",
+	}
+	r.SetConfigured(cfg)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := r.ExecuteToolRaw(context.Background(), "first-use", "ping", nil)
+			assert.Error(t, err)
+		}()
+	}
+	// Concurrent state mutation and listNames consumers.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 100; i++ {
+			_ = r.Status()
+			_, _ = r.ExecuteToolRaw(context.Background(), "no-such-mcp", "x", nil) // exercises listNames
+		}
+	}()
+	wg.Wait()
+
+	assert.Equal(t, StateError, r.GetState("first-use"))
+}
+
 // TestReconnectWithBackoff_ConcurrentSerialized verifies that concurrent
 // reconnect loops are serialized by the per-MCP connect mutex, so attempt
 // counts accumulate deterministically instead of interleaving.
