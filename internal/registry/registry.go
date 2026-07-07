@@ -241,7 +241,7 @@ type Registry struct {
 	mu                sync.RWMutex
 	healthCheckCancel context.CancelFunc     // cancels background health check goroutine
 	cache             *cache.Store           // disk cache for tool metadata
-	connectMu         map[string]*sync.Mutex // per-MCP mutex for serializing lazy-connect
+	connectMu         map[string]chan struct{} // per-MCP semaphore serializing lifecycle ops
 }
 
 // newRegistry initialises a Registry and seeds the atomic index pointer.
@@ -258,7 +258,7 @@ func New() *Registry {
 		tools:       make(map[string][]ToolInfo),
 		logger:      logging.Default(),
 		cache:       cache.NewStore(),
-		connectMu:   make(map[string]*sync.Mutex),
+		connectMu:   make(map[string]chan struct{}),
 	})
 }
 
@@ -270,7 +270,7 @@ func NewWithLogger(logger logging.Logger) *Registry {
 		tools:       make(map[string][]ToolInfo),
 		logger:      logger,
 		cache:       cache.NewStore(),
-		connectMu:   make(map[string]*sync.Mutex),
+		connectMu:   make(map[string]chan struct{}),
 	})
 }
 
@@ -282,7 +282,7 @@ func NewWithCache(logger logging.Logger, cacheStore *cache.Store) *Registry {
 		tools:       make(map[string][]ToolInfo),
 		logger:      logger,
 		cache:       cacheStore,
-		connectMu:   make(map[string]*sync.Mutex),
+		connectMu:   make(map[string]chan struct{}),
 	})
 }
 
@@ -367,7 +367,7 @@ func (r *Registry) SetCached(cfg config.MCPConfig, tools []ToolInfo) {
 	r.tools[cfg.Name] = tools
 
 	if _, ok := r.connectMu[cfg.Name]; !ok {
-		r.connectMu[cfg.Name] = &sync.Mutex{}
+		r.connectMu[cfg.Name] = make(chan struct{}, 1)
 	}
 
 	r.mu.Unlock()
@@ -416,17 +416,31 @@ func (r *Registry) LoadCache(cfg *config.Config) int {
 	return loaded
 }
 
-// getConnectMu returns the per-MCP mutex that serializes connection lifecycle
-// operations (connect, reconnect) for a single MCP name.
-func (r *Registry) getConnectMu(name string) *sync.Mutex {
+// getConnectMu returns the per-MCP semaphore (capacity-1 channel) that
+// serializes connection lifecycle operations for a single MCP name.
+func (r *Registry) getConnectMu(name string) chan struct{} {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	mu, ok := r.connectMu[name]
+	sem, ok := r.connectMu[name]
 	if !ok {
-		mu = &sync.Mutex{}
-		r.connectMu[name] = mu
+		sem = make(chan struct{}, 1)
+		r.connectMu[name] = sem
 	}
-	return mu
+	return sem
+}
+
+// acquireConnectMu acquires the per-MCP lifecycle semaphore, honoring ctx
+// cancellation while waiting (a reconnect backoff loop can hold it for
+// minutes; callers must not hang uncancellably behind it). Returns a release
+// function on success.
+func (r *Registry) acquireConnectMu(ctx context.Context, name string) (func(), error) {
+	sem := r.getConnectMu(name)
+	select {
+	case sem <- struct{}{}:
+		return func() { <-sem }, nil
+	case <-ctx.Done():
+		return nil, fmt.Errorf("waiting for MCP %s connection lifecycle: %w", name, ctx.Err())
+	}
 }
 
 // ensureSnapshot copies the state fields EnsureConnected needs while holding
@@ -471,10 +485,12 @@ func (r *Registry) EnsureConnected(ctx context.Context, mcpName string) error {
 	}
 
 	// Serialize concurrent lazy-connects for this MCP. If a connect is
-	// in flight (StateConnecting), this blocks until it finishes.
-	mu := r.getConnectMu(mcpName)
-	mu.Lock()
-	defer mu.Unlock()
+	// in flight (StateConnecting), this blocks until it finishes or ctx ends.
+	release, err := r.acquireConnectMu(ctx, mcpName)
+	if err != nil {
+		return err
+	}
+	defer release()
 
 	// Re-check: another goroutine may have finished (or failed) while we waited.
 	cur, cfg, lastFailure, lastErr, exists := r.ensureSnapshot(mcpName)
@@ -617,9 +633,11 @@ func (r *Registry) Status() []MCPFullStatus {
 // Connect connects to an MCP server and registers it.
 // Connection lifecycle for a given MCP name is serialized via a per-MCP mutex.
 func (r *Registry) Connect(ctx context.Context, cfg config.MCPConfig) error {
-	mu := r.getConnectMu(cfg.Name)
-	mu.Lock()
-	defer mu.Unlock()
+	release, err := r.acquireConnectMu(ctx, cfg.Name)
+	if err != nil {
+		return err
+	}
+	defer release()
 	return r.connectLocked(ctx, cfg)
 }
 
@@ -803,9 +821,9 @@ func (r *Registry) Disconnect(name string) error {
 // Unregister disconnects an MCP server (if connected) and removes it from the
 // registry entirely, unlike Disconnect which keeps the state for reconnection.
 func (r *Registry) Unregister(name string) error {
-	mu := r.getConnectMu(name)
-	mu.Lock()
-	defer mu.Unlock()
+	sem := r.getConnectMu(name)
+	sem <- struct{}{}
+	defer func() { <-sem }()
 
 	r.mu.Lock()
 	if _, ok := r.states[name]; !ok {
@@ -832,9 +850,11 @@ func (r *Registry) Unregister(name string) error {
 // This is useful after OAuth authentication to establish a connection with new credentials.
 // Serialized against other connection lifecycle operations via the per-MCP mutex.
 func (r *Registry) Reconnect(ctx context.Context, name string) error {
-	mu := r.getConnectMu(name)
-	mu.Lock()
-	defer mu.Unlock()
+	release, err := r.acquireConnectMu(ctx, name)
+	if err != nil {
+		return err
+	}
+	defer release()
 	return r.reconnectLocked(ctx, name)
 }
 
@@ -868,9 +888,11 @@ func (r *Registry) reconnectLocked(ctx context.Context, name string) error {
 func (r *Registry) ReconnectWithBackoff(ctx context.Context, name string, maxRetries int) error {
 	// Serialize against other connection lifecycle operations so concurrent
 	// reconnects cannot interleave Disconnect/Connect or corrupt attempt counts.
-	mu := r.getConnectMu(name)
-	mu.Lock()
-	defer mu.Unlock()
+	release, err := r.acquireConnectMu(ctx, name)
+	if err != nil {
+		return err
+	}
+	defer release()
 
 	// Get the config and current state
 	r.mu.RLock()

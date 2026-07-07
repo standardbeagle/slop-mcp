@@ -109,9 +109,9 @@ func TestEnsureConnected_WaitsForInFlightConnect(t *testing.T) {
 	r.SetConfigured(cfg)
 
 	// Simulate an in-flight connect exactly as connectLocked does: hold the
-	// per-MCP connect mutex and set StateConnecting.
-	mu := r.getConnectMu("inflight")
-	mu.Lock()
+	// per-MCP connect semaphore and set StateConnecting.
+	sem := r.getConnectMu("inflight")
+	sem <- struct{}{}
 	r.mu.Lock()
 	r.states["inflight"].state = StateConnecting
 	r.mu.Unlock()
@@ -131,7 +131,7 @@ func TestEnsureConnected_WaitsForInFlightConnect(t *testing.T) {
 	r.states["inflight"].state = StateConnected
 	r.connections["inflight"] = &mcpConnection{config: cfg}
 	r.mu.Unlock()
-	mu.Unlock()
+	<-sem
 
 	select {
 	case err := <-done:
@@ -245,4 +245,35 @@ func TestReconnectWithBackoff_ConcurrentSerialized(t *testing.T) {
 	// and adds its own single attempt.
 	assert.Equal(t, 2, r.GetReconnectAttempts("backoff-mcp"))
 	assert.Equal(t, StateError, r.GetState("backoff-mcp"))
+}
+
+// TestEnsureConnected_CancelableWhileWaiting verifies that a caller blocked
+// behind a long-held lifecycle semaphore (e.g. a reconnect backoff loop)
+// returns when its context is cancelled instead of hanging.
+func TestEnsureConnected_CancelableWhileWaiting(t *testing.T) {
+	r, _ := newTestRegistryWithCache(t)
+	cfg := config.MCPConfig{Name: "held", Type: "stdio", Command: "x"}
+	r.SetConfigured(cfg)
+
+	sem := r.getConnectMu("held")
+	sem <- struct{}{} // simulate a long-running lifecycle holder
+	defer func() { <-sem }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- r.EnsureConnected(ctx, "held") }()
+
+	select {
+	case err := <-done:
+		t.Fatalf("EnsureConnected returned while semaphore held: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(2 * time.Second):
+		t.Fatal("EnsureConnected did not honor context cancellation")
+	}
 }

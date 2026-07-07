@@ -334,11 +334,15 @@ func (s *Store) markTouched(scope Scope, bank, key string) {
 // holding any lock. Before writing, the current on-disk file is re-read and
 // merged: keys touched by this process win (including deletions); untouched
 // keys keep their on-disk value, so entries written by other processes since
-// startup survive the flush. A missing or unreadable file falls back to the
-// in-memory snapshot alone.
+// startup usually survive the flush. A missing or unreadable file falls back
+// to the in-memory snapshot alone.
 //
-// Known cross-process limitation: entries written by other processes become
-// visible on disk but are not folded into this process's in-memory view.
+// Known cross-process limitations: the read-merge-write itself is not
+// protected by a file lock, so two processes flushing the same bank
+// concurrently can still lose the other's just-written keys (merge is
+// best-effort, not a guarantee), and entries written by other processes
+// become visible on disk but are not folded into this process's in-memory
+// view.
 func (s *Store) writeBank(scope Scope, bank string) error {
 	root := s.rootFor(scope)
 	if root == "" {
