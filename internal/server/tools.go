@@ -224,6 +224,26 @@ func (s *Server) wrapExecuteTool(ctx context.Context, req *mcp.CallToolRequest) 
 		return errorResult(fmt.Errorf("tool_name is required")), nil
 	}
 
+	// Custom tool routing: mirror handleExecuteTool by checking the override
+	// store before the CLI and native MCP paths. Custom tools run SLOP bodies
+	// locally; unknown names fall through to the registry, which produces a
+	// rich not-found error.
+	if input.MCPName == "_custom" && s.overrideStore != nil {
+		if ct, ok := s.overrideStore.GetCustom(input.ToolName); ok {
+			var params map[string]any
+			if !isEmptyRawParams(input.Parameters) {
+				if err := json.Unmarshal(input.Parameters, &params); err != nil {
+					return errorResult(fmt.Errorf("invalid parameters: %w", err)), nil
+				}
+			}
+			result, err := s.executeCustomTool(ctx, ct, params)
+			if err != nil {
+				return errorResult(err), nil
+			}
+			return toCallToolResult(result)
+		}
+	}
+
 	// Handle CLI tools (mcp_name is "cli" or tool_name has cli_ prefix). CLI
 	// tools take string arguments, so the map[string]any path is safe here.
 	if input.MCPName == "cli" || cli.IsCLITool(input.ToolName) {

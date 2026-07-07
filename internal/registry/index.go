@@ -133,6 +133,9 @@ func buildIndex(snapshot map[string][]ToolInfo, provider OverrideProvider) *Tool
 		for i, t := range tools {
 			if provider != nil {
 				if desc, _, _, ok := provider.OverrideFor(mcpName, t.Name); ok {
+					// Preserve the upstream description so downstream stale
+					// detection can hash against the true source, not the override.
+					t.SourceDescription = t.Description
 					t.Description = desc
 				}
 			}

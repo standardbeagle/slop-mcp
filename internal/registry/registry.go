@@ -73,12 +73,25 @@ type ToolInfo struct {
 	Description string         `json:"description"`
 	MCPName     string         `json:"mcp_name"`
 	InputSchema map[string]any `json:"input_schema,omitempty"`
+	// SourceDescription holds the original upstream description when an
+	// override has been applied to Description (set by buildIndex).
+	// Empty when Description is the upstream description. Never serialized.
+	SourceDescription string `json:"-"`
 	// Override metadata (omitted when no override is active)
 	Stale         bool           `json:"stale,omitempty"`
 	StaleHint     string         `json:"stale_hint,omitempty"`
 	OverrideScope string         `json:"override_scope,omitempty"`
 	OverrideHash  string         `json:"override_hash,omitempty"`
 	StaleSource   map[string]any `json:"stale_source,omitempty"`
+}
+
+// UpstreamDescription returns the original server-provided description:
+// SourceDescription when an override has been applied, else Description.
+func (t ToolInfo) UpstreamDescription() string {
+	if t.SourceDescription != "" {
+		return t.SourceDescription
+	}
+	return t.Description
 }
 
 // PromptInfo represents a prompt from an MCP.
@@ -475,12 +488,15 @@ func (r *Registry) updateCache(mcpName string) {
 		}
 	}
 
-	// Convert registry.ToolInfo to cache.CachedToolInfo
+	// Convert registry.ToolInfo to cache.CachedToolInfo.
+	// Persist the upstream description, never an override description:
+	// the cache must reflect what the server reported so that stale
+	// detection and future index builds hash against the true source.
 	cachedTools := make([]cache.CachedToolInfo, len(tools))
 	for i, t := range tools {
 		cachedTools[i] = cache.CachedToolInfo{
 			Name:        t.Name,
-			Description: t.Description,
+			Description: t.UpstreamDescription(),
 			MCPName:     t.MCPName,
 			InputSchema: t.InputSchema,
 		}
@@ -1948,6 +1964,17 @@ func (r *Registry) AddToolsForTesting(mcpName string, tools []ToolInfo) {
 	r.tools[mcpName] = tools
 	r.mu.Unlock()
 	r.rebuildIndex()
+}
+
+// MarkCachedForTesting sets an MCP's state to StateCached so GetMetadata
+// returns its tools from the index without a live connection. Testing only.
+func (r *Registry) MarkCachedForTesting(mcpName string) {
+	r.mu.Lock()
+	r.states[mcpName] = &mcpState{
+		config: config.MCPConfig{Name: mcpName, Type: "stdio"},
+		state:  StateCached,
+	}
+	r.mu.Unlock()
 }
 
 // getValidToken retrieves a stored token and refreshes it if expired.

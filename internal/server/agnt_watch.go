@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -189,16 +190,21 @@ func buildAgntWatchCommand(input AgntWatchInput) (AgntWatchOutput, error) {
 	}, nil
 }
 
-// joinShellArgs joins args with spaces, single-quoting any arg that contains
-// a space. This is deliberately minimal: agnt IDs and socket paths may have
-// spaces in edge cases, but none of the fixed flags do.
+// shellSafeArgRE matches args that need no quoting: strictly alphanumerics
+// plus a small set of punctuation that no POSIX shell treats specially.
+var shellSafeArgRE = regexp.MustCompile(`^[A-Za-z0-9_.,/:=-]+$`)
+
+// joinShellArgs joins args with spaces, single-quoting any arg that is not
+// provably shell-safe. Single quotes inside an arg are escaped with the
+// standard '\'' idiom, so metacharacters (;, |, $, backticks, newlines,
+// quotes) can never break out of the argument.
 func joinShellArgs(args []string) string {
 	quoted := make([]string, len(args))
 	for i, a := range args {
-		if strings.ContainsAny(a, " \t") {
-			quoted[i] = "'" + a + "'"
-		} else {
+		if shellSafeArgRE.MatchString(a) {
 			quoted[i] = a
+		} else {
+			quoted[i] = "'" + strings.ReplaceAll(a, "'", `'\''`) + "'"
 		}
 	}
 	return strings.Join(quoted, " ")

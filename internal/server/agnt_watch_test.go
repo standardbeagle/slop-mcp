@@ -225,3 +225,43 @@ func TestHandleAgntWatch_AGNTBINARYPointingAtDirectoryFails(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "AGNT_BINARY")
 }
+
+// TestJoinShellArgs_QuotesMetacharacters ensures shell metacharacters can
+// never break out of an argument: anything outside the strict safe charset is
+// single-quoted, with embedded single quotes escaped via the '\'' idiom.
+func TestJoinShellArgs_QuotesMetacharacters(t *testing.T) {
+	cases := []struct {
+		name string
+		arg  string
+		want string
+	}{
+		{"semicolon", "id;rm -rf /", `'id;rm -rf /'`},
+		{"pipe", "a|b", `'a|b'`},
+		{"dollar", "$(whoami)", `'$(whoami)'`},
+		{"backtick", "`id`", "'`id`'"},
+		{"newline", "a\nb", "'a\nb'"},
+		{"single quote", "it's", `'it'\''s'`},
+		{"space", "my proc", `'my proc'`},
+		{"safe plain", "proc-1_a.b/c:d=e", "proc-1_a.b/c:d=e"},
+		{"safe comma list", "error,diagnostic", "error,diagnostic"},
+		{"empty", "", "''"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, joinShellArgs([]string{tc.arg}))
+		})
+	}
+}
+
+// TestBuildAgntWatchCommand_QuotesInjectionInProcessID verifies a hostile
+// process_id cannot inject shell commands into the returned command line.
+func TestBuildAgntWatchCommand_QuotesInjectionInProcessID(t *testing.T) {
+	out, err := buildAgntWatchCommand(AgntWatchInput{
+		Target:     "process",
+		ProcessID:  "x; rm -rf /",
+		AgntBinary: "/usr/local/bin/agnt",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, out.Command, `--process 'x; rm -rf /'`)
+	assert.NotContains(t, out.Command, "--process x; rm")
+}

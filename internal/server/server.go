@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/standardbeagle/slop-mcp/internal/builtins"
@@ -218,8 +219,34 @@ func (s *Server) RunHTTP(ctx context.Context, port int) error {
 	mux := http.NewServeMux()
 	mux.Handle("/", sseHandler)
 
+	// SSE streams are long-lived: ReadTimeout/WriteTimeout would kill active
+	// event streams, so only header-read and keep-alive idle are bounded.
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+
 	s.logger.Info("slop-mcp server running", "addr", addr)
-	return http.ListenAndServe(addr, mux)
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.ListenAndServe() }()
+
+	select {
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			return fmt.Errorf("http server shutdown: %w", err)
+		}
+		return ctx.Err()
+	case err := <-errCh:
+		if err == http.ErrServerClosed {
+			return nil
+		}
+		return err
+	}
 }
 
 // Close closes all MCP connections and the override store.
@@ -289,9 +316,20 @@ func (s *Server) CallTool(ctx context.Context, toolName string, args map[string]
 			Env:     getStringMapArg(args, "env"),
 			URL:     getStringArg(args, "url"),
 			Headers: getStringMapArg(args, "headers"),
+			Scope:   getStringArg(args, "scope"),
 			Dynamic: getBoolArg(args, "dynamic"),
 		}
 		_, result, err := s.handleManageMCPs(ctx, nil, input)
+		return result, err
+
+	case "get_metadata":
+		input := GetMetadataInput{
+			MCPName:  getStringArg(args, "mcp_name"),
+			ToolName: getStringArg(args, "tool_name"),
+			FilePath: getStringArg(args, "file_path"),
+			Verbose:  getBoolArg(args, "verbose"),
+		}
+		_, result, err := s.handleGetMetadata(ctx, nil, input)
 		return result, err
 
 	default:

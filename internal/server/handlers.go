@@ -122,7 +122,9 @@ func (s *Server) handleSearchTools(
 	if s.overrideStore != nil {
 		for i, t := range tools {
 			upstreamParams := extractParamDescs(t.InputSchema)
-			ov := s.overrideFor(t.MCPName, t.Name, t.Description, upstreamParams)
+			// t.Description may already carry the override (applied by buildIndex);
+			// hash against the true upstream description for stale detection.
+			ov := s.overrideFor(t.MCPName, t.Name, t.UpstreamDescription(), upstreamParams)
 			if ov.HasOverride {
 				tools[i].Description = ov.Description
 				if ov.Stale {
@@ -197,7 +199,9 @@ func (s *Server) handleExecuteTool(
 	}
 
 	// Custom tool routing: check override store before CLI and native MCP paths.
-	if s.overrideStore != nil && (input.MCPName == "_custom" || input.MCPName == "") {
+	// Routing contract: custom tools are addressed explicitly via mcp_name
+	// "_custom" (mcp_name is always required, enforced above).
+	if s.overrideStore != nil && input.MCPName == "_custom" {
 		if ct, ok := s.overrideStore.GetCustom(input.ToolName); ok {
 			result, err := s.executeCustomTool(ctx, ct, input.Parameters)
 			if err != nil {
@@ -249,6 +253,12 @@ func (s *Server) handleRunSlop(
 	req *mcp.CallToolRequest,
 	input RunSlopInput,
 ) (*mcp.CallToolResult, RunSlopOutput, error) {
+	// recipe and file_path are mutually exclusive: the file read below would
+	// silently replace the loaded recipe content.
+	if input.Recipe != "" && input.FilePath != "" {
+		return nil, RunSlopOutput{}, fmt.Errorf("recipe and file_path are mutually exclusive; provide only one")
+	}
+
 	// Handle recipe parameter
 	if input.Recipe != "" {
 		if input.Recipe == "list" {
@@ -490,6 +500,12 @@ func (s *Server) handleManageMCPs(
 			Source:  source,
 		}
 
+		// Connect at runtime first so a config that fails to connect is
+		// never persisted to disk.
+		if err := s.registry.Connect(ctx, cfg); err != nil {
+			return nil, ManageMCPsOutput{}, fmt.Errorf("failed to register MCP: %w", err)
+		}
+
 		// Persist to file if not memory scope
 		if scope != "memory" {
 			var configPath string
@@ -499,19 +515,14 @@ func (s *Server) handleManageMCPs(
 				// Use current working directory for project scope
 				cwd, err := os.Getwd()
 				if err != nil {
-					return nil, ManageMCPsOutput{}, fmt.Errorf("failed to get working directory: %w", err)
+					return nil, ManageMCPsOutput{}, fmt.Errorf("MCP %s connected (runtime only): failed to get working directory for %s scope: %w", input.Name, scope, err)
 				}
 				configPath = config.ProjectConfigPath(cwd)
 			}
 
 			if err := config.AddMCPConfigToFile(configPath, cfg); err != nil {
-				return nil, ManageMCPsOutput{}, fmt.Errorf("failed to save MCP to %s: %w", configPath, err)
+				return nil, ManageMCPsOutput{}, fmt.Errorf("MCP %s connected (runtime only): failed to save to %s: %w", input.Name, configPath, err)
 			}
-		}
-
-		// Also connect at runtime
-		if err := s.registry.Connect(ctx, cfg); err != nil {
-			return nil, ManageMCPsOutput{}, fmt.Errorf("failed to register MCP: %w", err)
 		}
 
 		msg := fmt.Sprintf("Successfully registered MCP: %s", input.Name)
@@ -704,7 +715,7 @@ func (s *Server) handleAuthMCP(
 				ServerName: result.Token.ServerName,
 				ServerURL:  result.Token.ServerURL,
 				IsAuth:     true,
-				ExpiresAt:  result.Token.ExpiresAt.Format("2006-01-02T15:04:05Z"),
+				ExpiresAt:  result.Token.ExpiresAt.UTC().Format("2006-01-02T15:04:05Z"),
 				HasRefresh: result.Token.RefreshToken != "",
 			},
 		}, nil
@@ -746,7 +757,7 @@ func (s *Server) handleAuthMCP(
 				ServerName: token.ServerName,
 				ServerURL:  token.ServerURL,
 				IsAuth:     true,
-				ExpiresAt:  token.ExpiresAt.Format("2006-01-02T15:04:05Z"),
+				ExpiresAt:  token.ExpiresAt.UTC().Format("2006-01-02T15:04:05Z"),
 				IsExpired:  token.IsExpired(),
 				HasRefresh: token.RefreshToken != "",
 			},
@@ -764,7 +775,7 @@ func (s *Server) handleAuthMCP(
 				ServerName: t.ServerName,
 				ServerURL:  t.ServerURL,
 				IsAuth:     true,
-				ExpiresAt:  t.ExpiresAt.Format("2006-01-02T15:04:05Z"),
+				ExpiresAt:  t.ExpiresAt.UTC().Format("2006-01-02T15:04:05Z"),
 				IsExpired:  t.IsExpired(),
 				HasRefresh: t.RefreshToken != "",
 			})
@@ -846,35 +857,16 @@ func (s *Server) handleGetMetadata(
 		metadata = filteredMetadata
 	}
 
-	// Determine if we should include full schemas:
-	// - Always include if verbose=true
-	// - Include if querying a specific tool (mcp_name + tool_name both specified)
-	// - Otherwise strip input_schema to reduce output size
-	includeSchemas := input.Verbose || (input.MCPName != "" && input.ToolName != "")
-
-	if !includeSchemas {
-		// Strip input schemas from tools to reduce output size
-		for i := range metadata {
-			strippedTools := make([]registry.ToolInfo, len(metadata[i].Tools))
-			for j, tool := range metadata[i].Tools {
-				strippedTools[j] = registry.ToolInfo{
-					Name:        tool.Name,
-					Description: tool.Description,
-					MCPName:     tool.MCPName,
-					// InputSchema intentionally omitted
-				}
-			}
-			metadata[i].Tools = strippedTools
-		}
-	}
-
 	// Apply overrides: swap descriptions, merge param descs, flag stale.
+	// This runs BEFORE schema stripping so stale hashes are always computed
+	// against the full input schema (compact and verbose paths must agree).
 	if s.overrideStore != nil {
 		for i := range metadata {
 			for j, tool := range metadata[i].Tools {
-				// Use the InputSchema still on the tool (may be stripped above for non-verbose).
-				// For stale detection we need the upstream description before swapping.
-				upstreamDesc := tool.Description
+				// For stale detection we need the true upstream description;
+				// cached MCPs return index tools where Description already
+				// carries the override (SourceDescription holds the original).
+				upstreamDesc := tool.UpstreamDescription()
 				upstreamParams := extractParamDescs(tool.InputSchema)
 				ov := s.overrideFor(metadata[i].Name, tool.Name, upstreamDesc, upstreamParams)
 				if !ov.HasOverride {
@@ -891,17 +883,50 @@ func (s *Server) handleGetMetadata(
 						"params":      upstreamParams,
 					}
 				}
-				// Merge param descriptions into InputSchema properties if schema present.
+				// Merge param descriptions into a deep copy of the InputSchema.
+				// The schema map may be shared with the immutable index snapshot
+				// (cached MCPs), so mutating it in place would pollute the index
+				// and race with concurrent readers.
 				if ov.Params != nil && metadata[i].Tools[j].InputSchema != nil {
-					props, ok := metadata[i].Tools[j].InputSchema["properties"].(map[string]any)
-					if ok {
+					if props, ok := metadata[i].Tools[j].InputSchema["properties"].(map[string]any); ok {
+						schemaCopy := make(map[string]any, len(metadata[i].Tools[j].InputSchema))
+						for k, v := range metadata[i].Tools[j].InputSchema {
+							schemaCopy[k] = v
+						}
+						propsCopy := make(map[string]any, len(props))
+						for k, v := range props {
+							propsCopy[k] = v
+						}
 						for paramName, paramDesc := range ov.Params {
-							if prop, ok := props[paramName].(map[string]any); ok {
-								prop["description"] = paramDesc
+							if prop, ok := propsCopy[paramName].(map[string]any); ok {
+								propCopy := make(map[string]any, len(prop))
+								for k, v := range prop {
+									propCopy[k] = v
+								}
+								propCopy["description"] = paramDesc
+								propsCopy[paramName] = propCopy
 							}
 						}
+						schemaCopy["properties"] = propsCopy
+						metadata[i].Tools[j].InputSchema = schemaCopy
 					}
 				}
+			}
+		}
+	}
+
+	// Determine if we should include full schemas:
+	// - Always include if verbose=true
+	// - Include if querying a specific tool (mcp_name + tool_name both specified)
+	// - Otherwise strip input_schema to reduce output size
+	includeSchemas := input.Verbose || (input.MCPName != "" && input.ToolName != "")
+
+	if !includeSchemas {
+		// Strip input schemas from tools to reduce output size,
+		// preserving override/stale metadata computed above.
+		for i := range metadata {
+			for j := range metadata[i].Tools {
+				metadata[i].Tools[j].InputSchema = nil
 			}
 		}
 	}

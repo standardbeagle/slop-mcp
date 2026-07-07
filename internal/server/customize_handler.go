@@ -43,8 +43,11 @@ func bodyLimit() int {
 	return 65536
 }
 
-// depScanRE matches mcp_name.tool_name( patterns for best-effort dependency extraction.
-var depScanRE = regexp.MustCompile(`\b([a-z_][a-z0-9_]*)\.([a-z_][a-z0-9_]*)\(`)
+// depScanRE matches mcp_name.tool_name( patterns for best-effort dependency
+// extraction. The MCP-name segment allows hyphens (e.g. dart-query.create_task);
+// this is scan-only metadata, so an occasional false positive on a subtraction
+// expression is harmless.
+var depScanRE = regexp.MustCompile(`\b([a-z_][a-z0-9_-]*)\.([a-z_][a-z0-9_]*)\(`)
 
 // customToolEntry is the wire format for a single custom tool in list_custom responses.
 type customToolEntry struct {
@@ -274,7 +277,10 @@ func (s *Server) upstreamToolInfo(mcpName, toolName string) (string, map[string]
 	tools := s.registry.SearchTools(toolName, mcpName)
 	for _, t := range tools {
 		if t.MCPName == mcpName && t.Name == toolName {
-			return t.Description, extractParamDescs(t.InputSchema), nil
+			// The index applies override descriptions; UpstreamDescription
+			// returns the original server description so hashes computed from
+			// this value reflect the true upstream, not the override.
+			return t.UpstreamDescription(), extractParamDescs(t.InputSchema), nil
 		}
 	}
 	return "", nil, fmt.Errorf("tool %q not found in MCP %q", toolName, mcpName)

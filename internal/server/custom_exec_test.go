@@ -182,3 +182,49 @@ func TestExecuteCustomTool_AcceptsJSONInteger(t *testing.T) {
 	text := result.Content[0].(*mcp.TextContent).Text
 	assert.Contains(t, text, "integer")
 }
+
+// TestWrapExecuteTool_RoutesCustomTool is a regression test for the real MCP
+// protocol path: wrapExecuteTool must route mcp_name "_custom" to the override
+// store's custom tools, just like handleExecuteTool does.
+func TestWrapExecuteTool_RoutesCustomTool(t *testing.T) {
+	s, store := newCustomTestServer(t)
+
+	err := store.SetCustom(overrides.ScopeUser, "greet", overrides.CustomTool{
+		Description: "greet a person",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name": map[string]any{"type": "string"},
+			},
+			"required": []any{"name"},
+		},
+		Body: `"hello " + args["name"]`,
+	})
+	require.NoError(t, err)
+
+	raw := []byte(`{"mcp_name":"_custom","tool_name":"greet","parameters":{"name":"world"}}`)
+	req := &mcp.CallToolRequest{Params: &mcp.CallToolParamsRaw{Arguments: raw}}
+
+	result, err := s.wrapExecuteTool(context.Background(), req)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.False(t, result.IsError, "custom tool must execute, not fall to registry: %+v", result)
+	require.NotEmpty(t, result.Content)
+	text := result.Content[0].(*mcp.TextContent).Text
+	assert.Contains(t, text, "hello world")
+}
+
+// TestWrapExecuteTool_CustomTool_UnknownNameFallsThrough mirrors the handler
+// contract: an unknown custom tool name falls through to the registry, which
+// reports the MCP as not found.
+func TestWrapExecuteTool_CustomTool_UnknownNameFallsThrough(t *testing.T) {
+	s, _ := newCustomTestServer(t)
+
+	raw := []byte(`{"mcp_name":"_custom","tool_name":"noexist"}`)
+	req := &mcp.CallToolRequest{Params: &mcp.CallToolParamsRaw{Arguments: raw}}
+
+	result, err := s.wrapExecuteTool(context.Background(), req)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.True(t, result.IsError)
+}
