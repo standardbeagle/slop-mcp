@@ -23,7 +23,7 @@ import (
 
 const (
 	serverName    = "slop-mcp"
-	serverVersion = "0.14.3"
+	serverVersion = "0.14.4"
 )
 
 // Keep the downstream MCP client Implementation version in sync with the
