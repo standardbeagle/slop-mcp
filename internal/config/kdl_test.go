@@ -595,7 +595,8 @@ func TestParseKDLConfig_CompleteConfig(t *testing.T) {
 }
 
 func TestParseKDLConfig_DuplicateMCPNames(t *testing.T) {
-	// When there are duplicate MCP names, the last one should win
+	// Duplicate MCP names within one file are a config error rather than a
+	// silent last-wins overwrite (which hid copy-paste editing mistakes).
 	kdl := `mcp "duplicate" {
     type "stdio"
     command "first"
@@ -606,19 +607,9 @@ mcp "duplicate" {
     url "https://example.com/sse"
 }`
 
-	cfg, err := ParseKDLConfig(kdl, SourceProject)
-	require.NoError(t, err)
-	require.NotNil(t, cfg)
-
-	// Only one entry for "duplicate" should exist
-	assert.Len(t, cfg.MCPs, 1)
-
-	mcp, ok := cfg.MCPs["duplicate"]
-	require.True(t, ok)
-
-	// Last one wins
-	assert.Equal(t, "sse", mcp.Type)
-	assert.Equal(t, "https://example.com/sse", mcp.URL)
+	_, err := ParseKDLConfig(kdl, SourceProject)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate mcp block")
 }
 
 func TestParseKDLConfig_SpecialCharactersInName(t *testing.T) {

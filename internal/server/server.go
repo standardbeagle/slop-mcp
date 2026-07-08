@@ -2,12 +2,14 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -251,6 +253,21 @@ func (s *Server) RunStdio(ctx context.Context) error {
 	return s.mcpServer.Run(ctx, transport)
 }
 
+// requireBearerToken wraps h so every request must carry
+// "Authorization: Bearer <token>". The comparison is constant-time.
+func requireBearerToken(token string, h http.Handler) http.Handler {
+	want := []byte("Bearer " + token)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got := []byte(r.Header.Get("Authorization"))
+		if len(got) != len(want) || subtle.ConstantTimeCompare(got, want) != 1 {
+			w.Header().Set("WWW-Authenticate", "Bearer")
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
 // RunHTTP runs the server using HTTP/SSE transport.
 func (s *Server) RunHTTP(ctx context.Context, port int) error {
 	if err := s.Start(ctx); err != nil {
@@ -269,11 +286,23 @@ func (s *Server) RunHTTP(ctx context.Context, port int) error {
 	mux.HandleFunc("/status", s.handleHTTPStatus)
 	mux.HandleFunc("/metadata", s.handleHTTPMetadata)
 
+	// Optional bearer-token gate over every route (SSE transport + the
+	// diagnostic endpoints). HTTP mode is otherwise unauthenticated and, bound
+	// to all interfaces, would expose the MCP inventory and tool descriptions to
+	// anything that can reach the port.
+	var handler http.Handler = mux
+	if token := strings.TrimSpace(os.Getenv("SLOP_MCP_HTTP_TOKEN")); token != "" {
+		handler = requireBearerToken(token, mux)
+		s.logger.Info("HTTP mode requires bearer token (SLOP_MCP_HTTP_TOKEN)")
+	} else {
+		s.logger.Warn("HTTP mode is UNAUTHENTICATED; set SLOP_MCP_HTTP_TOKEN to require a bearer token, or bind to a trusted interface only")
+	}
+
 	// SSE streams are long-lived: ReadTimeout/WriteTimeout would kill active
 	// event streams, so only header-read and keep-alive idle are bounded.
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           mux,
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,13 +11,23 @@ import (
 	"github.com/standardbeagle/slop-mcp/internal/config"
 )
 
-// monitorMessagesPath returns the path to the monitor messages file.
+// monitorMessagesPath returns the path to the monitor messages file, scoped to
+// the current project (working directory). Scoping by cwd keeps a `message`
+// sender and a `monitor` in the same project talking to each other while
+// isolating unrelated projects, which previously shared one global file and
+// truncated each other's messages. Falls back to the unscoped name if the cwd
+// cannot be determined.
 func monitorMessagesPath() string {
 	configDir := config.UserConfigDirPath()
 	if configDir == "" {
 		return ""
 	}
-	return filepath.Join(configDir, "monitor-messages")
+	name := "monitor-messages"
+	if cwd, err := getwd(); err == nil {
+		sum := sha256.Sum256([]byte(cwd))
+		name = "monitor-messages-" + hex.EncodeToString(sum[:8])
+	}
+	return filepath.Join(configDir, name)
 }
 
 func cmdMessage(args []string) {

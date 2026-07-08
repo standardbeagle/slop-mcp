@@ -419,6 +419,12 @@ func ParseKDLConfig(data string, source Source) (*Config, error) {
 
 	cfg := NewConfig()
 	for _, m := range kdlCfg.MCPs {
+		if m.Name == "" {
+			return nil, fmt.Errorf("mcp block is missing a name")
+		}
+		if _, dup := cfg.MCPs[m.Name]; dup {
+			return nil, fmt.Errorf("duplicate mcp block %q: each MCP name must be unique within a config file", m.Name)
+		}
 		mcpType := inferMCPType(m.Type, m.Command, m.URL)
 		cfg.MCPs[m.Name] = MCPConfig{
 			Name:                m.Name,
