@@ -113,8 +113,9 @@ func readCustom(path string, dst map[string]CustomTool) error {
 	return nil
 }
 
-// SetOverride stores or replaces an override entry at the given scope.
-func (s *Store) SetOverride(scope Scope, key string, e OverrideEntry) error {
+// setOverrideMem updates the in-memory override map without writing to disk.
+// Callers must flush the affected bank via writeBank afterwards.
+func (s *Store) setOverrideMem(scope Scope, key string, e OverrideEntry) error {
 	if s.rootFor(scope) == "" {
 		return fmt.Errorf("scope %s unavailable", scope)
 	}
@@ -128,7 +129,14 @@ func (s *Store) SetOverride(scope Scope, key string, e OverrideEntry) error {
 	s.overrides[scope][key] = e
 	s.markTouched(scope, BankOverrides, key)
 	s.mu.Unlock()
+	return nil
+}
 
+// SetOverride stores or replaces an override entry at the given scope.
+func (s *Store) SetOverride(scope Scope, key string, e OverrideEntry) error {
+	if err := s.setOverrideMem(scope, key, e); err != nil {
+		return err
+	}
 	// Write synchronously and surface the error: the customize handler reports
 	// success to the agent based on this return value, so a fire-and-forget
 	// flush that failed later would silently lose the customization.
@@ -182,16 +190,20 @@ func (s *Store) RemoveOverride(scope Scope, key string) (int, error) {
 	}
 	s.mu.Unlock()
 
+	// Attempt every touched scope even if one write fails, so in-memory and
+	// on-disk state do not diverge for scopes we skipped; report all errors.
+	var errs []error
 	for sc := range touched {
 		if err := s.writeBank(sc, BankOverrides); err != nil {
-			return n, err
+			errs = append(errs, err)
 		}
 	}
-	return n, nil
+	return n, errors.Join(errs...)
 }
 
-// SetCustom stores or replaces a custom tool at the given scope.
-func (s *Store) SetCustom(scope Scope, name string, ct CustomTool) error {
+// setCustomMem updates the in-memory custom-tool map without writing to disk.
+// Callers must flush the affected bank via writeBank afterwards.
+func (s *Store) setCustomMem(scope Scope, name string, ct CustomTool) error {
 	if s.rootFor(scope) == "" {
 		return fmt.Errorf("scope %s unavailable", scope)
 	}
@@ -205,7 +217,14 @@ func (s *Store) SetCustom(scope Scope, name string, ct CustomTool) error {
 	s.custom[scope][name] = ct
 	s.markTouched(scope, BankCustomTools, name)
 	s.mu.Unlock()
+	return nil
+}
 
+// SetCustom stores or replaces a custom tool at the given scope.
+func (s *Store) SetCustom(scope Scope, name string, ct CustomTool) error {
+	if err := s.setCustomMem(scope, name, ct); err != nil {
+		return err
+	}
 	// Synchronous write so a failed persist is reported instead of silently
 	// losing the custom tool (see SetOverride).
 	return s.writeBank(scope, BankCustomTools)
@@ -257,12 +276,14 @@ func (s *Store) RemoveCustom(scope Scope, name string) (int, error) {
 	}
 	s.mu.Unlock()
 
+	// Attempt every touched scope even if one write fails (see RemoveOverride).
+	var errs []error
 	for sc := range touched {
 		if err := s.writeBank(sc, BankCustomTools); err != nil {
-			return n, err
+			errs = append(errs, err)
 		}
 	}
-	return n, nil
+	return n, errors.Join(errs...)
 }
 
 // ListOverrides returns a snapshot by scope of all override entries.

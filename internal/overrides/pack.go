@@ -188,6 +188,11 @@ func (s *Store) Import(pack Pack, scope Scope, overwrite bool) (ImportReport, er
 
 	rep := ImportReport{}
 
+	// Mutate memory per entry, then flush each affected bank exactly once. Using
+	// the per-entry SetOverride/SetCustom would re-read + re-write the whole
+	// bank file (under the cross-process lock) once per entry -- O(N) full
+	// rewrites for a pack of N entries.
+	wroteOverrides := false
 	for _, po := range pack.Overrides {
 		if !overwrite {
 			if existing, ok := s.GetOverride(po.Key); ok && existing.Scope == scope {
@@ -195,7 +200,7 @@ func (s *Store) Import(pack Pack, scope Scope, overwrite bool) (ImportReport, er
 				continue
 			}
 		}
-		if err := s.SetOverride(scope, po.Key, OverrideEntry{
+		if err := s.setOverrideMem(scope, po.Key, OverrideEntry{
 			Description: po.Description,
 			Params:      po.Params,
 			SourceHash:  po.SourceHash,
@@ -203,8 +208,15 @@ func (s *Store) Import(pack Pack, scope Scope, overwrite bool) (ImportReport, er
 			return rep, err
 		}
 		rep.ImportedOverrides++
+		wroteOverrides = true
+	}
+	if wroteOverrides {
+		if err := s.writeBank(scope, BankOverrides); err != nil {
+			return rep, err
+		}
 	}
 
+	wroteCustom := false
 	for _, pc := range pack.CustomTools {
 		if !overwrite {
 			// Skip only when a custom tool already wins in the *same* target
@@ -216,7 +228,7 @@ func (s *Store) Import(pack Pack, scope Scope, overwrite bool) (ImportReport, er
 				continue
 			}
 		}
-		if err := s.SetCustom(scope, pc.Name, CustomTool{
+		if err := s.setCustomMem(scope, pc.Name, CustomTool{
 			Description: pc.Description,
 			InputSchema: pc.InputSchema,
 			Body:        pc.Body,
@@ -225,6 +237,12 @@ func (s *Store) Import(pack Pack, scope Scope, overwrite bool) (ImportReport, er
 			return rep, err
 		}
 		rep.ImportedCustom++
+		wroteCustom = true
+	}
+	if wroteCustom {
+		if err := s.writeBank(scope, BankCustomTools); err != nil {
+			return rep, err
+		}
 	}
 
 	// Note: dependency-MCP presence is not checked here (the store has no
