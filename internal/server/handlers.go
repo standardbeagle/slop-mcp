@@ -346,6 +346,15 @@ func (s *Server) handleRunSlop(
 	// on timeout, may be after this handler has already returned).
 	builtins.LockSlopExec()
 	relOnce := sync.OnceFunc(builtins.UnlockSlopExec)
+	// Until the runtime is handed to executeSlopWithContext (whose worker owns
+	// the release), a panic in construction or arg binding must still release
+	// the exec lock, or every future execution would deadlock process-wide.
+	handedOff := false
+	defer func() {
+		if !handedOff {
+			relOnce()
+		}
+	}()
 
 	// Create SLOP runtime with lazy, registry-backed MCP services: no MCP is
 	// connected unless the script actually calls one of its tools.
@@ -353,6 +362,7 @@ func (s *Server) handleRunSlop(
 	defer rt.Close()
 
 	// Execute script
+	handedOff = true
 	result, err := executeSlopWithContext(execCtx, rt, script, relOnce)
 	if err != nil {
 		return nil, RunSlopOutput{}, parseSlopError(script, err)

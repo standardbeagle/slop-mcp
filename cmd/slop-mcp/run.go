@@ -54,9 +54,11 @@ func cmdRun(args []string) {
 	}
 
 	// Create SLOP runtime with a MaxDuration matching --timeout so a runaway
-	// script self-terminates even if it ignores context.
+	// script self-terminates even if it ignores context. Round up so a
+	// sub-second timeout still yields at least 1s (0 would disable the limit).
+	maxDurationSecs := int64((opts.timeout + time.Second - 1) / time.Second)
 	rt := builtins.NewRuntimeWithConfig(slop.Config{
-		MaxDuration: int64(opts.timeout / time.Second),
+		MaxDuration: maxDurationSecs,
 	})
 	defer rt.Close()
 

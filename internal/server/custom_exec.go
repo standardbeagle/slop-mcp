@@ -126,6 +126,15 @@ func (s *Server) executeCustomTool(ctx context.Context, ct overrides.CustomTool,
 	// truly ends, via executeSlopWithContext's worker.
 	builtins.LockSlopExec()
 	relOnce := sync.OnceFunc(builtins.UnlockSlopExec)
+	// Release the exec lock if we panic before handing the runtime to
+	// executeSlopWithContext's worker (which otherwise owns the release);
+	// otherwise a construction/binding panic would deadlock all execution.
+	handedOff := false
+	defer func() {
+		if !handedOff {
+			relOnce()
+		}
+	}()
 
 	// SLOP runtime with lazy, registry-backed MCP services (see newSlopRuntime).
 	rt := s.newSlopRuntime(execCtx)
@@ -140,6 +149,7 @@ func (s *Server) executeCustomTool(ctx context.Context, ct overrides.CustomTool,
 		}
 	}
 
+	handedOff = true
 	result, err := executeSlopWithContext(execCtx, rt, ct.Body, relOnce)
 	if err != nil {
 		return nil, parseSlopError(ct.Body, err)

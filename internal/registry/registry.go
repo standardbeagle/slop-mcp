@@ -247,6 +247,7 @@ type Registry struct {
 	cache             *cache.Store             // disk cache for tool metadata
 	connectMu         map[string]chan struct{} // per-MCP semaphore serializing lifecycle ops
 	closed            bool                     // set by Close; blocks late connection installs
+	reconnecting      map[string]bool          // MCPs with an in-flight auto-reconnect goroutine
 }
 
 // newRegistry initialises a Registry and seeds the atomic index pointer.
@@ -1288,21 +1289,31 @@ func (r *Registry) backgroundHealthCheckLoop(ctx context.Context, interval time.
 
 // autoReconnectErrored launches background reconnect-with-backoff for every MCP
 // currently in StateError that has auto-reconnect enabled (MaxRetries != -1).
-// ReconnectWithBackoff flips the state to StateReconnecting immediately, so a
-// subsequent health tick skips an MCP whose reconnect cycle is still running --
-// no goroutine pile-up.
+// An in-flight guard (r.reconnecting) ensures at most one auto-reconnect
+// goroutine per MCP even if ReconnectWithBackoff has not yet flipped the state
+// to StateReconnecting (e.g. it is still blocked acquiring the connect
+// semaphore), so repeated health ticks cannot pile up goroutines.
 func (r *Registry) autoReconnectErrored(ctx context.Context) {
-	r.mu.RLock()
+	r.mu.Lock()
+	if r.reconnecting == nil {
+		r.reconnecting = make(map[string]bool)
+	}
 	var targets []string
 	for name, st := range r.states {
-		if st.state == StateError && st.config.MaxRetries != -1 {
+		if st.state == StateError && st.config.MaxRetries != -1 && !r.reconnecting[name] {
+			r.reconnecting[name] = true
 			targets = append(targets, name)
 		}
 	}
-	r.mu.RUnlock()
+	r.mu.Unlock()
 
 	for _, name := range targets {
 		go func(n string) {
+			defer func() {
+				r.mu.Lock()
+				delete(r.reconnecting, n)
+				r.mu.Unlock()
+			}()
 			if err := r.ReconnectWithBackoff(ctx, n, 0); err != nil {
 				r.logger.Debug("auto-reconnect failed", "mcp_name", n, "error", err)
 			}

@@ -228,7 +228,7 @@ func TestHandleAgntWatch_AGNTBINARYPointingAtDirectoryFails(t *testing.T) {
 
 // TestJoinShellArgs_QuotesMetacharacters ensures shell metacharacters can
 // never break out of an argument: anything outside the strict safe charset is
-// single-quoted, with embedded single quotes escaped via the '\'' idiom.
+// single-quoted, with embedded single quotes escaped via the '\” idiom.
 func TestJoinShellArgs_QuotesMetacharacters(t *testing.T) {
 	cases := []struct {
 		name string
