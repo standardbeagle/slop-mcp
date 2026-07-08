@@ -2,6 +2,7 @@ package builtins
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/standardbeagle/slop/pkg/slop"
@@ -22,6 +23,16 @@ func NewSessionStore() *SessionStore {
 	}
 }
 
+// copyValue returns a deep copy of a SLOP value by round-tripping through its
+// native Go representation. This isolates stored values from later mutation by
+// the caller (and returned values from mutation of the stored copy), so
+// concurrent scripts sharing the session store cannot race on a shared
+// *MapValue / *ListValue. Scalars round-trip exactly; non-data values
+// (functions, errors) are not meaningful to share across runtimes anyway.
+func copyValue(v slop.Value) slop.Value {
+	return slop.GoToValue(slop.ValueToGo(v))
+}
+
 // RegisterSession overrides the SLOP runtime's store_* functions with
 // thread-safe versions backed by the given SessionStore.
 func RegisterSession(rt *slop.Runtime, store *SessionStore) {
@@ -39,9 +50,14 @@ func RegisterSession(rt *slop.Runtime, store *SessionStore) {
 		store.mu.RUnlock()
 
 		if !exists {
+			// Upstream store_get accepts an optional default; return it when the
+			// key is absent instead of null.
+			if len(args) >= 2 {
+				return args[1], nil
+			}
 			return slop.NewNullValue(), nil
 		}
-		return val, nil
+		return copyValue(val), nil
 	})
 
 	rt.RegisterBuiltin("store_set", func(args []slop.Value, kwargs map[string]slop.Value) (slop.Value, error) {
@@ -54,7 +70,7 @@ func RegisterSession(rt *slop.Runtime, store *SessionStore) {
 		}
 
 		store.mu.Lock()
-		store.data[key.Value] = args[1]
+		store.data[key.Value] = copyValue(args[1])
 		store.mu.Unlock()
 
 		return slop.NewNullValue(), nil
@@ -93,10 +109,20 @@ func RegisterSession(rt *slop.Runtime, store *SessionStore) {
 	})
 
 	rt.RegisterBuiltin("store_keys", func(args []slop.Value, kwargs map[string]slop.Value) (slop.Value, error) {
+		// Upstream store_keys accepts an optional prefix filter.
+		prefix := ""
+		if len(args) >= 1 {
+			if sv, ok := args[0].(*slop.StringValue); ok {
+				prefix = sv.Value
+			}
+		}
+
 		store.mu.RLock()
 		keys := make([]any, 0, len(store.data))
 		for k := range store.data {
-			keys = append(keys, k)
+			if prefix == "" || strings.HasPrefix(k, prefix) {
+				keys = append(keys, k)
+			}
 		}
 		store.mu.RUnlock()
 

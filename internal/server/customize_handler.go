@@ -361,9 +361,17 @@ func (s *Server) customizeDefineCustom(_ context.Context, in CustomizeToolsInput
 
 	// Syntax-check the body now, while the defining context is present, instead
 	// of deferring the error to the first execution of the custom tool.
-	syntaxRT := builtins.NewRuntime()
-	defer syntaxRT.Close()
-	if _, err := syntaxRT.Parse(in.Body); err != nil {
+	// Constructing a runtime rebinds slop's package-global pipeline caller, so
+	// hold the process-wide exec lock across construct+parse to avoid racing a
+	// concurrent script execution (see builtins.slopExecMu).
+	if err := func() error {
+		builtins.LockSlopExec()
+		defer builtins.UnlockSlopExec()
+		syntaxRT := builtins.NewRuntime()
+		defer syntaxRT.Close()
+		_, perr := syntaxRT.Parse(in.Body)
+		return perr
+	}(); err != nil {
 		return nil, customizeToolsOutput{}, fmt.Errorf("body has SLOP syntax errors: %w", err)
 	}
 

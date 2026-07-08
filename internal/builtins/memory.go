@@ -99,6 +99,9 @@ func (m *MemoryStore) bankPath(bank string) string {
 }
 
 func (m *MemoryStore) loadBank(bank string) (*memoryBank, error) {
+	if m.baseDir == "" {
+		return nil, fmt.Errorf("memory store base directory not configured")
+	}
 	path := m.bankPath(bank)
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -111,10 +114,19 @@ func (m *MemoryStore) loadBank(bank string) (*memoryBank, error) {
 	if err := json.Unmarshal(data, &b); err != nil {
 		return nil, fmt.Errorf("corrupt bank file %s: %w", bank, err)
 	}
+	// A bank file with `"entries": null` (hand-edited, older writer, partial
+	// migration) unmarshals to a nil map; guarantee a usable map so the write
+	// path (b.Entries[key] = ...) cannot panic.
+	if b.Entries == nil {
+		b.Entries = make(map[string]*memoryEntry)
+	}
 	return &b, nil
 }
 
 func (m *MemoryStore) saveBank(bank string, b *memoryBank) error {
+	if m.baseDir == "" {
+		return fmt.Errorf("memory store base directory not configured")
+	}
 	if err := os.MkdirAll(m.baseDir, 0755); err != nil {
 		return err
 	}
@@ -143,7 +155,19 @@ func RegisterMemory(rt *slop.Runtime, store *MemoryStore) {
 		if !ok {
 			return nil, fmt.Errorf("mem_save: key must be a string")
 		}
+		// Reject error values: ValueToGo turns a SLOP error into a Go error,
+		// which json.Marshal renders as "{}", silently persisting garbage.
+		if _, isErr := args[2].(*slop.ErrorValue); isErr {
+			return nil, fmt.Errorf("mem_save: cannot store an error value")
+		}
 		value := slop.ValueToGo(args[2])
+		// Fail fast if the value cannot be serialized, rather than persisting a
+		// partial/empty representation (saveBank would also fail later, but the
+		// error there does not name the offending value).
+		valBytes, err := json.Marshal(value)
+		if err != nil {
+			return nil, fmt.Errorf("mem_save: value for key %q is not serializable: %w", key.Value, err)
+		}
 
 		store.mu.Lock()
 		defer store.mu.Unlock()
@@ -190,10 +214,8 @@ func RegisterMemory(rt *slop.Runtime, store *MemoryStore) {
 			entry.Schema = slop.ValueToGo(v)
 		}
 
-		// Auto-compute size from serialized value
-		if valBytes, err := json.Marshal(value); err == nil {
-			entry.Size = len(valBytes)
-		}
+		// Auto-compute size from the serialized value computed above.
+		entry.Size = len(valBytes)
 
 		b.Entries[key.Value] = entry
 		b.Meta.UpdatedAt = now
@@ -416,7 +438,10 @@ func RegisterMemory(rt *slop.Runtime, store *MemoryStore) {
 		keys := make([]string, 0, len(b.Entries))
 		for k := range b.Entries {
 			if pattern != "" {
-				matched, _ := filepath.Match(pattern, k)
+				matched, err := filepath.Match(pattern, k)
+				if err != nil {
+					return nil, fmt.Errorf("mem_list: invalid pattern %q: %w", pattern, err)
+				}
 				if !matched {
 					continue
 				}

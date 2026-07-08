@@ -108,15 +108,61 @@ func jwtVerify(args []slop.Value, kwargs map[string]slop.Value) (slop.Value, err
 		return nil, fmt.Errorf("jwt_verify: signature verification failed")
 	}
 
-	// Decode and return
-	header, _ := decodeJWTPart(parts[0])
-	payload, _ := decodeJWTPart(parts[1])
+	// Decode header/payload; surface decode errors instead of discarding them.
+	header, err := decodeJWTPart(parts[0])
+	if err != nil {
+		return nil, fmt.Errorf("jwt_verify: invalid header: %w", err)
+	}
+	payload, err := decodeJWTPart(parts[1])
+	if err != nil {
+		return nil, fmt.Errorf("jwt_verify: invalid payload: %w", err)
+	}
+
+	// Time-based validity: a signature-valid but expired or not-yet-active token
+	// must not report valid=true (that was a misuse trap). Callers that want the
+	// signature result alone can read signature_valid.
+	now := time.Now().Unix()
+	expired := false
+	if exp, ok, terr := jwtTimeClaim(payload, "exp"); terr != nil {
+		return nil, fmt.Errorf("jwt_verify: %w", terr)
+	} else if ok && now >= exp {
+		expired = true
+	}
+	notYetValid := false
+	if nbf, ok, terr := jwtTimeClaim(payload, "nbf"); terr != nil {
+		return nil, fmt.Errorf("jwt_verify: %w", terr)
+	} else if ok && now < nbf {
+		notYetValid = true
+	}
 
 	return slop.GoToValue(map[string]any{
-		"valid":   true,
-		"header":  header,
-		"payload": payload,
+		"valid":           !expired && !notYetValid,
+		"signature_valid": true,
+		"expired":         expired,
+		"not_yet_valid":   notYetValid,
+		"header":          header,
+		"payload":         payload,
 	}), nil
+}
+
+// jwtTimeClaim extracts a numeric time claim (exp/nbf) from a decoded payload.
+// Returns ok=false when the claim is absent, or an error when it is present but
+// not a number.
+func jwtTimeClaim(payload map[string]any, name string) (int64, bool, error) {
+	v, ok := payload[name]
+	if !ok {
+		return 0, false, nil
+	}
+	switch n := v.(type) {
+	case float64:
+		return int64(n), true, nil
+	case int64:
+		return n, true, nil
+	case int:
+		return int64(n), true, nil
+	default:
+		return 0, false, fmt.Errorf("%s claim is not a number", name)
+	}
 }
 
 // jwtSign creates a signed JWT token.

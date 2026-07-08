@@ -19,6 +19,8 @@ import (
 	"github.com/standardbeagle/slop-mcp/internal/config"
 	"github.com/standardbeagle/slop-mcp/internal/overrides"
 	"github.com/standardbeagle/slop-mcp/internal/recipes"
+	"sync"
+
 	"github.com/standardbeagle/slop-mcp/internal/registry"
 	"github.com/standardbeagle/slop/pkg/slop"
 )
@@ -336,13 +338,22 @@ func (s *Server) handleRunSlop(
 	execCtx, cancel := context.WithTimeout(ctx, defaultSlopExecutionTimeout)
 	defer cancel()
 
+	// Hold the process-wide SLOP construct+execute lock across BOTH runtime
+	// construction and execution (see builtins.slopExecMu): slop v0.3.0's
+	// pipeline caller is a package global rebound at every construction, so
+	// concurrent runtimes would race and misroute callbacks. Released exactly
+	// once by executeSlopWithContext's worker when execution truly ends (which,
+	// on timeout, may be after this handler has already returned).
+	builtins.LockSlopExec()
+	relOnce := sync.OnceFunc(builtins.UnlockSlopExec)
+
 	// Create SLOP runtime with lazy, registry-backed MCP services: no MCP is
 	// connected unless the script actually calls one of its tools.
 	rt := s.newSlopRuntime(execCtx)
 	defer rt.Close()
 
 	// Execute script
-	result, err := executeSlopWithContext(execCtx, rt, script)
+	result, err := executeSlopWithContext(execCtx, rt, script, relOnce)
 	if err != nil {
 		return nil, RunSlopOutput{}, parseSlopError(script, err)
 	}

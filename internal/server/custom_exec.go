@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sync"
 
 	"github.com/standardbeagle/slop-mcp/internal/builtins"
 	"github.com/standardbeagle/slop-mcp/internal/overrides"
@@ -120,6 +121,12 @@ func (s *Server) executeCustomTool(ctx context.Context, ct overrides.CustomTool,
 	execCtx, cancel := context.WithTimeout(ctx, defaultSlopExecutionTimeout)
 	defer cancel()
 
+	// Hold the process-wide SLOP construct+execute lock across construction and
+	// execution (see builtins.slopExecMu). Released exactly once when execution
+	// truly ends, via executeSlopWithContext's worker.
+	builtins.LockSlopExec()
+	relOnce := sync.OnceFunc(builtins.UnlockSlopExec)
+
 	// SLOP runtime with lazy, registry-backed MCP services (see newSlopRuntime).
 	rt := s.newSlopRuntime(execCtx)
 	defer rt.Close()
@@ -133,7 +140,7 @@ func (s *Server) executeCustomTool(ctx context.Context, ct overrides.CustomTool,
 		}
 	}
 
-	result, err := executeSlopWithContext(execCtx, rt, ct.Body)
+	result, err := executeSlopWithContext(execCtx, rt, ct.Body, relOnce)
 	if err != nil {
 		return nil, parseSlopError(ct.Body, err)
 	}

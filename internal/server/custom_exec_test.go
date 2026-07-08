@@ -149,11 +149,11 @@ func TestExecuteCustomTool_AcceptsJSONInteger(t *testing.T) {
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"count": map[string]any{"type": "integer"},
+				"qty": map[string]any{"type": "integer"},
 			},
-			"required": []any{"count"},
+			"required": []any{"qty"},
 		},
-		Body: `count + 1`,
+		Body: `qty + 1`,
 	})
 	require.NoError(t, err)
 
@@ -163,7 +163,7 @@ func TestExecuteCustomTool_AcceptsJSONInteger(t *testing.T) {
 	_, out, err := s.handleExecuteTool(ctx, nil, ExecuteToolInput{
 		MCPName:    "_custom",
 		ToolName:   "increment",
-		Parameters: map[string]any{"count": float64(5)},
+		Parameters: map[string]any{"qty": float64(5)},
 	})
 	require.NoError(t, err)
 	assert.Equal(t, float64(6), out)
@@ -172,7 +172,7 @@ func TestExecuteCustomTool_AcceptsJSONInteger(t *testing.T) {
 	result, out, err := s.handleExecuteTool(ctx, nil, ExecuteToolInput{
 		MCPName:    "_custom",
 		ToolName:   "increment",
-		Parameters: map[string]any{"count": float64(3.14)},
+		Parameters: map[string]any{"qty": float64(3.14)},
 	})
 	require.NoError(t, err) // Protocol error is nil; error routed through errorResult
 	assert.Nil(t, out)

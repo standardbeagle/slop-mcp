@@ -76,11 +76,32 @@ type slopExecutionResult struct {
 	err   error
 }
 
-func executeSlopWithContext(ctx context.Context, rt *slop.Runtime, script string) (slop.Value, error) {
+// executeSlopWithContext runs a script under a timeout. The caller MUST hold
+// builtins.LockSlopExec across construction and this call; onExecDone is invoked
+// exactly once when rt.Execute truly returns (which may be after this function
+// has already returned on timeout) and is where the caller releases that lock.
+// Releasing only when execution actually ends -- not when the timeout fires --
+// keeps a detached, still-running script from having the shared pipeline global
+// rebound out from under it.
+func executeSlopWithContext(ctx context.Context, rt *slop.Runtime, script string, onExecDone func()) (slop.Value, error) {
 	// The buffered channel guarantees the worker can always send and exit even
 	// after we return on timeout, so no goroutine leaks.
 	done := make(chan slopExecutionResult, 1)
 	go func() {
+		// Outer defer always releases the exec lock, even on panic, so a single
+		// bad script cannot deadlock every future execution.
+		defer func() {
+			if onExecDone != nil {
+				onExecDone()
+			}
+		}()
+		// Inner defer converts an evaluator panic into an error result instead
+		// of crashing the server process.
+		defer func() {
+			if r := recover(); r != nil {
+				done <- slopExecutionResult{err: fmt.Errorf("slop execution panicked: %v", r)}
+			}
+		}()
 		value, err := rt.Execute(script)
 		done <- slopExecutionResult{value: value, err: err}
 	}()
@@ -91,10 +112,9 @@ func executeSlopWithContext(ctx context.Context, rt *slop.Runtime, script string
 	case <-ctx.Done():
 		// rt.Execute is not context-aware but self-terminates via the runtime's
 		// MaxDuration (set equal to this timeout in newSlopRuntime), so the
-		// worker stops shortly after. Do not Close here: the caller owns the
-		// runtime's lifecycle via its deferred Close, and Close only tears down
-		// the (empty) MCP manager — closing it twice or mid-Eval is pointless
-		// and would race the deferred call.
+		// worker stops shortly after and then runs onExecDone. Do not Close
+		// here: the caller owns the runtime's lifecycle via its deferred Close,
+		// and Close only tears down the (empty) MCP manager.
 		return nil, fmt.Errorf("SLOP execution canceled or timed out: %w", ctx.Err())
 	}
 }

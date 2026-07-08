@@ -13,6 +13,7 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"fmt"
+	"math/big"
 	"strings"
 
 	"github.com/standardbeagle/slop/pkg/slop"
@@ -25,6 +26,10 @@ const (
 	digits    = "0123456789"
 	symbols   = "!@#$%^&*()_+-=[]{}|;:,.<>?"
 )
+
+// maxRandomLen caps random/password length requests so a single script cannot
+// demand a multi-gigabyte allocation.
+const maxRandomLen = 1 << 20 // 1 MiB
 
 // RegisterCrypto registers all crypto built-in functions with the runtime.
 func RegisterCrypto(rt *slop.Runtime) {
@@ -105,6 +110,9 @@ func builtinCryptoPassword(args []slop.Value, kwargs map[string]slop.Value) (slo
 
 	if length < 1 {
 		return nil, fmt.Errorf("crypto_password: length must be at least 1")
+	}
+	if length > maxRandomLen {
+		return nil, fmt.Errorf("crypto_password: length exceeds maximum of %d", maxRandomLen)
 	}
 
 	// Build character set
@@ -379,6 +387,9 @@ func builtinRandomBytes(args []slop.Value, kwargs map[string]slop.Value) (slop.V
 	if length < 1 {
 		return nil, fmt.Errorf("crypto_random_bytes: length must be at least 1")
 	}
+	if length > maxRandomLen {
+		return nil, fmt.Errorf("crypto_random_bytes: length exceeds maximum of %d", maxRandomLen)
+	}
 
 	bytes := make([]byte, length)
 	if _, err := rand.Read(bytes); err != nil {
@@ -398,6 +409,9 @@ func builtinRandomBase64(args []slop.Value, kwargs map[string]slop.Value) (slop.
 
 	if length < 1 {
 		return nil, fmt.Errorf("crypto_random_base64: length must be at least 1")
+	}
+	if length > maxRandomLen {
+		return nil, fmt.Errorf("crypto_random_base64: length exceeds maximum of %d", maxRandomLen)
 	}
 
 	bytes := make([]byte, length)
@@ -503,16 +517,17 @@ func builtinHexDecode(args []slop.Value, kwargs map[string]slop.Value) (slop.Val
 // Helper functions
 
 func randomInt(max int) (int, error) {
-	b := make([]byte, 8)
-	if _, err := rand.Read(b); err != nil {
+	if max <= 0 {
+		return 0, fmt.Errorf("randomInt: max must be positive")
+	}
+	// crypto/rand.Int is uniform over [0, max) -- no modulo bias, no negative
+	// wraparound (the previous hand-rolled version could fold to a negative
+	// index on MinInt32 and doubled the modulo bias).
+	n, err := rand.Int(rand.Reader, big.NewInt(int64(max)))
+	if err != nil {
 		return 0, err
 	}
-	// Simple modulo (not perfectly uniform but good enough for passwords)
-	n := int(b[0])<<24 | int(b[1])<<16 | int(b[2])<<8 | int(b[3])
-	if n < 0 {
-		n = -n
-	}
-	return n % max, nil
+	return int(n.Int64()), nil
 }
 
 func getBytes(v slop.Value) ([]byte, error) {
