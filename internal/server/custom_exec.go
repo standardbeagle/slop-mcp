@@ -117,8 +117,11 @@ func (s *Server) executeCustomTool(ctx context.Context, ct overrides.CustomTool,
 		return nil, fmt.Errorf("args: %w", err)
 	}
 
+	execCtx, cancel := context.WithTimeout(ctx, defaultSlopExecutionTimeout)
+	defer cancel()
+
 	// SLOP runtime with lazy, registry-backed MCP services (see newSlopRuntime).
-	rt := s.newSlopRuntime(ctx)
+	rt := s.newSlopRuntime(execCtx)
 	defer rt.Close()
 
 	// Bind `args` (full params map) and shorthand per-key bindings for non-reserved names.
@@ -130,7 +133,7 @@ func (s *Server) executeCustomTool(ctx context.Context, ct overrides.CustomTool,
 		}
 	}
 
-	result, err := rt.Execute(ct.Body)
+	result, err := executeSlopWithContext(execCtx, rt, ct.Body)
 	if err != nil {
 		return nil, parseSlopError(ct.Body, err)
 	}

@@ -83,7 +83,7 @@ Use slop_reference to browse built-in functions (map, filter, reduce, json_parse
 	s.mcpServer.AddTool(
 		&mcp.Tool{
 			Name:        "manage_mcps",
-			Description: "Manage MCP connections. Actions: register, unregister, reconnect, list, status. Returns text.",
+			Description: "Manage MCP connections. Actions: register, unregister, reconnect, list, status, health_check, list_stale_overrides. Returns text.",
 			InputSchema: manageMCPsInputSchema,
 		},
 		s.wrapManageMCPs,

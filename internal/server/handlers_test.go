@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -1283,6 +1284,44 @@ emit("second")
 	emitted1 := extractSlopValue(output.Emitted[1])
 	assert.Contains(t, []any{emitted0, emitted1}, "first")
 	assert.Contains(t, []any{emitted0, emitted1}, "second")
+}
+
+func TestHandleRunSlop_PrintDoesNotWriteStdout(t *testing.T) {
+	s := mockServer([]registry.ToolInfo{})
+
+	oldStdout := os.Stdout
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stdout = w
+	t.Cleanup(func() {
+		os.Stdout = oldStdout
+		_ = r.Close()
+	})
+
+	result, output, err := s.handleRunSlop(context.Background(), &mcp.CallToolRequest{}, RunSlopInput{
+		Script: `print("hello")
+"done"`,
+	})
+
+	_ = w.Close()
+	data, readErr := io.ReadAll(r)
+	require.NoError(t, readErr)
+	assert.NoError(t, err)
+	assert.Nil(t, result)
+	assert.Equal(t, "done", extractSlopValue(output.Result))
+	assert.Empty(t, string(data))
+}
+
+func TestHandleRunSlop_LoopIterationLimit(t *testing.T) {
+	s := mockServer([]registry.ToolInfo{})
+
+	_, _, err := s.handleRunSlop(context.Background(), &mcp.CallToolRequest{}, RunSlopInput{
+		Script: `for i in range(1000000000):
+    i`,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "iteration limit exceeded")
 }
 
 // TestHandleRunSlop_InlineScript_Invalid tests run_slop with an invalid script.

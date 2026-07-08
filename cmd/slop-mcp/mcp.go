@@ -1,12 +1,12 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -1347,30 +1347,10 @@ func cmdMCPStatus(args []string) {
 		return
 	}
 
-	// Query the running server via HTTP
-	url := fmt.Sprintf("http://localhost:%d/", opts.port)
-
-	// Build MCP tool call request
-	reqBody := map[string]any{
-		"jsonrpc": "2.0",
-		"id":      1,
-		"method":  "tools/call",
-		"params": map[string]any{
-			"name": "manage_mcps",
-			"arguments": map[string]any{
-				"action": "status",
-			},
-		},
-	}
-
-	reqJSON, err := json.Marshal(reqBody)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
+	url := fmt.Sprintf("http://localhost:%d/status", opts.port)
 
 	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Post(url, "application/json", bytes.NewReader(reqJSON))
+	resp, err := client.Get(url)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error connecting to server at %s: %v\n", url, err)
 		fmt.Fprintf(os.Stderr, "Make sure slop-mcp is running with: slop-mcp serve --port %d\n", opts.port)
@@ -1384,40 +1364,16 @@ func cmdMCPStatus(args []string) {
 		os.Exit(1)
 	}
 
-	// Parse response
-	var rpcResp struct {
-		Result struct {
-			Content []struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			} `json:"content"`
-		} `json:"result"`
-		Error *struct {
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-
-	if err := json.Unmarshal(body, &rpcResp); err != nil {
-		fmt.Fprintf(os.Stderr, "Error parsing response: %v\n", err)
-		os.Exit(1)
-	}
-
-	if rpcResp.Error != nil {
-		fmt.Fprintf(os.Stderr, "Server error: %s\n", rpcResp.Error.Message)
-		os.Exit(1)
-	}
-
-	// Extract the status JSON from the text content
-	if len(rpcResp.Result.Content) == 0 {
-		fmt.Fprintf(os.Stderr, "No status data in response\n")
+	if resp.StatusCode != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "Server error: %s\n", strings.TrimSpace(string(body)))
 		os.Exit(1)
 	}
 
 	var output struct {
 		Status []registry.MCPFullStatus `json:"status"`
 	}
-	if err := json.Unmarshal([]byte(rpcResp.Result.Content[0].Text), &output); err != nil {
-		fmt.Fprintf(os.Stderr, "Error parsing status: %v\n", err)
+	if err := json.Unmarshal(body, &output); err != nil {
+		fmt.Fprintf(os.Stderr, "Error parsing response: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -1723,35 +1679,15 @@ func cmdMCPMetadata(args []string) {
 		return
 	}
 
-	// Query the running server via HTTP
-	url := fmt.Sprintf("http://localhost:%d/", opts.port)
-
-	// Build MCP tool call request
-	arguments := map[string]any{}
+	endpoint := fmt.Sprintf("http://localhost:%d/metadata", opts.port)
 	if opts.mcpName != "" {
-		arguments["mcp_name"] = opts.mcpName
-	}
-
-	reqBody := map[string]any{
-		"jsonrpc": "2.0",
-		"id":      1,
-		"method":  "tools/call",
-		"params": map[string]any{
-			"name":      "get_metadata",
-			"arguments": arguments,
-		},
-	}
-
-	reqJSON, err := json.Marshal(reqBody)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		endpoint += "?mcp_name=" + url.QueryEscape(opts.mcpName)
 	}
 
 	client := &http.Client{Timeout: 60 * time.Second}
-	resp, err := client.Post(url, "application/json", bytes.NewReader(reqJSON))
+	resp, err := client.Get(endpoint)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error connecting to server at %s: %v\n", url, err)
+		fmt.Fprintf(os.Stderr, "Error connecting to server at %s: %v\n", endpoint, err)
 		fmt.Fprintf(os.Stderr, "Make sure slop-mcp is running with: slop-mcp serve --port %d\n", opts.port)
 		os.Exit(1)
 	}
@@ -1763,32 +1699,8 @@ func cmdMCPMetadata(args []string) {
 		os.Exit(1)
 	}
 
-	// Parse response
-	var rpcResp struct {
-		Result struct {
-			Content []struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			} `json:"content"`
-		} `json:"result"`
-		Error *struct {
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-
-	if err := json.Unmarshal(body, &rpcResp); err != nil {
-		fmt.Fprintf(os.Stderr, "Error parsing response: %v\n", err)
-		os.Exit(1)
-	}
-
-	if rpcResp.Error != nil {
-		fmt.Fprintf(os.Stderr, "Server error: %s\n", rpcResp.Error.Message)
-		os.Exit(1)
-	}
-
-	// Extract the metadata JSON from the text content
-	if len(rpcResp.Result.Content) == 0 {
-		fmt.Fprintf(os.Stderr, "No metadata in response\n")
+	if resp.StatusCode != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "Server error: %s\n", strings.TrimSpace(string(body)))
 		os.Exit(1)
 	}
 
@@ -1796,8 +1708,8 @@ func cmdMCPMetadata(args []string) {
 		Metadata []json.RawMessage `json:"metadata"`
 		Total    int               `json:"total"`
 	}
-	if err := json.Unmarshal([]byte(rpcResp.Result.Content[0].Text), &output); err != nil {
-		fmt.Fprintf(os.Stderr, "Error parsing metadata: %v\n", err)
+	if err := json.Unmarshal(body, &output); err != nil {
+		fmt.Fprintf(os.Stderr, "Error parsing response: %v\n", err)
 		os.Exit(1)
 	}
 

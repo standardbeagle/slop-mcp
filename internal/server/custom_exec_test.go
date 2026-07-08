@@ -129,15 +129,15 @@ func TestExecuteTool_CustomTool_FallsThrough_WhenNoStore(t *testing.T) {
 	assert.NotErrorIs(t, err, ErrCustomToolRecursion)
 }
 
-func TestExecuteTool_CustomTool_UnknownNameFallsThrough(t *testing.T) {
+func TestExecuteTool_CustomTool_UnknownNameReturnsCustomError(t *testing.T) {
 	s, _ := newCustomTestServer(t)
-	// Store is present but tool "noexist" not in it → fall through to registry
 	ctx := context.Background()
 	_, _, err := s.handleExecuteTool(ctx, nil, ExecuteToolInput{
 		MCPName:  "_custom",
 		ToolName: "noexist",
 	})
 	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "custom tool not found: noexist")
 	assert.NotErrorIs(t, err, ErrCustomToolRecursion)
 }
 
@@ -227,10 +227,9 @@ func TestWrapExecuteTool_RoutesCustomTool(t *testing.T) {
 	assert.Contains(t, text, "hello world")
 }
 
-// TestWrapExecuteTool_CustomTool_UnknownNameFallsThrough mirrors the handler
-// contract: an unknown custom tool name falls through to the registry, which
-// reports the MCP as not found.
-func TestWrapExecuteTool_CustomTool_UnknownNameFallsThrough(t *testing.T) {
+// TestWrapExecuteTool_CustomTool_UnknownNameReturnsCustomError mirrors the
+// handler contract: an unknown custom tool name reports a custom-tool error.
+func TestWrapExecuteTool_CustomTool_UnknownNameReturnsCustomError(t *testing.T) {
 	s, _ := newCustomTestServer(t)
 
 	raw := []byte(`{"mcp_name":"_custom","tool_name":"noexist"}`)
@@ -240,4 +239,7 @@ func TestWrapExecuteTool_CustomTool_UnknownNameFallsThrough(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.True(t, result.IsError)
+	require.NotEmpty(t, result.Content)
+	text := result.Content[0].(*mcp.TextContent).Text
+	assert.Contains(t, text, "custom tool not found: noexist")
 }

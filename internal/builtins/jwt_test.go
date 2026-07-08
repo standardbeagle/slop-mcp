@@ -5,7 +5,10 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
+	"strings"
 	"testing"
 
 	"github.com/standardbeagle/slop/pkg/slop"
@@ -83,5 +86,49 @@ func TestJWT_ES256_SignVerifyRoundTrip(t *testing.T) {
 	}, nil)
 	if err == nil {
 		t.Error("expected verification failure for tampered token")
+	}
+}
+
+func TestJWTSignPreservesFloatAndNullClaims(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+	privDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatalf("failed to marshal private key: %v", err)
+	}
+	privPEM := string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: privDER}))
+
+	claims := slop.NewMapValue()
+	claims.Set("exp", slop.NewNumberValue(1.7e9))
+	claims.Set("optional", slop.NewNullValue())
+
+	signed, err := jwtSign([]slop.Value{
+		claims,
+		slop.NewStringValue(privPEM),
+		slop.NewStringValue("ES256"),
+	}, nil)
+	if err != nil {
+		t.Fatalf("jwt_sign ES256 failed: %v", err)
+	}
+	token := signed.(*slop.StringValue).Value
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		t.Fatalf("token has %d parts, want 3", len(parts))
+	}
+	payloadJSON, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatalf("payload is not base64url: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(payloadJSON, &payload); err != nil {
+		t.Fatalf("payload is not JSON: %v", err)
+	}
+	if _, ok := payload["exp"].(float64); !ok {
+		t.Fatalf("exp type = %T, want float64", payload["exp"])
+	}
+	if payload["optional"] != nil {
+		t.Fatalf("optional = %#v, want nil", payload["optional"])
 	}
 }

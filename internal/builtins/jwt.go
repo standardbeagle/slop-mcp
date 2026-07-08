@@ -532,32 +532,11 @@ func parseEdDSAPrivateKey(keyPEM string) (ed25519.PrivateKey, error) {
 func slopMapToGoMap(m *slop.MapValue) map[string]any {
 	result := make(map[string]any)
 	for k, v := range m.Pairs {
-		result[k] = slopValueToAny(v)
+		result[k] = slop.ValueToGo(v)
 	}
 	return result
 }
 
 func slopValueToAny(v slop.Value) any {
-	if v == nil {
-		return nil
-	}
-
-	switch val := v.(type) {
-	case *slop.BoolValue:
-		return val.Value
-	case *slop.IntValue:
-		return val.Value
-	case *slop.StringValue:
-		return val.Value
-	case *slop.ListValue:
-		result := make([]any, len(val.Elements))
-		for i, elem := range val.Elements {
-			result[i] = slopValueToAny(elem)
-		}
-		return result
-	case *slop.MapValue:
-		return slopMapToGoMap(val)
-	default:
-		return fmt.Sprintf("%v", v)
-	}
+	return slop.ValueToGo(v)
 }

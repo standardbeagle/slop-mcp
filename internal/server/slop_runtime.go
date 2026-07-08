@@ -5,6 +5,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
+	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/standardbeagle/slop-mcp/internal/builtins"
@@ -18,7 +21,19 @@ import (
 // does gets routed through the registry's shared session (EnsureConnected
 // performs the lazy connect), instead of a second per-runtime subprocess.
 func (s *Server) newSlopRuntime(ctx context.Context) *slop.Runtime {
-	rt := builtins.NewRuntime()
+	rt := builtins.NewRuntimeWithConfig(slop.Config{
+		MaxIterations: 100000,
+		MaxDuration:   int64(defaultSlopExecutionTimeout / time.Second),
+	})
+
+	rt.RegisterBuiltin("print", func(args []slop.Value, kwargs map[string]slop.Value) (slop.Value, error) {
+		parts := make([]string, len(args))
+		for i, arg := range args {
+			parts[i] = fmt.Sprint(slop.ValueToGo(arg))
+		}
+		fmt.Fprintln(os.Stderr, strings.Join(parts, " "))
+		return slop.NewNullValue(), nil
+	})
 
 	// Register built-in functions.
 	builtins.RegisterCrypto(rt)
@@ -54,6 +69,27 @@ func (s *Server) newSlopRuntime(ctx context.Context) *slop.Runtime {
 	}
 
 	return rt
+}
+
+type slopExecutionResult struct {
+	value slop.Value
+	err   error
+}
+
+func executeSlopWithContext(ctx context.Context, rt *slop.Runtime, script string) (slop.Value, error) {
+	done := make(chan slopExecutionResult, 1)
+	go func() {
+		value, err := rt.Execute(script)
+		done <- slopExecutionResult{value: value, err: err}
+	}()
+
+	select {
+	case result := <-done:
+		return result.value, result.err
+	case <-ctx.Done():
+		_ = rt.Close()
+		return nil, fmt.Errorf("SLOP execution canceled or timed out: %w", ctx.Err())
+	}
 }
 
 // registrySlopService adapts a registered MCP to the SLOP Service interface,

@@ -1,7 +1,11 @@
 package builtins
 
 import (
+	"crypto/ed25519"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/pem"
 	"strings"
 	"testing"
 
@@ -119,6 +123,58 @@ func TestCryptoEd25519Keygen(t *testing.T) {
 	privKey := mv.Pairs["private_key"].(*slop.StringValue).Value
 	if !strings.Contains(privKey, "-----BEGIN PRIVATE KEY-----") {
 		t.Error("private_key not in PEM format")
+	}
+	privBlock, _ := pem.Decode([]byte(privKey))
+	if privBlock == nil {
+		t.Fatal("private_key PEM did not decode")
+	}
+	parsedPriv, err := x509.ParsePKCS8PrivateKey(privBlock.Bytes)
+	if err != nil {
+		t.Fatalf("private_key is not PKCS#8: %v", err)
+	}
+	if _, ok := parsedPriv.(ed25519.PrivateKey); !ok {
+		t.Fatalf("private_key parsed as %T, want ed25519.PrivateKey", parsedPriv)
+	}
+
+	pubKey := mv.Pairs["public_key"].(*slop.StringValue).Value
+	pubBlock, _ := pem.Decode([]byte(pubKey))
+	if pubBlock == nil {
+		t.Fatal("public_key PEM did not decode")
+	}
+	parsedPub, err := x509.ParsePKIXPublicKey(pubBlock.Bytes)
+	if err != nil {
+		t.Fatalf("public_key is not PKIX: %v", err)
+	}
+	if _, ok := parsedPub.(ed25519.PublicKey); !ok {
+		t.Fatalf("public_key parsed as %T, want ed25519.PublicKey", parsedPub)
+	}
+}
+
+func TestCryptoX25519KeygenIncludesPublicKey(t *testing.T) {
+	rt := NewRuntime()
+	defer rt.Close()
+	RegisterCrypto(rt)
+
+	result, err := rt.Execute("crypto_x25519_keygen()")
+	if err != nil {
+		t.Fatalf("crypto_x25519_keygen failed: %v", err)
+	}
+
+	mv, ok := result.(*slop.MapValue)
+	if !ok {
+		t.Fatalf("expected MapValue, got %T", result)
+	}
+
+	pubB64 := mv.Pairs["public_key"].(*slop.StringValue).Value
+	pubBytes, err := base64.StdEncoding.DecodeString(pubB64)
+	if err != nil {
+		t.Fatalf("public_key is not base64: %v", err)
+	}
+	if len(pubBytes) != 32 {
+		t.Fatalf("public key length = %d, want 32", len(pubBytes))
+	}
+	if mv.Pairs["public_hex"].(*slop.StringValue).Value != hex.EncodeToString(pubBytes) {
+		t.Fatal("public_hex does not match public_key")
 	}
 }
 

@@ -19,3 +19,11 @@ func NewRuntime() *slop.Runtime {
 	defer newRuntimeMu.Unlock()
 	return slop.NewRuntime()
 }
+
+// NewRuntimeWithConfig constructs a SLOP runtime with execution limits,
+// serialized for the same package-level hook as NewRuntime.
+func NewRuntimeWithConfig(cfg slop.Config) *slop.Runtime {
+	newRuntimeMu.Lock()
+	defer newRuntimeMu.Unlock()
+	return slop.NewRuntimeWithConfig(cfg)
+}

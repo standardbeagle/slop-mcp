@@ -35,15 +35,10 @@ func titleCase(s string) string {
 	return b.String()
 }
 
-// templateRuntime holds reference to SLOP runtime for callbacks
-var templateRuntime *slop.Runtime
-
 // RegisterTemplate registers template functions with the SLOP runtime.
 func RegisterTemplate(rt *slop.Runtime) {
-	templateRuntime = rt
-
-	rt.RegisterBuiltin("template_render", builtinTemplateRender)
-	rt.RegisterBuiltin("template_render_file", builtinTemplateRenderFile)
+	rt.RegisterBuiltin("template_render", builtinTemplateRender(rt))
+	rt.RegisterBuiltin("template_render_file", builtinTemplateRenderFile(rt))
 
 	// Text manipulation helpers
 	rt.RegisterBuiltin("indent", builtinIndent)
@@ -53,56 +48,60 @@ func RegisterTemplate(rt *slop.Runtime) {
 
 // builtinTemplateRender renders a Go template with provided data.
 // template_render(template_string, data) -> string
-func builtinTemplateRender(args []slop.Value, kwargs map[string]slop.Value) (slop.Value, error) {
-	if len(args) < 2 {
-		return nil, fmt.Errorf("template_render requires template and data arguments")
+func builtinTemplateRender(rt *slop.Runtime) func([]slop.Value, map[string]slop.Value) (slop.Value, error) {
+	return func(args []slop.Value, kwargs map[string]slop.Value) (slop.Value, error) {
+		if len(args) < 2 {
+			return nil, fmt.Errorf("template_render requires template and data arguments")
+		}
+
+		tmplStr, ok := args[0].(*slop.StringValue)
+		if !ok {
+			return nil, fmt.Errorf("template_render: template must be a string")
+		}
+
+		data := slopValueToAny(args[1])
+
+		result, err := renderTemplate(rt, tmplStr.Value, data)
+		if err != nil {
+			return nil, fmt.Errorf("template_render: %w", err)
+		}
+
+		return slop.NewStringValue(result), nil
 	}
-
-	tmplStr, ok := args[0].(*slop.StringValue)
-	if !ok {
-		return nil, fmt.Errorf("template_render: template must be a string")
-	}
-
-	data := slopValueToAny(args[1])
-
-	result, err := renderTemplate(tmplStr.Value, data)
-	if err != nil {
-		return nil, fmt.Errorf("template_render: %w", err)
-	}
-
-	return slop.NewStringValue(result), nil
 }
 
 // builtinTemplateRenderFile renders a Go template from a file.
 // template_render_file(path, data) -> string
-func builtinTemplateRenderFile(args []slop.Value, kwargs map[string]slop.Value) (slop.Value, error) {
-	if len(args) < 2 {
-		return nil, fmt.Errorf("template_render_file requires path and data arguments")
+func builtinTemplateRenderFile(rt *slop.Runtime) func([]slop.Value, map[string]slop.Value) (slop.Value, error) {
+	return func(args []slop.Value, kwargs map[string]slop.Value) (slop.Value, error) {
+		if len(args) < 2 {
+			return nil, fmt.Errorf("template_render_file requires path and data arguments")
+		}
+
+		pathStr, ok := args[0].(*slop.StringValue)
+		if !ok {
+			return nil, fmt.Errorf("template_render_file: path must be a string")
+		}
+
+		tmplContent, err := os.ReadFile(pathStr.Value)
+		if err != nil {
+			return nil, fmt.Errorf("template_render_file: failed to read file: %w", err)
+		}
+
+		data := slopValueToAny(args[1])
+
+		result, err := renderTemplate(rt, string(tmplContent), data)
+		if err != nil {
+			return nil, fmt.Errorf("template_render_file: %w", err)
+		}
+
+		return slop.NewStringValue(result), nil
 	}
-
-	pathStr, ok := args[0].(*slop.StringValue)
-	if !ok {
-		return nil, fmt.Errorf("template_render_file: path must be a string")
-	}
-
-	tmplContent, err := os.ReadFile(pathStr.Value)
-	if err != nil {
-		return nil, fmt.Errorf("template_render_file: failed to read file: %w", err)
-	}
-
-	data := slopValueToAny(args[1])
-
-	result, err := renderTemplate(string(tmplContent), data)
-	if err != nil {
-		return nil, fmt.Errorf("template_render_file: %w", err)
-	}
-
-	return slop.NewStringValue(result), nil
 }
 
 // renderTemplate renders a Go template with custom functions.
-func renderTemplate(tmplStr string, data any) (string, error) {
-	funcMap := createFuncMap()
+func renderTemplate(rt *slop.Runtime, tmplStr string, data any) (string, error) {
+	funcMap := createFuncMap(rt)
 
 	tmpl, err := template.New("template").Funcs(funcMap).Parse(tmplStr)
 	if err != nil {
@@ -118,7 +117,7 @@ func renderTemplate(tmplStr string, data any) (string, error) {
 }
 
 // createFuncMap creates the template function map with SLOP integration.
-func createFuncMap() template.FuncMap {
+func createFuncMap(rt *slop.Runtime) template.FuncMap {
 	return template.FuncMap{
 		// String functions
 		"upper":      strings.ToUpper,
@@ -171,7 +170,7 @@ func createFuncMap() template.FuncMap {
 		"mod": tmplMod,
 
 		// SLOP callback - call any SLOP expression
-		"slop": tmplSlopCall,
+		"slop": tmplSlopCall(rt),
 
 		// JSON
 		"toJson":       tmplToJSON,
@@ -244,7 +243,11 @@ func tmplToBool(v any) bool {
 	switch val := v.(type) {
 	case bool:
 		return val
-	case int, int64, float64:
+	case int:
+		return val != 0
+	case int64:
+		return val != 0
+	case float64:
 		return val != 0
 	case string:
 		return val != "" && val != "false" && val != "0"
@@ -374,7 +377,11 @@ func tmplEmpty(v any) bool {
 		return len(val) == 0
 	case bool:
 		return !val
-	case int, int64, float64:
+	case int:
+		return val == 0
+	case int64:
+		return val == 0
+	case float64:
 		return val == 0
 	default:
 		return false
@@ -470,17 +477,19 @@ func tmplMod(a, b any) (int64, error) {
 
 // tmplSlopCall calls a SLOP expression and returns the result.
 // Usage in template: {{ slop "upper(name)" }}
-func tmplSlopCall(expr string) (any, error) {
-	if templateRuntime == nil {
-		return nil, fmt.Errorf("SLOP runtime not available")
-	}
+func tmplSlopCall(rt *slop.Runtime) func(string) (any, error) {
+	return func(expr string) (any, error) {
+		if rt == nil {
+			return nil, fmt.Errorf("SLOP runtime not available")
+		}
 
-	result, err := templateRuntime.Execute(expr)
-	if err != nil {
-		return nil, err
-	}
+		result, err := rt.Execute(expr)
+		if err != nil {
+			return nil, err
+		}
 
-	return slopValueToAny(result), nil
+		return slopValueToAny(result), nil
+	}
 }
 
 func tmplToJSON(v any) (string, error) {

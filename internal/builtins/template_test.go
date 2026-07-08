@@ -3,7 +3,16 @@ package builtins
 import (
 	"strings"
 	"testing"
+
+	"github.com/standardbeagle/slop/pkg/slop"
 )
+
+func newTemplateTestRuntime(t *testing.T) *slop.Runtime {
+	t.Helper()
+	rt := NewRuntime()
+	t.Cleanup(func() { _ = rt.Close() })
+	return rt
+}
 
 func TestTemplateNumericConversions(t *testing.T) {
 	tests := []struct {
@@ -21,7 +30,7 @@ func TestTemplateNumericConversions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := renderTemplate(tt.tmpl, nil)
+			got, err := renderTemplate(newTemplateTestRuntime(t), tt.tmpl, nil)
 			if err != nil {
 				t.Fatalf("renderTemplate: %v", err)
 			}
@@ -49,7 +58,7 @@ func TestTemplateNumericConversionsRejectInvalidStrings(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := renderTemplate(tt.tmpl, nil)
+			got, err := renderTemplate(newTemplateTestRuntime(t), tt.tmpl, nil)
 			if err == nil {
 				t.Fatalf("expected error, got %q", got)
 			}
@@ -61,7 +70,7 @@ func TestTemplateNumericConversionsRejectInvalidStrings(t *testing.T) {
 }
 
 func TestTemplateJSONHelpers(t *testing.T) {
-	got, err := renderTemplate(`{{ index (fromJson "{\"name\":\"slop\"}") "name" }}`, nil)
+	got, err := renderTemplate(newTemplateTestRuntime(t), `{{ index (fromJson "{\"name\":\"slop\"}") "name" }}`, nil)
 	if err != nil {
 		t.Fatalf("renderTemplate fromJson: %v", err)
 	}
@@ -69,12 +78,52 @@ func TestTemplateJSONHelpers(t *testing.T) {
 		t.Fatalf("renderTemplate fromJson = %q, want slop", got)
 	}
 
-	got, err = renderTemplate(`{{ toJson . }}`, map[string]any{"ok": true})
+	got, err = renderTemplate(newTemplateTestRuntime(t), `{{ toJson . }}`, map[string]any{"ok": true})
 	if err != nil {
 		t.Fatalf("renderTemplate toJson: %v", err)
 	}
 	if got != `{"ok":true}` {
 		t.Fatalf("renderTemplate toJson = %q, want {\"ok\":true}", got)
+	}
+}
+
+func TestTemplateZeroBoolAndEmpty(t *testing.T) {
+	rt := newTemplateTestRuntime(t)
+	tests := []struct {
+		name string
+		tmpl string
+		data any
+		want string
+	}{
+		{name: "int64 zero false", tmpl: `{{ toBool . }}`, data: int64(0), want: "false"},
+		{name: "float zero false", tmpl: `{{ toBool . }}`, data: float64(0), want: "false"},
+		{name: "int64 zero empty", tmpl: `{{ empty . }}`, data: int64(0), want: "true"},
+		{name: "float zero empty", tmpl: `{{ empty . }}`, data: float64(0), want: "true"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := renderTemplate(rt, tt.tmpl, tt.data)
+			if err != nil {
+				t.Fatalf("renderTemplate: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestTemplateSlopUsesRegisteredRuntime(t *testing.T) {
+	rt := newTemplateTestRuntime(t)
+	rt.Context().Globals.Set("name", slop.NewStringValue("alice"))
+
+	got, err := renderTemplate(rt, `{{ slop "name" }}`, nil)
+	if err != nil {
+		t.Fatalf("renderTemplate slop: %v", err)
+	}
+	if got != "alice" {
+		t.Fatalf("got %q, want alice", got)
 	}
 }
 
@@ -106,7 +155,7 @@ func TestTemplateJSONHelpersRejectInvalidInput(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := renderTemplate(tt.tmpl, tt.data)
+			got, err := renderTemplate(newTemplateTestRuntime(t), tt.tmpl, tt.data)
 			if err == nil {
 				t.Fatalf("expected error, got %q", got)
 			}

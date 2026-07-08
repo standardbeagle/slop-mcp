@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -553,7 +554,7 @@ func cmdWrite(args []string) error {
 	// Get value from positional or stdin
 	var valueStr string
 	if flags["stdin"] == "true" {
-		data, err := os.ReadFile("/dev/stdin")
+		data, err := io.ReadAll(os.Stdin)
 		if err != nil {
 			printError("STDIN_ERROR", err.Error(), bankName, key, "")
 			return err

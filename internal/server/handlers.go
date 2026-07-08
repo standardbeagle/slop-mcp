@@ -28,6 +28,8 @@ const DefaultSearchLimit = 20
 // MaxSearchLimit is the maximum allowed limit for search_tools.
 const MaxSearchLimit = 100
 
+const defaultSlopExecutionTimeout = 30 * time.Second
+
 // SearchToolsInput is the input for the search_tools tool.
 type SearchToolsInput struct {
 	Query   string `json:"query,omitempty" jsonschema:"Search query for tool names and descriptions"`
@@ -211,6 +213,7 @@ func (s *Server) handleExecuteTool(
 			}
 			return nil, result, nil
 		}
+		return nil, nil, fmt.Errorf("custom tool not found: %s", input.ToolName)
 	}
 
 	// Handle CLI tools (see isCLIRoute for the routing contract)
@@ -321,13 +324,16 @@ func (s *Server) handleRunSlop(
 		script = string(data)
 	}
 
+	execCtx, cancel := context.WithTimeout(ctx, defaultSlopExecutionTimeout)
+	defer cancel()
+
 	// Create SLOP runtime with lazy, registry-backed MCP services: no MCP is
 	// connected unless the script actually calls one of its tools.
-	rt := s.newSlopRuntime(ctx)
+	rt := s.newSlopRuntime(execCtx)
 	defer rt.Close()
 
 	// Execute script
-	result, err := rt.Execute(script)
+	result, err := executeSlopWithContext(execCtx, rt, script)
 	if err != nil {
 		return nil, RunSlopOutput{}, parseSlopError(script, err)
 	}

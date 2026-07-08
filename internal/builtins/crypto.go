@@ -2,6 +2,7 @@
 package builtins
 
 import (
+	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/rsa"
@@ -194,15 +195,24 @@ func builtinEd25519Keygen(args []slop.Value, kwargs map[string]slop.Value) (slop
 		return nil, fmt.Errorf("crypto_ed25519_keygen: %w", err)
 	}
 
-	// Encode as PEM
+	privDER, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		return nil, fmt.Errorf("crypto_ed25519_keygen: %w", err)
+	}
+
+	pubDER, err := x509.MarshalPKIXPublicKey(pub)
+	if err != nil {
+		return nil, fmt.Errorf("crypto_ed25519_keygen: %w", err)
+	}
+
 	privPEM := pem.EncodeToMemory(&pem.Block{
 		Type:  "PRIVATE KEY",
-		Bytes: priv,
+		Bytes: privDER,
 	})
 
 	pubPEM := pem.EncodeToMemory(&pem.Block{
 		Type:  "PUBLIC KEY",
-		Bytes: pub,
+		Bytes: pubDER,
 	})
 
 	return slop.GoToValue(map[string]any{
@@ -276,10 +286,18 @@ func builtinX25519Keygen(args []slop.Value, kwargs map[string]slop.Value) (slop.
 	priv[31] &= 127
 	priv[31] |= 64
 
-	// For X25519, we just return the raw keys (no standard PEM format)
+	key, err := ecdh.X25519().NewPrivateKey(priv)
+	if err != nil {
+		return nil, fmt.Errorf("crypto_x25519_keygen: %w", err)
+	}
+	pub := key.PublicKey().Bytes()
+
+	// X25519 has no broadly accepted PEM envelope here, so return raw encodings.
 	return slop.GoToValue(map[string]any{
 		"private_key": base64.StdEncoding.EncodeToString(priv),
+		"public_key":  base64.StdEncoding.EncodeToString(pub),
 		"private_hex": hex.EncodeToString(priv),
+		"public_hex":  hex.EncodeToString(pub),
 	}), nil
 }
 

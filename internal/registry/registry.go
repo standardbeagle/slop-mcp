@@ -239,6 +239,7 @@ type Registry struct {
 	overrides         OverrideProvider          // optional; injected via SetOverrideProvider
 	logger            logging.Logger
 	mu                sync.RWMutex
+	rebuildMu         sync.Mutex
 	healthCheckCancel context.CancelFunc       // cancels background health check goroutine
 	cache             *cache.Store             // disk cache for tool metadata
 	connectMu         map[string]chan struct{} // per-MCP semaphore serializing lifecycle ops
@@ -291,6 +292,9 @@ func NewWithCache(logger logging.Logger, cacheStore *cache.Store) *Registry {
 // atomically stores it. Safe to call from any goroutine while mu is NOT held by
 // the caller — it acquires RLock internally.
 func (r *Registry) rebuildIndex() {
+	r.rebuildMu.Lock()
+	defer r.rebuildMu.Unlock()
+
 	r.mu.RLock()
 	snapshot := make(map[string][]ToolInfo, len(r.tools))
 	for k, v := range r.tools {
@@ -308,6 +312,9 @@ func (r *Registry) rebuildIndex() {
 // SetOverrideProvider registers an OverrideProvider and triggers a rebuild.
 // Pass nil to clear the provider.
 func (r *Registry) SetOverrideProvider(p OverrideProvider) {
+	r.rebuildMu.Lock()
+	defer r.rebuildMu.Unlock()
+
 	r.mu.Lock()
 	r.overrides = p
 	// Take snapshot while holding write lock so we can release before CPU work.
@@ -547,7 +554,14 @@ func (r *Registry) updateCache(mcpName string) {
 		return
 	}
 	cfg := state.config
-	tools := r.loadIndex().GetAllForMCP(mcpName)
+	sourceTools, haveTools := r.tools[mcpName]
+	if !haveTools {
+		r.mu.RUnlock()
+		r.logger.Debug("skipping tool cache update, tools missing from registry", "mcp_name", mcpName)
+		return
+	}
+	tools := make([]ToolInfo, len(sourceTools))
+	copy(tools, sourceTools)
 	r.mu.RUnlock()
 
 	// Extract server info from the session
@@ -787,19 +801,24 @@ func (r *Registry) connectLocked(ctx context.Context, cfg config.MCPConfig) erro
 
 // Disconnect disconnects an MCP server.
 func (r *Registry) Disconnect(name string) error {
+	release, err := r.acquireConnectMu(context.Background(), name)
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	return r.disconnectLocked(name)
+}
+
+// disconnectLocked disconnects an MCP server. Callers must either hold the
+// per-MCP connect mutex or be the public Disconnect wrapper above.
+func (r *Registry) disconnectLocked(name string) error {
 	r.mu.Lock()
 
 	conn, ok := r.connections[name]
 	if !ok {
 		r.mu.Unlock()
 		return fmt.Errorf("MCP not found: %s", name)
-	}
-
-	// Close the session - ignore termination signals since they're expected
-	// when killing a subprocess-based MCP
-	if err := conn.session.Close(); err != nil {
-		// Debug level: expected during shutdown, errors stored in state for status queries
-		r.logger.Debug("error closing MCP session", "mcp_name", name, "error", err)
 	}
 
 	// Update state to disconnected (preserve config for potential reconnect,
@@ -816,6 +835,14 @@ func (r *Registry) Disconnect(name string) error {
 	delete(r.tools, name)
 
 	r.mu.Unlock()
+
+	// Close the session outside the registry lock. Subprocess teardown can
+	// block, and holding the write lock here stalls unrelated registry calls.
+	if err := conn.session.Close(); err != nil {
+		// Debug level: expected during shutdown, errors stored in state for status queries
+		r.logger.Debug("error closing MCP session", "mcp_name", name, "error", err)
+	}
+
 	r.rebuildIndex()
 
 	return nil
@@ -876,8 +903,9 @@ func (r *Registry) reconnectLocked(ctx context.Context, name string) error {
 		return fmt.Errorf("MCP not configured: %s", name)
 	}
 
-	// Disconnect if currently connected (ignore errors - might not be connected)
-	_ = r.Disconnect(name)
+	// Disconnect if currently connected (ignore errors - might not be connected).
+	// reconnectLocked already holds the per-MCP semaphore.
+	_ = r.disconnectLocked(name)
 
 	// Reconnect with the stored config (will pick up new auth token)
 	return r.connectLocked(ctx, cfg)
@@ -1445,11 +1473,13 @@ func (r *Registry) callRaw(ctx context.Context, mcpName, toolName string, args a
 	// Lazy-connect through EnsureConnected: cached/configured MCPs dial on
 	// demand, an in-flight connect (StateConnecting) is awaited instead of
 	// racing past it, and StateError retries once per ErrorRetryInterval.
-	switch r.GetState(mcpName) {
+	state := r.GetState(mcpName)
+	switch state {
 	case StateCached, StateConfigured, StateConnecting, StateError:
 		if err := r.EnsureConnected(ctx, mcpName); err != nil {
 			return nil, fmt.Errorf("lazy-connect failed for MCP %s: %w", mcpName, err)
 		}
+		state = r.GetState(mcpName)
 	}
 
 	r.mu.RLock()
@@ -1457,6 +1487,9 @@ func (r *Registry) callRaw(ctx context.Context, mcpName, toolName string, args a
 	r.mu.RUnlock()
 
 	if !ok {
+		if state != "" {
+			return nil, fmt.Errorf("MCP %s is in state %s, cannot execute tool %s", mcpName, state, toolName)
+		}
 		return nil, &MCPNotFoundError{
 			Name:          mcpName,
 			AvailableMCPs: r.listNames(),

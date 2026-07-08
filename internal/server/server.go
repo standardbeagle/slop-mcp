@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -265,6 +266,8 @@ func (s *Server) RunHTTP(ctx context.Context, port int) error {
 
 	mux := http.NewServeMux()
 	mux.Handle("/", sseHandler)
+	mux.HandleFunc("/status", s.handleHTTPStatus)
+	mux.HandleFunc("/metadata", s.handleHTTPMetadata)
 
 	// SSE streams are long-lived: ReadTimeout/WriteTimeout would kill active
 	// event streams, so only header-read and keep-alive idle are bounded.
@@ -294,6 +297,39 @@ func (s *Server) RunHTTP(ctx context.Context, port int) error {
 		}
 		return err
 	}
+}
+
+func (s *Server) handleHTTPStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	_, result, err := s.handleManageMCPs(r.Context(), nil, ManageMCPsInput{Action: "status"})
+	writeHTTPJSON(w, result, err)
+}
+
+func (s *Server) handleHTTPMetadata(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	input := GetMetadataInput{
+		MCPName:  r.URL.Query().Get("mcp_name"),
+		ToolName: r.URL.Query().Get("tool_name"),
+		Verbose:  r.URL.Query().Get("verbose") == "true",
+	}
+	_, result, err := s.handleGetMetadata(r.Context(), nil, input)
+	writeHTTPJSON(w, result, err)
+}
+
+func writeHTTPJSON(w http.ResponseWriter, v any, err error) {
+	w.Header().Set("Content-Type", "application/json")
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		return
+	}
+	_ = json.NewEncoder(w).Encode(v)
 }
 
 // Close closes all MCP connections and the override store.
