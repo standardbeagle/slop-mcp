@@ -2457,7 +2457,10 @@ func (r *Registry) getValidToken(ctx context.Context, serverName string) *auth.M
 
 	newToken, err := auth.RefreshToken(refreshCtx, token, token.TokenEndpoint)
 	if err != nil {
-		// Refresh failed - token is unusable
+		// Refresh failed - token is unusable. Warn (not silent) so a revoked or
+		// expired refresh token surfaces as a diagnosable cause rather than a
+		// bare downstream 401.
+		r.logger.Warn("OAuth token refresh failed", "mcp_name", serverName, "error", err)
 		return nil
 	}
 
@@ -2485,31 +2488,61 @@ func (t *headersTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	return t.base.RoundTrip(r)
 }
 
+// oauthTransport injects config headers plus a freshly-resolved OAuth Bearer
+// token on every request. Resolving per request (rather than baking the token
+// in at connect) means a token that expires mid-session is transparently
+// refreshed instead of 401ing until the connection is torn down.
+type oauthTransport struct {
+	base          http.RoundTripper
+	staticHeaders map[string]string
+	reg           *Registry
+	serverName    string
+}
+
+func (t *oauthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	r := req.Clone(req.Context())
+	for k, v := range t.staticHeaders {
+		r.Header.Set(k, v)
+	}
+	if token := t.reg.getValidToken(r.Context(), t.serverName); token != nil {
+		r.Header.Set("Authorization", "Bearer "+token.AccessToken)
+	}
+	return t.base.RoundTrip(r)
+}
+
 // buildHTTPClient creates an HTTP client with custom headers and/or OAuth token.
-// If the stored token is expired, it will attempt to refresh it using the refresh token.
-func (r *Registry) buildHTTPClient(ctx context.Context, cfg config.MCPConfig) *http.Client {
-	headers := make(map[string]string)
-
-	// Add headers from config
+// When the MCP has a stored OAuth token, the returned client refreshes the token
+// per request (see oauthTransport); otherwise it just applies static config
+// headers.
+func (r *Registry) buildHTTPClient(_ context.Context, cfg config.MCPConfig) *http.Client {
+	staticHeaders := make(map[string]string, len(cfg.Headers))
 	for k, v := range cfg.Headers {
-		headers[k] = v
+		staticHeaders[k] = v
 	}
 
-	// Add OAuth token if available (overrides config Authorization header)
-	// This will automatically refresh expired tokens if possible
-	if token := r.getValidToken(ctx, cfg.Name); token != nil {
-		headers["Authorization"] = "Bearer " + token.AccessToken
+	// If this MCP has a stored OAuth token, use the refreshing transport so the
+	// Authorization header is re-resolved (and refreshed) on every request.
+	if store := auth.NewTokenStore(); store != nil {
+		if tok, _ := store.GetToken(cfg.Name); tok != nil {
+			return &http.Client{
+				Transport: &oauthTransport{
+					base:          http.DefaultTransport,
+					staticHeaders: staticHeaders,
+					reg:           r,
+					serverName:    cfg.Name,
+				},
+			}
+		}
 	}
 
-	// If no custom headers, return nil to use default client
-	if len(headers) == 0 {
+	// No OAuth: static headers only, or the default client when there are none.
+	if len(staticHeaders) == 0 {
 		return nil
 	}
-
 	return &http.Client{
 		Transport: &headersTransport{
 			base:    http.DefaultTransport,
-			headers: headers,
+			headers: staticHeaders,
 		},
 	}
 }

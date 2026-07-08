@@ -25,6 +25,12 @@ import (
 	"golang.org/x/oauth2"
 )
 
+// tokenHTTPClient bounds token-endpoint requests. Requests carry a context, but
+// in serve mode that context is the tool-call context, which may lack a
+// deadline; a client timeout guarantees a hung authorization server cannot
+// block an auth_mcp call (or a connect-time refresh) indefinitely.
+var tokenHTTPClient = &http.Client{Timeout: 30 * time.Second}
+
 // wellKnownURL derives a metadata discovery URL by inserting the given
 // well-known path prefix ahead of the base URL's existing path, per the
 // "well-known URI" conventions of RFC 9728 (protected resource) and RFC 8414
@@ -166,7 +172,10 @@ func (f *OAuthFlow) DiscoverAndAuth(ctx context.Context) (*AuthResult, error) {
 	}
 
 	// Step 6: Build authorization URL
-	state := generateState()
+	state, err := generateState()
+	if err != nil {
+		return nil, err
+	}
 	authURL := buildAuthURL(asm.AuthorizationEndpoint, clientID, callbackURL, f.ServerURL, state, challenge, prm.ScopesSupported)
 
 	// Step 7: Open browser
@@ -363,7 +372,7 @@ func (f *OAuthFlow) exchangeCode(ctx context.Context, tokenEndpoint, clientID, c
 		req.SetBasicAuth(clientID, clientSecret)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := tokenHTTPClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -396,13 +405,14 @@ func generatePKCE() (verifier, challenge string, err error) {
 	return verifier, challenge, nil
 }
 
-func generateState() string {
+func generateState() (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
-		// crypto/rand failure is catastrophic; fall back to time-based state
-		return base64.RawURLEncoding.EncodeToString([]byte(time.Now().String()))
+		// Fail fast like generatePKCE: a time-based fallback is predictable and
+		// would defeat the CSRF protection the state parameter exists for.
+		return "", fmt.Errorf("failed to generate state: %w", err)
 	}
-	return base64.RawURLEncoding.EncodeToString(b)
+	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
 func buildAuthURL(endpoint, clientID, redirectURI, resource, state, challenge string, scopes []string) string {
@@ -465,7 +475,7 @@ func RefreshToken(ctx context.Context, token *MCPToken, tokenEndpoint string) (*
 		req.SetBasicAuth(token.ClientID, token.ClientSecret)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := tokenHTTPClient.Do(req)
 	if err != nil {
 		return nil, err
 	}

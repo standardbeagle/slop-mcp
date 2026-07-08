@@ -182,7 +182,5 @@ type OAuthFlow struct {
 
 // AuthResult contains the result of an OAuth flow.
 type AuthResult struct {
-	Token       *MCPToken
-	AuthURL     string // If non-empty, user needs to visit this URL
-	CallbackURL string // The callback URL for the flow
+	Token *MCPToken
 }
