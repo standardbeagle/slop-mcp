@@ -4,6 +4,7 @@ package auth
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/standardbeagle/slop-mcp/internal/atomicfile"
 	"github.com/standardbeagle/slop-mcp/internal/config"
+	"github.com/standardbeagle/slop-mcp/internal/filelock"
 )
 
 // TokenStore manages OAuth tokens for MCP servers.
@@ -62,6 +64,20 @@ func NewTokenStoreWithPath(path string) *TokenStore {
 // Path returns the token store file path.
 func (s *TokenStore) Path() string {
 	return s.path
+}
+
+// Lock acquires a cross-process exclusive lock on the token file so a
+// read-refresh-save cycle across processes cannot both spend the same rotating
+// refresh token (which some authorization servers revoke the whole family for).
+// The caller must release the returned Unlocker.
+func (s *TokenStore) Lock() (filelock.Unlocker, error) {
+	if s.path == "" {
+		return nil, fmt.Errorf("token store path not configured")
+	}
+	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
+		return nil, err
+	}
+	return filelock.Lock(s.path)
 }
 
 // Load reads tokens from disk.

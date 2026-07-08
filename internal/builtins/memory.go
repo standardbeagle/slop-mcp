@@ -13,6 +13,7 @@ import (
 
 	"github.com/standardbeagle/slop-mcp/internal/atomicfile"
 	"github.com/standardbeagle/slop-mcp/internal/config"
+	"github.com/standardbeagle/slop-mcp/internal/filelock"
 	"github.com/standardbeagle/slop-mcp/internal/overrides"
 	"github.com/standardbeagle/slop/pkg/slop"
 )
@@ -110,6 +111,20 @@ func (m *MemoryStore) bankPath(bank string) string {
 	return filepath.Join(m.baseDir, bank+".json")
 }
 
+// lockBank acquires a cross-process exclusive lock for a bank file so a
+// load-modify-write sequence is not clobbered by another slop-mcp process or
+// memory-cli writing the same bank concurrently. Callers must hold the
+// in-process store mutex as well and defer the returned Unlocker.
+func (m *MemoryStore) lockBank(bank string) (filelock.Unlocker, error) {
+	if m.baseDir == "" {
+		return nil, fmt.Errorf("memory store base directory not configured")
+	}
+	if err := os.MkdirAll(m.baseDir, 0o755); err != nil {
+		return nil, err
+	}
+	return filelock.Lock(m.bankPath(bank))
+}
+
 func (m *MemoryStore) loadBank(bank string) (*memoryBank, error) {
 	if m.baseDir == "" {
 		return nil, fmt.Errorf("memory store base directory not configured")
@@ -183,6 +198,12 @@ func RegisterMemory(rt *slop.Runtime, store *MemoryStore) {
 
 		store.mu.Lock()
 		defer store.mu.Unlock()
+
+		unlock, err := store.lockBank(bankName.Value)
+		if err != nil {
+			return nil, fmt.Errorf("mem_save: %w", err)
+		}
+		defer func() { _ = unlock() }()
 
 		b, err := store.loadBank(bankName.Value)
 		if err != nil {
@@ -299,6 +320,12 @@ func RegisterMemory(rt *slop.Runtime, store *MemoryStore) {
 
 		store.mu.Lock()
 		defer store.mu.Unlock()
+
+		unlock, err := store.lockBank(bankName.Value)
+		if err != nil {
+			return nil, fmt.Errorf("mem_delete: %w", err)
+		}
+		defer func() { _ = unlock() }()
 
 		b, err := store.loadBank(bankName.Value)
 		if err != nil {

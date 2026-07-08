@@ -2462,6 +2462,21 @@ func (r *Registry) getValidToken(ctx context.Context, serverName string) *auth.M
 		return nil
 	}
 
+	// Take a cross-process lock around the re-check + refresh + save so two
+	// slop-mcp processes cannot both spend the same rotating refresh token.
+	if unlock, lerr := store.Lock(); lerr == nil {
+		defer func() { _ = unlock() }()
+		// Re-read under the lock: another process may have just refreshed.
+		if fresh, ferr := store.GetToken(serverName); ferr == nil && fresh != nil {
+			if !fresh.IsExpired() {
+				return fresh
+			}
+			token = fresh // refresh from the newest stored token
+		}
+	} else {
+		r.logger.Debug("token file lock unavailable, refreshing without cross-process lock", "mcp_name", serverName, "error", lerr)
+	}
+
 	// Attempt refresh with a timeout
 	refreshCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()

@@ -13,6 +13,7 @@ import (
 	"github.com/standardbeagle/slop-mcp/internal/atomicfile"
 	"github.com/standardbeagle/slop-mcp/internal/builtins"
 	"github.com/standardbeagle/slop-mcp/internal/config"
+	"github.com/standardbeagle/slop-mcp/internal/filelock"
 	"github.com/standardbeagle/slop-mcp/internal/overrides"
 )
 
@@ -286,6 +287,16 @@ func loadBank(path string) (*Bank, error) {
 	}
 
 	return &bank, nil
+}
+
+// lockBankFile takes a cross-process exclusive lock on a bank path so a
+// load-modify-save is not clobbered by a concurrent server-side mem_save or
+// another memory-cli process writing the same bank.
+func lockBankFile(path string) (filelock.Unlocker, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, err
+	}
+	return filelock.Lock(path)
 }
 
 func saveBank(path string, bank *Bank) error {
@@ -607,6 +618,13 @@ func cmdWrite(args []string) error {
 		return err
 	}
 
+	unlock, err := lockBankFile(path)
+	if err != nil {
+		printError("LOCK_ERROR", err.Error(), bankName, key, scope)
+		return err
+	}
+	defer func() { _ = unlock() }()
+
 	bank, err := loadBank(path)
 	if err != nil {
 		printError("LOAD_ERROR", err.Error(), bankName, key, scope)
@@ -636,6 +654,7 @@ func cmdWrite(args []string) error {
 		entry.CreatedAt = existing.CreatedAt
 		entry.Description = existing.Description
 		entry.Schema = existing.Schema
+		entry.TTL = existing.TTL // preserve unless --ttl overrides below
 	} else {
 		operation = "create"
 	}
@@ -715,6 +734,13 @@ func cmdDelete(args []string) error {
 
 	// Delete specific key
 	key := positional[1]
+
+	unlock, err := lockBankFile(path)
+	if err != nil {
+		printError("LOCK_ERROR", err.Error(), bankName, key, scope)
+		return err
+	}
+	defer func() { _ = unlock() }()
 
 	bank, err := loadBank(path)
 	if err != nil {
