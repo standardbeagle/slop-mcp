@@ -196,7 +196,7 @@ var shellSafeArgRE = regexp.MustCompile(`^[A-Za-z0-9_.,/:=-]+$`)
 
 // joinShellArgs joins args with spaces, single-quoting any arg that is not
 // provably shell-safe. Single quotes inside an arg are escaped with the
-// standard '\” idiom, so metacharacters (;, |, $, backticks, newlines,
+// standard '\'' idiom, so metacharacters (;, |, $, backticks, newlines,
 // quotes) can never break out of the argument.
 func joinShellArgs(args []string) string {
 	quoted := make([]string, len(args))
