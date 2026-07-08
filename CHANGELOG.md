@@ -7,7 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.4] - 2026-07-08
+
 ### Fixed
+
+- **`run_slop` returned internal evaluator structs**: results and emitted values were JSON-marshaled without conversion, so agents received `{"Value":3}` / `{"Elements":[…]}` instead of plain values. Output now matches the custom-tool path (native Go via `ValueToGo`); SLOP integers stay integers.
+- **Dead MCP connections never recovered**: a crashed stdio subprocess or dropped socket left the MCP in `connected` forever. Transport failures on tool calls and health-check pings now demote the MCP to `error` and tear down the dead session, and the background health loop drives real exponential-backoff auto-reconnect.
+- **Concurrent `run_slop` raced and misrouted pipeline callbacks**: slop v0.3.0 reads its pipeline-caller global unsynchronized during `map`/`filter`/`reduce`, so serializing only construction was insufficient. Construction *and* execution are now serialized process-wide; evaluator panics are recovered into errors instead of crashing the server.
+- **Lost updates across processes**: memory banks and OAuth tokens are written by multiple slop-mcp processes (and memory-cli). A new cross-process file lock (`flock`/`LockFileEx`) now guards each load-modify-write, so concurrent writers no longer clobber each other and a rotating OAuth refresh token is not double-spent (which some providers revoke the whole token family for). `memory-cli` and the server now agree on the user memory directory and preserve entry TTLs across re-save.
+- **Customizations could silently fail to persist**: `customize_tools` reported success while the override/custom-tool write was fire-and-forget; a failed disk write only surfaced at shutdown. Writes are now synchronous and their errors are returned to the caller.
+- **`execute_tool` had no timeout**: a hung MCP tool blocked the calling agent indefinitely. Calls are now bounded by a generous, `SLOP_MCP_EXECUTE_TIMEOUT`-overridable deadline (any shorter client deadline still wins).
+- **OAuth tokens were not refreshed mid-session**: the bearer token was baked into the transport at connect and never re-evaluated, so an expiry mid-session 401'd until reconnect. HTTP/SSE MCPs now refresh per request. `generateState` fails fast on RNG failure instead of a predictable fallback, and token-endpoint calls have a timeout.
+- **CLI `run`/`monitor` ignored context**: `--timeout` and Ctrl-C did not stop a running script. Both now execute under the context, and `monitor`'s message tailer consumes only complete lines (no duplicated or truncated events).
+- **Custom-tool integer parameters lost precision**: the `_custom`/CLI route decoded params through float64. It now preserves large integers via `json.Number`.
+- **Duplicate `mcp` blocks in one KDL file** silently last-wins-overwrote; now a parse error.
+- Config files are written `0600` (they embed API keys / auth headers); atomic writes now fsync for crash durability; `search_tools`/`get_metadata` withhold full schemas per the progressive-disclosure design; per-MCP `health_check_interval` is honored instead of collapsing to the shortest; the monitor message file is scoped per project; memory nil-map panics, unbiased crypto RNG, time-aware `jwt_verify`, session-store deep-copy, and dynamic reserved-builtin detection.
+
+### Added
+
+- Optional HTTP bearer-token auth (`SLOP_MCP_HTTP_TOKEN`) gating all HTTP/SSE routes, which were previously unauthenticated.
+- `internal/filelock` cross-process advisory locking (unix `flock`, Windows `LockFileEx`).
+- CLI tool command/`workdir` paths now expand a leading `~`.
+
+### Fixed (earlier in this cycle)
 
 - **Custom tools were unexecutable over the real MCP protocol**: `execute_tool` only routed `_custom` tools in the test-helper path, so real clients got `MCPNotFoundError` for tools that `search_tools` had just listed. The protocol path now routes them.
 - **Overridden tools were permanently flagged stale**: the search index substitutes override descriptions, and staleness checks then hashed the override text as if it were the upstream description (re-saving corrupted the baseline, and the tool cache persisted override text as server descriptions). The index now retains the upstream description and all staleness hashes use it; compact and verbose `get_metadata` now agree.
