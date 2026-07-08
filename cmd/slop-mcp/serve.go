@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -39,6 +40,15 @@ func cmdServe(args []string) {
 		os.Exit(1)
 	}
 
+	// Exit code is applied after all defers (notably srv.Close) run. Registered
+	// before defer srv.Close() so it fires last (defers are LIFO).
+	exitCode := 0
+	defer func() {
+		if exitCode != 0 {
+			os.Exit(exitCode)
+		}
+	}()
+
 	// Create server
 	srv, err := server.NewFromConfig(cfg)
 	if err != nil {
@@ -65,10 +75,13 @@ func cmdServe(args []string) {
 	} else {
 		runErr = srv.RunStdio(ctx)
 	}
-	// Context cancellation from signals is clean shutdown, not an error
-	if runErr != nil && runErr != context.Canceled {
+	// Context cancellation from signals is clean shutdown, not an error. Use
+	// errors.Is so a wrapped cancellation (from the SDK or Start) is also
+	// treated as clean. Return rather than os.Exit on the error path so the
+	// deferred srv.Close() still runs.
+	if runErr != nil && !errors.Is(runErr, context.Canceled) {
 		fmt.Fprintf(os.Stderr, "Server error: %v\n", runErr)
-		os.Exit(1)
+		exitCode = 1
 	}
 }
 

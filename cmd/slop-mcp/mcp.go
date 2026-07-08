@@ -22,6 +22,16 @@ import (
 
 var getwd = os.Getwd
 
+// redactValue masks a secret env/header value for display so `mcp get`/`mcp
+// list` do not leak API keys or tokens into terminal scrollback while still
+// confirming the variable is set.
+func redactValue(v string) string {
+	if v == "" {
+		return ""
+	}
+	return "***redacted***"
+}
+
 func currentWorkingDir() (string, error) {
 	cwd, err := getwd()
 	if err != nil {
@@ -859,13 +869,13 @@ func cmdMCPGet(args []string) {
 				if len(mcp.Env) > 0 {
 					fmt.Printf("  Env:\n")
 					for k, v := range mcp.Env {
-						fmt.Printf("    %s=%s\n", k, v)
+						fmt.Printf("    %s=%s\n", k, redactValue(v))
 					}
 				}
 				if len(mcp.Headers) > 0 {
 					fmt.Printf("  Headers:\n")
 					for k, v := range mcp.Headers {
-						fmt.Printf("    %s: %s\n", k, v)
+						fmt.Printf("    %s: %s\n", k, redactValue(v))
 					}
 				}
 				fmt.Printf("  Source: %s\n", source.path)
@@ -1082,7 +1092,12 @@ func printMCPList(cfg *config.Config) {
 			fmt.Printf("    url: %s\n", mcp.URL)
 		}
 		if len(mcp.Env) > 0 {
-			fmt.Printf("    env: %v\n", mcp.Env)
+			keys := make([]string, 0, len(mcp.Env))
+			for k := range mcp.Env {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			fmt.Printf("    env: %d variables (%s)\n", len(mcp.Env), strings.Join(keys, ", "))
 		}
 	}
 }
@@ -1713,13 +1728,8 @@ func cmdMCPMetadata(args []string) {
 		os.Exit(1)
 	}
 
-	// Format output
-	var formattedData []byte
-	if opts.outputJSON {
-		formattedData, _ = json.MarshalIndent(output.Metadata, "", "  ")
-	} else {
-		formattedData, _ = json.MarshalIndent(output.Metadata, "", "  ")
-	}
+	// Format output (currently JSON in both modes).
+	formattedData, _ := json.MarshalIndent(output.Metadata, "", "  ")
 
 	// Write to file or stdout
 	if opts.outputFile != "" {

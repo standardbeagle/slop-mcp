@@ -116,8 +116,9 @@ func cmdMonitor(args []string) {
 		}
 	}
 
-	// Execute the monitor script — print() goes to stdout for Monitor tool
-	_, err = rt.Execute(script)
+	// Execute the monitor script under ctx so SIGINT/timeout stops it —
+	// print() goes to stdout for Monitor tool.
+	_, err = builtins.RunScriptContext(ctx, rt, script)
 	if err != nil {
 		if ctx.Err() != nil {
 			return
@@ -193,21 +194,13 @@ func watchMessages(ctx context.Context) {
 		case <-time.After(250 * time.Millisecond):
 		}
 
-		info, err := os.Stat(path)
-		if err != nil {
-			continue
-		}
-		if info.Size() < offset {
-			// File was truncated externally; start over from the beginning.
-			offset = 0
-		}
-		if info.Size() == offset {
-			continue
-		}
-
 		f, err := os.Open(path)
 		if err != nil {
 			continue
+		}
+		// Detect external truncation after opening (no Stat-before-open race).
+		if info, serr := f.Stat(); serr == nil && info.Size() < offset {
+			offset = 0
 		}
 		if offset > 0 {
 			if _, err := f.Seek(offset, 0); err != nil {
@@ -215,14 +208,20 @@ func watchMessages(ctx context.Context) {
 				continue
 			}
 		}
-		scanner := bufio.NewScanner(f)
-		for scanner.Scan() {
-			line := scanner.Text()
-			if line != "" {
-				fmt.Println(line)
+		// Consume only complete (newline-terminated) lines, advancing offset by
+		// the exact bytes read. A trailing partial line (writer mid-append) is
+		// left unconsumed so it is not emitted truncated or re-emitted next poll.
+		reader := bufio.NewReader(f)
+		for {
+			line, rerr := reader.ReadString('\n')
+			if rerr != nil {
+				break
+			}
+			offset += int64(len(line))
+			if trimmed := strings.TrimRight(line, "\r\n"); trimmed != "" {
+				fmt.Println(trimmed)
 			}
 		}
-		offset = info.Size()
 		f.Close()
 	}
 }

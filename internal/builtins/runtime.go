@@ -1,6 +1,8 @@
 package builtins
 
 import (
+	"context"
+	"fmt"
 	"sync"
 
 	"github.com/standardbeagle/slop/pkg/slop"
@@ -54,4 +56,41 @@ func NewRuntimeWithConfig(cfg slop.Config) *slop.Runtime {
 	newRuntimeMu.Lock()
 	defer newRuntimeMu.Unlock()
 	return slop.NewRuntimeWithConfig(cfg)
+}
+
+// RunScriptContext executes a SLOP script under ctx while holding the
+// process-wide exec lock, so it is safe to call even if other SLOP execution is
+// happening concurrently. rt.Execute is not context-aware but self-limits via
+// the runtime's MaxDuration; on ctx cancellation this returns promptly while
+// the worker finishes in the background and releases the lock. Panics in the
+// evaluator are converted to errors rather than crashing the process.
+//
+// Unlike the server's path, this acquires the exec lock itself (callers here
+// construct a single runtime and are not already holding it).
+func RunScriptContext(ctx context.Context, rt *slop.Runtime, script string) (slop.Value, error) {
+	LockSlopExec()
+	relOnce := sync.OnceFunc(UnlockSlopExec)
+
+	type result struct {
+		value slop.Value
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		defer relOnce()
+		defer func() {
+			if r := recover(); r != nil {
+				done <- result{err: fmt.Errorf("slop execution panicked: %v", r)}
+			}
+		}()
+		value, err := rt.Execute(script)
+		done <- result{value: value, err: err}
+	}()
+
+	select {
+	case res := <-done:
+		return res.value, res.err
+	case <-ctx.Done():
+		return nil, fmt.Errorf("slop execution canceled or timed out: %w", ctx.Err())
+	}
 }

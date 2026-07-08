@@ -17,8 +17,11 @@ GOFMT := $(GOCMD) fmt
 GOVET := $(GOCMD) vet
 GOMOD := $(GOCMD) mod
 
+# Version injected into the binaries (falls back to "dev" outside a git tree)
+VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+
 # Build flags
-LDFLAGS := -s -w
+LDFLAGS := -s -w -X main.Version=$(VERSION)
 BUILD_FLAGS := -ldflags "$(LDFLAGS)"
 # OAuth support required for MCPs like Figma, Dart
 BUILD_TAGS := -tags mcp_go_client_oauth

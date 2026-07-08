@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/standardbeagle/slop-mcp/internal/builtins"
@@ -51,8 +53,11 @@ func cmdRun(args []string) {
 		os.Exit(1)
 	}
 
-	// Create SLOP runtime
-	rt := builtins.NewRuntime()
+	// Create SLOP runtime with a MaxDuration matching --timeout so a runaway
+	// script self-terminates even if it ignores context.
+	rt := builtins.NewRuntimeWithConfig(slop.Config{
+		MaxDuration: int64(opts.timeout / time.Second),
+	})
 	defer rt.Close()
 
 	// Register built-in functions
@@ -61,7 +66,10 @@ func cmdRun(args []string) {
 	builtins.RegisterJWT(rt)
 	builtins.RegisterTemplate(rt)
 
-	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout)
+	// Cancel on SIGINT/SIGTERM as well as the timeout so Ctrl-C stops execution.
+	baseCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	ctx, cancel := context.WithTimeout(baseCtx, opts.timeout)
 	defer cancel()
 
 	// Connect all configured MCPs
@@ -87,8 +95,8 @@ func cmdRun(args []string) {
 		}
 	}
 
-	// Execute script
-	result, err := rt.Execute(script)
+	// Execute script under the timeout/signal context.
+	result, err := builtins.RunScriptContext(ctx, rt, script)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Script execution error: %v\n", err)
 		os.Exit(1)

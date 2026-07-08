@@ -12,6 +12,7 @@ import (
 
 	"github.com/standardbeagle/slop-mcp/internal/atomicfile"
 	"github.com/standardbeagle/slop-mcp/internal/builtins"
+	"github.com/standardbeagle/slop-mcp/internal/config"
 	"github.com/standardbeagle/slop-mcp/internal/overrides"
 )
 
@@ -212,14 +213,20 @@ func printJSON(v any) {
 	fmt.Println(string(output))
 }
 
-// Storage paths
+// Storage paths. Uses the same resolver as the server's MemoryStore
+// (config.UserConfigDirPath) so both agree on the user memory directory.
 func getUserMemoryDir() string {
-	configDir := os.Getenv("XDG_CONFIG_HOME")
-	if configDir == "" {
-		home, _ := os.UserHomeDir()
-		configDir = filepath.Join(home, ".config")
+	base := config.UserConfigDirPath()
+	if base == "" {
+		// Fallback mirrors the previous hand-rolled behavior when no home dir.
+		configDir := os.Getenv("XDG_CONFIG_HOME")
+		if configDir == "" {
+			home, _ := os.UserHomeDir()
+			configDir = filepath.Join(home, ".config")
+		}
+		base = filepath.Join(configDir, "slop-mcp")
 	}
-	return filepath.Join(configDir, "slop-mcp", "memory")
+	return filepath.Join(base, "memory")
 }
 
 func getProjectMemoryDir() (string, error) {
@@ -257,8 +264,9 @@ func getBankPath(bankName, scope string) (string, error) {
 		if _, err := os.Stat(userPath); err == nil {
 			return userPath, nil
 		}
-		// Default to project for new banks
-		return filepath.Join(projectDir, bankName+".json"), nil
+		// Default NEW banks to user scope so the server (which reads only the
+		// user memory dir) can see them; use --scope project for a project bank.
+		return userPath, nil
 	}
 	return filepath.Join(dir, bankName+".json"), nil
 }

@@ -74,6 +74,18 @@ type memoryEntry struct {
 	Size        int       `json:"size,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
+	// TTL is seconds-to-live (nil = no expiry). Kept for round-trip
+	// compatibility with memory-cli, which writes it; a server-side re-save
+	// must not silently drop it.
+	TTL *int64 `json:"ttl,omitempty"`
+}
+
+// isExpired reports whether the entry's TTL has elapsed relative to UpdatedAt.
+func (e *memoryEntry) isExpired() bool {
+	if e == nil || e.TTL == nil {
+		return false
+	}
+	return time.Now().After(e.UpdatedAt.Add(time.Duration(*e.TTL) * time.Second))
 }
 
 // NewMemoryStore creates a MemoryStore using the default directory.
@@ -199,6 +211,7 @@ func RegisterMemory(rt *slop.Runtime, store *MemoryStore) {
 			// Preserve existing metadata if not provided in kwargs
 			entry.Description = existing.Description
 			entry.Schema = existing.Schema
+			entry.TTL = existing.TTL // preserve memory-cli TTLs across re-save
 		} else {
 			entry.CreatedAt = now
 		}
@@ -257,7 +270,8 @@ func RegisterMemory(rt *slop.Runtime, store *MemoryStore) {
 		}
 
 		entry, exists := b.Entries[key.Value]
-		if !exists {
+		if !exists || entry.isExpired() {
+			// Treat an expired entry as absent, consistent with memory-cli.
 			if len(args) > 2 {
 				return args[2], nil
 			}
