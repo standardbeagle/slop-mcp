@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -56,8 +57,9 @@ func (e *Executor) Execute(ctx context.Context, tool *ToolConfig, params map[str
 		}
 		cmd = exec.CommandContext(execCtx, "sh", "-c", shellCmd)
 	} else {
-		// Direct execution (more secure)
-		cmd = exec.CommandContext(execCtx, tool.Command, args...)
+		// Direct execution (more secure). exec does not expand a leading ~, so
+		// expand it here for command paths like "~/bin/tool".
+		cmd = exec.CommandContext(execCtx, expandTilde(tool.Command), args...)
 	}
 
 	// Set working directory
@@ -67,6 +69,8 @@ func (e *Executor) Execute(ctx context.Context, tool *ToolConfig, params map[str
 			return nil, fmt.Errorf("failed to determine CLI tool working directory: %w", e.workdirErr)
 		}
 		workdir = e.workdir
+	} else {
+		workdir = expandTilde(workdir)
 	}
 	cmd.Dir = workdir
 
@@ -162,6 +166,23 @@ func (e *Executor) Execute(ctx context.Context, tool *ToolConfig, params map[str
 // single quote as quote-backslash-quote-quote so the value is passed literally.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// expandTilde expands a leading "~" (bare or "~/...") to the user's home
+// directory. Other tildes are left untouched. If the home directory cannot be
+// resolved, the input is returned unchanged.
+func expandTilde(path string) string {
+	if path != "~" && !strings.HasPrefix(path, "~/") {
+		return path
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return path
+	}
+	if path == "~" {
+		return home
+	}
+	return filepath.Join(home, path[2:])
 }
 
 // buildArgs builds command line arguments from tool config and params.

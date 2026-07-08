@@ -205,14 +205,6 @@ func (s *Store) Import(pack Pack, scope Scope, overwrite bool) (ImportReport, er
 		rep.ImportedOverrides++
 	}
 
-	// Collect unique MCP names from deps to report missing ones.
-	depMCPs := map[string]bool{}
-	for _, pc := range pack.CustomTools {
-		for _, dep := range pc.DependsOn {
-			depMCPs[dep.MCP] = true
-		}
-	}
-
 	for _, pc := range pack.CustomTools {
 		if !overwrite {
 			if _, ok := s.GetCustom(pc.Name); ok {
@@ -231,11 +223,9 @@ func (s *Store) Import(pack Pack, scope Scope, overwrite bool) (ImportReport, er
 		rep.ImportedCustom++
 	}
 
-	// MissingDeps: report dep MCPs that have no presence in any scope.
-	// We can't check the registry from here, so we report based on what
-	// the caller already knows — leave the field empty for now. The
-	// staleness check at list_custom time will surface stale deps.
-	_ = depMCPs
+	// Note: dependency-MCP presence is not checked here (the store has no
+	// registry handle). The staleness check at list_custom time surfaces stale
+	// or missing deps instead.
 
 	return rep, nil
 }

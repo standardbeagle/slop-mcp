@@ -1279,12 +1279,45 @@ func (r *Registry) backgroundHealthCheckLoop(ctx context.Context, interval time.
 			r.logger.Debug("background health check stopped")
 			return
 		case <-ticker.C:
-			r.HealthCheck(ctx, "") // Check all MCPs
+			// Ping only MCPs whose own configured interval has elapsed, so a
+			// long-interval MCP is not probed at another MCP's faster cadence,
+			// and MCPs with no configured interval are never probed.
+			for _, name := range r.dueForHealthCheck() {
+				r.healthCheckOne(ctx, name)
+			}
 			// A failed health check demotes the MCP to StateError; launch
 			// exponential-backoff auto-reconnect for those that have it enabled.
 			r.autoReconnectErrored(ctx)
 		}
 	}
+}
+
+// dueForHealthCheck returns the connected MCPs whose per-config health-check
+// interval has elapsed since their last check. MCPs with no interval configured
+// (empty/"0"/unparseable/non-positive) are excluded entirely.
+func (r *Registry) dueForHealthCheck() []string {
+	now := time.Now()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var due []string
+	for name, st := range r.states {
+		if st.state != StateConnected {
+			continue
+		}
+		raw := st.config.HealthCheckInterval
+		if raw == "" || raw == "0" {
+			continue
+		}
+		ivl, err := time.ParseDuration(raw)
+		if err != nil || ivl <= 0 {
+			continue
+		}
+		if st.lastHealthCheck.IsZero() || now.Sub(st.lastHealthCheck) >= ivl {
+			due = append(due, name)
+		}
+	}
+	return due
 }
 
 // autoReconnectErrored launches background reconnect-with-backoff for every MCP
