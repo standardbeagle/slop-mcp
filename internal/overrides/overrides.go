@@ -32,6 +32,17 @@ const (
 // Iterating in this order respects precedence at merge time (Local > Project > User).
 var AllScopes = []Scope{ScopeLocal, ScopeProject, ScopeUser}
 
+// IsValidScope reports whether s names a known storage tier. The empty string
+// is valid and signals "use the default / all scopes" at the call site.
+func IsValidScope(s string) bool {
+	switch Scope(s) {
+	case "", ScopeUser, ScopeProject, ScopeLocal:
+		return true
+	default:
+		return false
+	}
+}
+
 // OverrideEntry is the value shape stored under BankOverrides, keyed by "<mcp>.<tool>".
 type OverrideEntry struct {
 	Description string            `json:"description"`

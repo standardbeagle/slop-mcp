@@ -1186,18 +1186,11 @@ func TestHandleManageMCPs_InvalidActionIncludesReconnect(t *testing.T) {
 // Tests for handleRunSlop
 // =============================================================================
 
-// extractSlopValue extracts the actual value from a SLOP runtime result.
-// SLOP values are returned as maps with a "Value" key due to JSON marshaling.
-// This helper unwraps them for easier testing.
+// extractSlopValue returns the run_slop result value. run_slop now converts
+// SLOP values to native Go (via slop.ValueToGo) before serialization, so the
+// value arrives unwrapped and this is a passthrough retained for call-site
+// clarity.
 func extractSlopValue(v any) any {
-	if v == nil {
-		return nil
-	}
-	if m, ok := v.(map[string]any); ok {
-		if val, exists := m["Value"]; exists {
-			return val
-		}
-	}
 	return v
 }
 
@@ -1227,7 +1220,7 @@ func TestHandleRunSlop_InlineScript_Simple(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Nil(t, result)
 	// The result of 1 + 2 should be 3 (wrapped in SLOP value format)
-	assert.Equal(t, float64(3), extractSlopValue(output.Result))
+	assert.Equal(t, int64(3), extractSlopValue(output.Result))
 }
 
 // TestHandleRunSlop_InlineScript_StringConcat tests run_slop with string operations.
@@ -1259,7 +1252,7 @@ x + y`
 
 	assert.NoError(t, err)
 	assert.Nil(t, result)
-	assert.Equal(t, float64(30), extractSlopValue(output.Result))
+	assert.Equal(t, int64(30), extractSlopValue(output.Result))
 }
 
 // TestHandleRunSlop_InlineScript_Emit tests run_slop with emit statements.
@@ -1376,7 +1369,7 @@ func TestHandleRunSlop_FilePath_Simple(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Nil(t, result)
-	assert.Equal(t, float64(25), extractSlopValue(output.Result))
+	assert.Equal(t, int64(25), extractSlopValue(output.Result))
 }
 
 // TestHandleRunSlop_FilePath_MultiLine tests run_slop with a multi-line script file.
@@ -1401,9 +1394,9 @@ c * 2`
 
 	assert.NoError(t, err)
 	assert.Nil(t, result)
-	assert.Equal(t, float64(60), extractSlopValue(output.Result))
+	assert.Equal(t, int64(60), extractSlopValue(output.Result))
 	require.Len(t, output.Emitted, 1)
-	assert.Equal(t, float64(30), extractSlopValue(output.Emitted[0]))
+	assert.Equal(t, int64(30), extractSlopValue(output.Emitted[0]))
 }
 
 // TestHandleRunSlop_FilePath_NotFound tests run_slop with a non-existent file.
@@ -1462,7 +1455,7 @@ func TestHandleRunSlop_BothScriptAndFile(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Nil(t, result)
-	assert.Equal(t, float64(100), extractSlopValue(output.Result)) // File content takes precedence
+	assert.Equal(t, int64(100), extractSlopValue(output.Result)) // File content takes precedence
 }
 
 // TestHandleRunSlop_InlineScript_Boolean tests run_slop with boolean expressions.
@@ -1508,8 +1501,8 @@ func TestHandleRunSlop_InlineScript_NoneResult(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Nil(t, result)
-	// none is wrapped in a NoneValue struct, check the output is the none type
-	assert.NotNil(t, output.Result)
+	// SLOP none converts to Go nil via ValueToGo (no more leaked NoneValue struct).
+	assert.Nil(t, output.Result)
 }
 
 // =============================================================================

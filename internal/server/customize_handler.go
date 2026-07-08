@@ -120,6 +120,11 @@ func (s *Server) handleCustomizeTools(
 	if s.overrideStore == nil {
 		return nil, customizeToolsOutput{}, fmt.Errorf("override store not initialized")
 	}
+	// Fail fast on an invalid scope rather than silently writing to the wrong
+	// tier (set/define) or returning an empty result (list filters).
+	if !overrides.IsValidScope(in.Scope) {
+		return nil, customizeToolsOutput{}, fmt.Errorf("invalid scope %q: must be one of user, project, local", in.Scope)
+	}
 	switch in.Action {
 	case "set_override":
 		return s.customizeSetOverride(ctx, in)
@@ -352,6 +357,14 @@ func (s *Server) customizeDefineCustom(_ context.Context, in CustomizeToolsInput
 	// Validate body size.
 	if len(in.Body) > bodyLimit() {
 		return nil, customizeToolsOutput{}, fmt.Errorf("body exceeds maximum size of %d bytes", bodyLimit())
+	}
+
+	// Syntax-check the body now, while the defining context is present, instead
+	// of deferring the error to the first execution of the custom tool.
+	syntaxRT := builtins.NewRuntime()
+	defer syntaxRT.Close()
+	if _, err := syntaxRT.Parse(in.Body); err != nil {
+		return nil, customizeToolsOutput{}, fmt.Errorf("body has SLOP syntax errors: %w", err)
 	}
 
 	if err := validateCustomInputSchema(in.InputSchema); err != nil {

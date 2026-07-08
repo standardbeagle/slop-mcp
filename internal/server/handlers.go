@@ -20,6 +20,7 @@ import (
 	"github.com/standardbeagle/slop-mcp/internal/overrides"
 	"github.com/standardbeagle/slop-mcp/internal/recipes"
 	"github.com/standardbeagle/slop-mcp/internal/registry"
+	"github.com/standardbeagle/slop/pkg/slop"
 )
 
 // DefaultSearchLimit is the default maximum number of tools to return from search_tools.
@@ -165,6 +166,14 @@ func (s *Server) handleSearchTools(
 		if len(tools) > limit {
 			tools = tools[:limit]
 		}
+	}
+
+	// Progressive disclosure: search returns names + descriptions only. Full
+	// input_schema is withheld here (it can be thousands of tokens per page)
+	// and fetched on demand via get_metadata verbose=true. Nil the field on the
+	// value copies; the shared index maps are left untouched.
+	for i := range tools {
+		tools[i].InputSchema = nil
 	}
 
 	return nil, SearchToolsOutput{
@@ -338,14 +347,17 @@ func (s *Server) handleRunSlop(
 		return nil, RunSlopOutput{}, parseSlopError(script, err)
 	}
 
-	// Collect emitted values
+	// Collect emitted values. Convert SLOP values to native Go via ValueToGo
+	// first so the wire format matches the custom-tool path (custom_exec.go);
+	// valueToAny alone would json.Marshal internal evaluator structs and leak
+	// fields like {"Value":3} / {"Elements":[...]} to agents.
 	emitted := make([]any, 0)
 	for _, v := range rt.Emitted() {
-		emitted = append(emitted, valueToAny(v))
+		emitted = append(emitted, valueToAny(slop.ValueToGo(v)))
 	}
 
 	return nil, RunSlopOutput{
-		Result:  valueToAny(result),
+		Result:  valueToAny(slop.ValueToGo(result)),
 		Emitted: emitted,
 	}, nil
 }
@@ -362,16 +374,21 @@ func recipesToAny(recs []recipes.Recipe) []any {
 	return result
 }
 
-// slopErrorRegex matches SLOP parser error format: "parse error at LINE:COL: MESSAGE"
-var slopErrorRegex = regexp.MustCompile(`(?i)(?:parse error|error) at (\d+):(\d+):\s*(.*)`)
+// slopErrorRegex matches SLOP's parser error format, emitted verbatim as
+// "parse error at LINE:COL: MESSAGE" (internal/parser/errors.go). It is
+// anchored to the literal "parse error at" prefix so a runtime error whose
+// text merely contains "... error at 12:30 ..." is not misclassified as a
+// parse error. The MESSAGE capture stops at end-of-line so multi-error parses
+// ("N parse errors:\n  parse error at ...") report each entry.
+var slopErrorRegex = regexp.MustCompile(`parse error at (\d+):(\d+):\s*([^\n]*)`)
 
 // parseSlopError converts a SLOP execution error into a structured error
 // with line/column info and source context for agent self-correction.
 func parseSlopError(script string, err error) error {
 	msg := err.Error()
-	matches := slopErrorRegex.FindStringSubmatch(msg)
+	matches := slopErrorRegex.FindAllStringSubmatch(msg, -1)
 
-	if matches == nil {
+	if len(matches) == 0 {
 		// Runtime error without line info
 		return &slopError{
 			Type:    "runtime",
@@ -380,24 +397,26 @@ func parseSlopError(script string, err error) error {
 		}
 	}
 
-	line, _ := strconv.Atoi(matches[1])
-	col, _ := strconv.Atoi(matches[2])
-	detail := slopErrorDetail{
-		Line:    line,
-		Column:  col,
-		Message: matches[3],
-	}
-
-	// Extract the failing source line
 	lines := strings.Split(script, "\n")
-	if line > 0 && line <= len(lines) {
-		detail.SourceLine = lines[line-1]
+	details := make([]slopErrorDetail, 0, len(matches))
+	for _, m := range matches {
+		line, _ := strconv.Atoi(m[1])
+		col, _ := strconv.Atoi(m[2])
+		detail := slopErrorDetail{
+			Line:    line,
+			Column:  col,
+			Message: m[3],
+		}
+		if line > 0 && line <= len(lines) {
+			detail.SourceLine = lines[line-1]
+		}
+		details = append(details, detail)
 	}
 
 	return &slopError{
 		Type:    "parse",
 		Message: msg,
-		Errors:  []slopErrorDetail{detail},
+		Errors:  details,
 	}
 }
 
@@ -804,9 +823,10 @@ type GetMetadataInput struct {
 
 // GetMetadataOutput is the output for the get_metadata tool.
 type GetMetadataOutput struct {
-	Metadata []registry.MCPMetadata `json:"metadata"`
-	Total    int                    `json:"total"`
-	FilePath string                 `json:"file_path,omitempty"`
+	Metadata  []registry.MCPMetadata `json:"metadata,omitempty"`
+	Total     int                    `json:"total"`
+	FilePath  string                 `json:"file_path,omitempty"`
+	ToolCount int                    `json:"tool_count,omitempty"`
 }
 
 func (s *Server) handleGetMetadata(
@@ -918,7 +938,30 @@ func (s *Server) handleGetMetadata(
 		}
 	}
 
-	// Determine if we should include full schemas:
+	// Write to file if a path is specified: offload the full metadata (schemas
+	// included) to disk and return only a compact summary inline, so the large
+	// payload does not also consume the response budget — the whole point of
+	// the file_path parameter.
+	if input.FilePath != "" {
+		data, err := json.MarshalIndent(metadata, "", "  ")
+		if err != nil {
+			return nil, GetMetadataOutput{}, fmt.Errorf("failed to marshal metadata: %w", err)
+		}
+		if err := writeOutputFile(input.FilePath, data); err != nil {
+			return nil, GetMetadataOutput{}, fmt.Errorf("failed to write metadata file: %w", err)
+		}
+		toolCount := 0
+		for i := range metadata {
+			toolCount += len(metadata[i].Tools)
+		}
+		return nil, GetMetadataOutput{
+			Total:     len(metadata),
+			FilePath:  input.FilePath,
+			ToolCount: toolCount,
+		}, nil
+	}
+
+	// Inline path. Determine if we should include full schemas:
 	// - Always include if verbose=true
 	// - Include if querying a specific tool (mcp_name + tool_name both specified)
 	// - Otherwise strip input_schema to reduce output size
@@ -934,24 +977,10 @@ func (s *Server) handleGetMetadata(
 		}
 	}
 
-	output := GetMetadataOutput{
+	return nil, GetMetadataOutput{
 		Metadata: metadata,
 		Total:    len(metadata),
-	}
-
-	// Write to file if path specified
-	if input.FilePath != "" {
-		data, err := json.MarshalIndent(metadata, "", "  ")
-		if err != nil {
-			return nil, output, fmt.Errorf("failed to marshal metadata: %w", err)
-		}
-		if err := writeOutputFile(input.FilePath, data); err != nil {
-			return nil, output, fmt.Errorf("failed to write metadata file: %w", err)
-		}
-		output.FilePath = input.FilePath
-	}
-
-	return nil, output, nil
+	}, nil
 }
 
 func writeOutputFile(path string, data []byte) error {

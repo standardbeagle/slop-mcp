@@ -77,6 +77,8 @@ type slopExecutionResult struct {
 }
 
 func executeSlopWithContext(ctx context.Context, rt *slop.Runtime, script string) (slop.Value, error) {
+	// The buffered channel guarantees the worker can always send and exit even
+	// after we return on timeout, so no goroutine leaks.
 	done := make(chan slopExecutionResult, 1)
 	go func() {
 		value, err := rt.Execute(script)
@@ -87,7 +89,12 @@ func executeSlopWithContext(ctx context.Context, rt *slop.Runtime, script string
 	case result := <-done:
 		return result.value, result.err
 	case <-ctx.Done():
-		_ = rt.Close()
+		// rt.Execute is not context-aware but self-terminates via the runtime's
+		// MaxDuration (set equal to this timeout in newSlopRuntime), so the
+		// worker stops shortly after. Do not Close here: the caller owns the
+		// runtime's lifecycle via its deferred Close, and Close only tears down
+		// the (empty) MCP manager — closing it twice or mid-Eval is pointless
+		// and would race the deferred call.
 		return nil, fmt.Errorf("SLOP execution canceled or timed out: %w", ctx.Err())
 	}
 }

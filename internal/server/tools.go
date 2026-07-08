@@ -256,15 +256,18 @@ func (s *Server) wrapExecuteTool(ctx context.Context, req *mcp.CallToolRequest) 
 	}
 
 	// Local routes (custom tools and CLI tools) share handleExecuteTool so the
-	// routing contract lives in one place. Both take string/scalar arguments,
-	// so the map[string]any decode is lossless here; real MCP calls skip this
-	// branch and forward raw bytes below to preserve large-integer precision.
+	// routing contract lives in one place. Custom tools may declare integer
+	// params, so decode with json.Number and normalize to int64/float64 to keep
+	// large-integer precision (snowflake ids, lease tokens); real MCP calls skip
+	// this branch and forward raw bytes below.
 	if input.MCPName == "_custom" || s.isCLIRoute(input.MCPName, input.ToolName) {
 		var params map[string]any
 		if !isEmptyRawParams(input.Parameters) {
-			if err := json.Unmarshal(input.Parameters, &params); err != nil {
+			decoded, err := decodeParamsPreservingInts(input.Parameters)
+			if err != nil {
 				return errorResult(fmt.Errorf("invalid parameters: %w", err)), nil
 			}
+			params = decoded
 		}
 		result, output, err := s.handleExecuteTool(ctx, req, ExecuteToolInput{
 			MCPName:    input.MCPName,
@@ -288,6 +291,47 @@ func (s *Server) wrapExecuteTool(ctx context.Context, req *mcp.CallToolRequest) 
 	}
 
 	return result, nil
+}
+
+// decodeParamsPreservingInts unmarshals a JSON object into map[string]any while
+// keeping integers as int64 instead of float64. Numbers that fit an int64
+// exactly become int64; everything else stays float64. Nested objects and
+// arrays are normalized recursively.
+func decodeParamsPreservingInts(raw json.RawMessage) (map[string]any, error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var m map[string]any
+	if err := dec.Decode(&m); err != nil {
+		return nil, err
+	}
+	return normalizeNumbers(m).(map[string]any), nil
+}
+
+// normalizeNumbers walks a decoded JSON value and converts json.Number to int64
+// when integral (preserving precision beyond 2^53) or float64 otherwise.
+func normalizeNumbers(v any) any {
+	switch val := v.(type) {
+	case map[string]any:
+		for k, e := range val {
+			val[k] = normalizeNumbers(e)
+		}
+		return val
+	case []any:
+		for i, e := range val {
+			val[i] = normalizeNumbers(e)
+		}
+		return val
+	case json.Number:
+		if i, err := val.Int64(); err == nil {
+			return i
+		}
+		if f, err := val.Float64(); err == nil {
+			return f
+		}
+		return val.String()
+	default:
+		return v
+	}
 }
 
 func (s *Server) wrapRunSlop(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
