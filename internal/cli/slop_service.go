@@ -40,11 +40,14 @@ func (s *SlopService) Call(method string, args []slop.Value, kwargs map[string]s
 	if len(args) > 0 {
 		tool := s.registry.Get(method)
 		if tool != nil {
-			// Map positional args to their named positions
+			// Map positional args to their named positions. Use the same
+			// snake_case key the executor looks up (buildArgs reads
+			// params[toSnakeCase(arg.Name)]); storing the raw name would silently
+			// drop values for args named in camelCase or with hyphens.
 			for i, arg := range args {
 				for _, toolArg := range tool.Args {
 					if toolArg.Position == i {
-						params[toolArg.Name] = slop.ValueToGo(arg)
+						params[toSnakeCase(toolArg.Name)] = slop.ValueToGo(arg)
 						break
 					}
 				}

@@ -522,7 +522,9 @@ func WriteConfigFile(path string, cfg *Config) error {
 		content += formatMCPBlock(cfg.MCPs[name])
 	}
 
-	return atomicfile.WriteFile(path, []byte(content), 0644)
+	// 0600: MCP config blocks routinely embed secrets (env API keys,
+	// Authorization headers), so the file must not be world-readable.
+	return atomicfile.WriteFile(path, []byte(content), 0600)
 }
 
 // kdlEscaper escapes characters that are significant inside KDL quoted

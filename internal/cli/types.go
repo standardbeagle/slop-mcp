@@ -57,10 +57,19 @@ type StdinConfig struct {
 
 // StdoutConfig defines stdout handling.
 type StdoutConfig struct {
-	Type     string `kdl:"type"`     // output type
-	Format   string `kdl:"format"`   // "json", "text", "auto"
-	Trim     bool   `kdl:"trim"`     // trim whitespace (default true)
-	Encoding string `kdl:"encoding"` // "utf8", "base64"
+	Type   string `kdl:"type"`   // output type
+	Format string `kdl:"format"` // "json", "text", "auto"
+	// Trim controls whitespace trimming. Nil means unspecified and defaults to
+	// true (see TrimEnabled); set `trim false` in KDL to disable. A plain bool
+	// could not distinguish "unspecified" from "false", so an explicit stdout
+	// block without a trim node silently disabled the documented default.
+	Trim *bool `kdl:"trim"`
+}
+
+// TrimEnabled reports whether stdout should be trimmed, applying the default
+// (true) when trim is unspecified.
+func (c *StdoutConfig) TrimEnabled() bool {
+	return c == nil || c.Trim == nil || *c.Trim
 }
 
 // StderrConfig defines stderr handling.

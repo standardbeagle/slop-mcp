@@ -81,7 +81,10 @@ func (e *Executor) Execute(ctx context.Context, tool *ToolConfig, params map[str
 
 	// Handle stdin
 	if stdinVal, ok := params["stdin"]; ok && stdinVal != nil {
-		stdinStr, _ := stdinVal.(string)
+		stdinStr, isStr := stdinVal.(string)
+		if !isStr {
+			return nil, fmt.Errorf("stdin must be a string, got %T", stdinVal)
+		}
 		cmd.Stdin = strings.NewReader(stdinStr)
 	}
 
@@ -120,13 +123,14 @@ func (e *Executor) Execute(ctx context.Context, tool *ToolConfig, params map[str
 		result.Error = fmt.Sprintf("command failed with exit code %d", result.ExitCode)
 	}
 
-	// Handle stderr as failure if configured
-	if tool.Stderr != nil && tool.Stderr.FailOnOutput && result.Stderr != "" {
+	// Handle stderr as failure if configured. Keep any more specific error
+	// already set (e.g. a timeout cause) rather than overwriting it.
+	if tool.Stderr != nil && tool.Stderr.FailOnOutput && result.Stderr != "" && result.Error == "" {
 		result.Error = "command produced stderr output"
 	}
 
-	// Trim stdout if configured (default true)
-	if tool.Stdout == nil || tool.Stdout.Trim {
+	// Trim stdout unless explicitly disabled (default true).
+	if tool.Stdout.TrimEnabled() {
 		result.Stdout = strings.TrimSpace(result.Stdout)
 	}
 
@@ -167,7 +171,9 @@ func (e *Executor) buildArgs(tool *ToolConfig, params map[string]any) ([]string,
 	// Build positional arguments (sorted by position)
 	positionalArgs := make([]ArgConfig, len(tool.Args))
 	copy(positionalArgs, tool.Args)
-	sort.Slice(positionalArgs, func(i, j int) bool {
+	// Stable sort so args sharing a Position (e.g. all default 0) keep their
+	// declared order instead of being shuffled nondeterministically per run.
+	sort.SliceStable(positionalArgs, func(i, j int) bool {
 		return positionalArgs[i].Position < positionalArgs[j].Position
 	})
 

@@ -17,7 +17,7 @@ type MCPConfig struct {
 	URL                 string            `json:"url,omitempty"`
 	Headers             map[string]string `json:"headers,omitempty"`
 	Timeout             string            `json:"timeout,omitempty"`               // Connection timeout (e.g., "30s", "1m")
-	MaxRetries          int               `json:"max_retries,omitempty"`           // Max auto-reconnect retries (default 5, 0 = disabled)
+	MaxRetries          int               `json:"max_retries,omitempty"`           // Max auto-reconnect retries (0 = use default 5, negative = disabled)
 	HealthCheckInterval string            `json:"health_check_interval,omitempty"` // Background health check interval (e.g., "30s", "1m"); 0 = disabled
 	Dynamic             bool              `json:"dynamic,omitempty"`               // If true, always re-fetch tool list (never use cache)
 	Source              Source            `json:"-"`
