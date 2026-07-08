@@ -457,7 +457,13 @@ func tmplDiv(a, b any) (any, error) {
 	if bf == 0 {
 		return nil, fmt.Errorf("div: division by zero")
 	}
-	return af / bf, nil
+	result := af / bf
+	// Collapse exact whole results to int64 for consistency with add/sub/mul,
+	// so div(6, 2) yields 3 rather than 3.0.
+	if result == float64(int64(result)) {
+		return int64(result), nil
+	}
+	return result, nil
 }
 
 func tmplMod(a, b any) (int64, error) {
@@ -624,30 +630,61 @@ func builtinDedent(args []slop.Value, kwargs map[string]slop.Value) (slop.Value,
 
 	lines := strings.Split(textStr.Value, "\n")
 
-	// Find minimum indent (ignoring empty lines)
-	minIndent := -1
+	// Compute the longest common leading-whitespace prefix across non-empty
+	// lines (character-for-character, so tabs and spaces are not conflated the
+	// way a width count would). Whitespace-only lines are ignored here and
+	// normalized to empty below.
+	havePrefix := false
+	var prefix string
 	for _, line := range lines {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		indent := len(line) - len(strings.TrimLeft(line, " \t"))
-		if minIndent == -1 || indent < minIndent {
-			minIndent = indent
+		lead := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+		if !havePrefix {
+			prefix = lead
+			havePrefix = true
+		} else {
+			prefix = commonPrefix(prefix, lead)
+		}
+		if prefix == "" {
+			break
 		}
 	}
 
-	if minIndent <= 0 {
-		return slop.NewStringValue(textStr.Value), nil
+	if prefix == "" {
+		// Still normalize whitespace-only lines even when there is no common
+		// indent to strip.
+		for i, line := range lines {
+			if strings.TrimSpace(line) == "" {
+				lines[i] = ""
+			}
+		}
+		return slop.NewStringValue(strings.Join(lines, "\n")), nil
 	}
 
-	// Remove common indent
 	for i, line := range lines {
-		if len(line) >= minIndent {
-			lines[i] = line[minIndent:]
+		if strings.TrimSpace(line) == "" {
+			lines[i] = ""
+			continue
 		}
+		lines[i] = strings.TrimPrefix(line, prefix)
 	}
 
 	return slop.NewStringValue(strings.Join(lines, "\n")), nil
+}
+
+// commonPrefix returns the longest common prefix of a and b.
+func commonPrefix(a, b string) string {
+	n := len(a)
+	if len(b) < n {
+		n = len(b)
+	}
+	i := 0
+	for i < n && a[i] == b[i] {
+		i++
+	}
+	return a[:i]
 }
 
 // builtinWrap wraps text at the specified width.

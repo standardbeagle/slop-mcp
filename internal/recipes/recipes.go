@@ -5,6 +5,7 @@ import (
 	"embed"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -69,9 +70,15 @@ func extractDescription(name string) string {
 		return ""
 	}
 	desc = strings.TrimSpace(desc)
-	// Strip "name:" prefix if present
-	if idx := strings.Index(desc, ":"); idx > 0 && idx < 30 {
+	// Strip a leading "name:" label only when the part before the colon is a
+	// recipe-name slug (lowercase letters/digits/_/-, no spaces). This avoids
+	// mangling ordinary prose like "Warning: do not run against prod".
+	if idx := strings.Index(desc, ":"); idx > 0 && idx < 30 && recipeNameSlugRE.MatchString(desc[:idx]) {
 		desc = strings.TrimSpace(desc[idx+1:])
 	}
 	return desc
 }
+
+// recipeNameSlugRE matches a recipe-name label (the basename convention for
+// scripts/*.slop): lowercase letters, digits, underscores, and hyphens.
+var recipeNameSlugRE = regexp.MustCompile(`^[a-z0-9_-]+$`)
