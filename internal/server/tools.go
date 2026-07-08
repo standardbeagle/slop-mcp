@@ -221,6 +221,14 @@ func validateExecuteToolParameters(raw json.RawMessage) error {
 }
 
 func (s *Server) wrapExecuteTool(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	// Bound the tool call so a hung MCP cannot block the agent indefinitely.
+	// context.WithTimeout keeps any shorter deadline the client already set.
+	if t := executeToolTimeout(); t > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, t)
+		defer cancel()
+	}
+
 	args, err := callToolArguments(req)
 	if err != nil {
 		return errorResult(err), nil

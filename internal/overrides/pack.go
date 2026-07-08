@@ -207,7 +207,11 @@ func (s *Store) Import(pack Pack, scope Scope, overwrite bool) (ImportReport, er
 
 	for _, pc := range pack.CustomTools {
 		if !overwrite {
-			if _, ok := s.GetCustom(pc.Name); ok {
+			// Skip only when a custom tool already wins in the *same* target
+			// scope, mirroring the override collision check above. Using the
+			// scope-merged presence would wrongly block importing into an empty
+			// scope just because another scope defines the name.
+			if existing, ok := s.GetCustom(pc.Name); ok && existing.Scope == scope {
 				rep.Skipped = append(rep.Skipped, pc.Name)
 				continue
 			}

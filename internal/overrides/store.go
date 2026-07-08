@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/standardbeagle/slop-mcp/internal/atomicfile"
+	"github.com/standardbeagle/slop-mcp/internal/filelock"
 )
 
 // StoreOptions configures the on-disk roots. Empty values mean the scope is
@@ -32,9 +33,6 @@ type Store struct {
 	// touched keys are overwritten (or deleted), so entries written by other
 	// processes survive. Guarded by mu.
 	touched map[string]map[string]bool
-
-	fmu      sync.Mutex
-	flushers map[string]*flusher // keyed by "<scope>:<bank>"
 }
 
 // OpenStore creates and warms the store from disk.
@@ -44,7 +42,6 @@ func OpenStore(opts StoreOptions) (*Store, error) {
 		overrides: map[Scope]map[string]OverrideEntry{},
 		custom:    map[Scope]map[string]CustomTool{},
 		touched:   map[string]map[string]bool{},
-		flushers:  map[string]*flusher{},
 	}
 	for _, scope := range AllScopes {
 		if s.rootFor(scope) == "" {
@@ -132,8 +129,10 @@ func (s *Store) SetOverride(scope Scope, key string, e OverrideEntry) error {
 	s.markTouched(scope, BankOverrides, key)
 	s.mu.Unlock()
 
-	s.scheduleFlush(scope, BankOverrides)
-	return nil
+	// Write synchronously and surface the error: the customize handler reports
+	// success to the agent based on this return value, so a fire-and-forget
+	// flush that failed later would silently lose the customization.
+	return s.writeBank(scope, BankOverrides)
 }
 
 // GetOverride returns the merged (scope-winning) override entry for a key.
@@ -184,7 +183,9 @@ func (s *Store) RemoveOverride(scope Scope, key string) (int, error) {
 	s.mu.Unlock()
 
 	for sc := range touched {
-		s.scheduleFlush(sc, BankOverrides)
+		if err := s.writeBank(sc, BankOverrides); err != nil {
+			return n, err
+		}
 	}
 	return n, nil
 }
@@ -205,8 +206,9 @@ func (s *Store) SetCustom(scope Scope, name string, ct CustomTool) error {
 	s.markTouched(scope, BankCustomTools, name)
 	s.mu.Unlock()
 
-	s.scheduleFlush(scope, BankCustomTools)
-	return nil
+	// Synchronous write so a failed persist is reported instead of silently
+	// losing the custom tool (see SetOverride).
+	return s.writeBank(scope, BankCustomTools)
 }
 
 // GetCustom returns the merged (scope-winning) custom tool.
@@ -256,7 +258,9 @@ func (s *Store) RemoveCustom(scope Scope, name string) (int, error) {
 	s.mu.Unlock()
 
 	for sc := range touched {
-		s.scheduleFlush(sc, BankCustomTools)
+		if err := s.writeBank(sc, BankCustomTools); err != nil {
+			return n, err
+		}
 	}
 	return n, nil
 }
@@ -291,36 +295,11 @@ func (s *Store) ListCustom() map[Scope]map[string]CustomTool {
 	return out
 }
 
-// Close flushes all pending writes and stops background goroutines.
+// Close is retained for API compatibility. Writes are now synchronous (see
+// SetOverride/SetCustom/RemoveOverride/RemoveCustom), so there is nothing to
+// flush at shutdown.
 func (s *Store) Close() error {
-	s.fmu.Lock()
-	flushers := make([]*flusher, 0, len(s.flushers))
-	for _, f := range s.flushers {
-		flushers = append(flushers, f)
-	}
-	s.flushers = map[string]*flusher{}
-	s.fmu.Unlock()
-
-	var errs []error
-	for _, f := range flushers {
-		if err := f.close(); err != nil {
-			errs = append(errs, err)
-		}
-	}
-	return errors.Join(errs...)
-}
-
-// scheduleFlush enqueues a flush for the given scope+bank.
-func (s *Store) scheduleFlush(scope Scope, bank string) {
-	fkey := string(scope) + ":" + bank
-	s.fmu.Lock()
-	f, ok := s.flushers[fkey]
-	if !ok {
-		f = newFlusher(fkey, func() error { return s.writeBank(scope, bank) })
-		s.flushers[fkey] = f
-	}
-	s.fmu.Unlock()
-	f.markDirty()
+	return nil
 }
 
 // markTouched records that this process modified (wrote or deleted) a key in
@@ -351,10 +330,20 @@ func (s *Store) writeBank(scope Scope, bank string) error {
 	if root == "" {
 		return errors.New("scope root not set")
 	}
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return err
+	}
 	path := filepath.Join(root, bank+".json")
 
+	// Cross-process lock across the read-merge-write so a concurrent flush (this
+	// process or another) cannot clobber the other's just-written keys.
+	unlock, err := filelock.Lock(path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = unlock() }()
+
 	var data []byte
-	var err error
 
 	s.mu.RLock()
 	fkey := string(scope) + ":" + bank
@@ -408,10 +397,6 @@ func (s *Store) writeBank(scope Scope, bank string) error {
 		return fmt.Errorf("unknown bank: %s", bank)
 	}
 	if err != nil {
-		return err
-	}
-
-	if err := os.MkdirAll(root, 0755); err != nil {
 		return err
 	}
 	return atomicfile.WriteFile(path, data, 0644)

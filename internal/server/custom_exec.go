@@ -108,6 +108,14 @@ func checkType(name string, val any, expectedType string) error {
 }
 
 // executeCustomTool runs a custom tool's SLOP body with validated, bound args.
+//
+// The depth guard below is currently latent: custom tools cannot yet invoke one
+// another (no "_custom" service is registered in newSlopRuntime), so depth never
+// exceeds 0. It is retained deliberately as the safety net for when custom-tool
+// composition is wired up. NOTE for that future work: composition also requires
+// making the process-wide exec lock reentrant (or scoping it), since a nested
+// executeCustomTool would otherwise deadlock on LockSlopExec before this guard
+// could fire.
 func (s *Server) executeCustomTool(ctx context.Context, ct overrides.CustomTool, args map[string]any) (any, error) {
 	if customDepth(ctx) >= 16 {
 		return nil, ErrCustomToolRecursion

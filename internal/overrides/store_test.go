@@ -145,7 +145,9 @@ func TestStore_PersistsAcrossReopen(t *testing.T) {
 	}
 }
 
-func TestStore_CloseReturnsFlushError(t *testing.T) {
+// Writes are synchronous, so a persist failure is reported by the mutating
+// call itself (SetOverride) rather than deferred to Close.
+func TestStore_SetReturnsWriteError(t *testing.T) {
 	dir := t.TempDir()
 	root := filepath.Join(dir, "root")
 	if err := os.MkdirAll(root, 0755); err != nil {
@@ -155,6 +157,7 @@ func TestStore_CloseReturnsFlushError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Replace the root directory with a regular file so any write under it fails.
 	if err := os.RemoveAll(root); err != nil {
 		t.Fatal(err)
 	}
@@ -162,15 +165,15 @@ func TestStore_CloseReturnsFlushError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := s.SetOverride(ScopeUser, "k", OverrideEntry{Description: "will fail"}); err != nil {
-		t.Fatal(err)
-	}
-
-	err = s.Close()
+	err = s.SetOverride(ScopeUser, "k", OverrideEntry{Description: "will fail"})
 	if err == nil {
-		t.Fatal("expected close to report flush error")
+		t.Fatal("expected SetOverride to report the write error")
 	}
 	if !strings.Contains(err.Error(), "not a directory") {
-		t.Fatalf("expected filesystem flush error, got %v", err)
+		t.Fatalf("expected filesystem write error, got %v", err)
+	}
+
+	if cerr := s.Close(); cerr != nil {
+		t.Fatalf("Close should be a no-op now, got %v", cerr)
 	}
 }

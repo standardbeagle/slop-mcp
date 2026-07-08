@@ -33,6 +33,27 @@ const MaxSearchLimit = 100
 
 const defaultSlopExecutionTimeout = 30 * time.Second
 
+// defaultExecuteToolTimeout bounds a single execute_tool call so a hung MCP
+// tool cannot block the calling agent forever. It is generous (long-running
+// tools like builds are common) and overridable via SLOP_MCP_EXECUTE_TIMEOUT.
+// Because it is applied with context.WithTimeout, any shorter deadline already
+// on the request context still wins.
+const defaultExecuteToolTimeout = 10 * time.Minute
+
+// executeToolTimeout returns the configured execute_tool timeout, honoring the
+// SLOP_MCP_EXECUTE_TIMEOUT env var (a Go duration like "2m"; "0" disables).
+func executeToolTimeout() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("SLOP_MCP_EXECUTE_TIMEOUT")); v != "" {
+		if v == "0" {
+			return 0
+		}
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return defaultExecuteToolTimeout
+}
+
 // SearchToolsInput is the input for the search_tools tool.
 type SearchToolsInput struct {
 	Query   string `json:"query,omitempty" jsonschema:"Search query for tool names and descriptions"`
