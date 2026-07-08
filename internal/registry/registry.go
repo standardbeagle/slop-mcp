@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -243,6 +246,7 @@ type Registry struct {
 	healthCheckCancel context.CancelFunc       // cancels background health check goroutine
 	cache             *cache.Store             // disk cache for tool metadata
 	connectMu         map[string]chan struct{} // per-MCP semaphore serializing lifecycle ops
+	closed            bool                     // set by Close; blocks late connection installs
 }
 
 // newRegistry initialises a Registry and seeds the atomic index pointer.
@@ -363,41 +367,58 @@ func (r *Registry) GetState(name string) MCPState {
 
 // SetCached loads tools from a cache entry into the tool index without connecting.
 // Sets the MCP state to StateCached and initializes the per-MCP connect mutex.
+// No-op if the MCP is already connected: a live connection must never be
+// silently demoted to cached (which would leave the session dangling).
 func (r *Registry) SetCached(cfg config.MCPConfig, tools []ToolInfo) {
 	r.mu.Lock()
+	changed := r.setCachedLocked(cfg, tools)
+	r.mu.Unlock()
+	if changed {
+		r.rebuildIndex()
+	}
+}
 
+// setCachedLocked installs a cached MCP under r.mu and reports whether anything
+// changed (false when the MCP is already connected). The caller rebuilds the
+// index once after any batch of calls.
+func (r *Registry) setCachedLocked(cfg config.MCPConfig, tools []ToolInfo) bool {
+	if st, ok := r.states[cfg.Name]; ok && st.state == StateConnected {
+		return false
+	}
 	r.states[cfg.Name] = &mcpState{
 		config: cfg,
 		state:  StateCached,
 	}
-
 	r.tools[cfg.Name] = tools
-
 	if _, ok := r.connectMu[cfg.Name]; !ok {
 		r.connectMu[cfg.Name] = make(chan struct{}, 1)
 	}
-
-	r.mu.Unlock()
-	r.rebuildIndex()
+	return true
 }
 
 // LoadCache loads cached tool metadata for all non-dynamic MCPs with valid cache entries.
 // Returns the number of MCPs loaded from cache.
 func (r *Registry) LoadCache(cfg *config.Config) int {
+	// Read and parse the cache file exactly once, then validate every MCP in
+	// memory and rebuild the index a single time -- instead of two full disk
+	// reads per MCP (IsValid + GetEntry) and one index rebuild per MCP.
+	cf, err := r.cache.Load()
+	if err != nil {
+		r.logger.Debug("failed to load tool cache", "error", err)
+		return 0
+	}
+
+	r.mu.Lock()
 	loaded := 0
+	changed := false
 	for name, mcpCfg := range cfg.MCPs {
 		// Skip dynamic MCPs -- they must always connect fresh
 		if mcpCfg.Dynamic {
 			continue
 		}
 
-		// Check if cache entry is valid (exists and config hash matches)
-		if !r.cache.IsValid(name, mcpCfg) {
-			continue
-		}
-
-		entry, err := r.cache.GetEntry(name)
-		if err != nil || entry == nil {
+		entry := cf.Entries[name]
+		if entry == nil || entry.ConfigHash != cache.ConfigHash(mcpCfg) {
 			continue
 		}
 
@@ -412,13 +433,19 @@ func (r *Registry) LoadCache(cfg *config.Config) int {
 			}
 		}
 
-		// Load tools from cache
-		r.SetCached(mcpCfg, tools)
-		r.logger.Info("loaded MCP from cache",
-			"mcp_name", name,
-			"tool_count", len(entry.Tools),
-			"server_version", entry.ServerVersion)
-		loaded++
+		if r.setCachedLocked(mcpCfg, tools) {
+			changed = true
+			loaded++
+			r.logger.Info("loaded MCP from cache",
+				"mcp_name", name,
+				"tool_count", len(entry.Tools),
+				"server_version", entry.ServerVersion)
+		}
+	}
+	r.mu.Unlock()
+
+	if changed {
+		r.rebuildIndex()
 	}
 	return loaded
 }
@@ -747,10 +774,17 @@ func (r *Registry) connectLocked(ctx context.Context, cfg config.MCPConfig) erro
 	// Connect
 	session, err := client.Connect(connectCtx, transport, nil)
 	if err != nil {
-		// Check if error indicates authentication required
-		errStr := err.Error()
-		if strings.Contains(errStr, "401") || strings.Contains(errStr, "unauthorized") ||
-			strings.Contains(errStr, "Unauthorized") || strings.Contains(errStr, "authentication") {
+		// Check if error indicates authentication required. Match specific
+		// auth signals only -- a bare "authentication" substring also appears
+		// in unrelated failures (e.g. TLS handshake text) and would wrongly
+		// park the MCP in StateNeedsAuth, which has no retry path.
+		errLower := strings.ToLower(err.Error())
+		if strings.Contains(errLower, "401") ||
+			strings.Contains(errLower, "unauthorized") ||
+			strings.Contains(errLower, "www-authenticate") ||
+			strings.Contains(errLower, "authentication required") ||
+			strings.Contains(errLower, "invalid_token") ||
+			strings.Contains(errLower, "token expired") {
 			return setError(fmt.Errorf("authentication required: %w", err), StateNeedsAuth)
 		}
 		return setError(fmt.Errorf("failed to connect to MCP %s: %w", cfg.Name, err), StateError)
@@ -769,6 +803,16 @@ func (r *Registry) connectLocked(ctx context.Context, cfg config.MCPConfig) erro
 	// section). Capture any prior connection so its session can be closed
 	// outside the lock instead of leaking.
 	r.mu.Lock()
+	// If the registry was closed while this dial was in flight, do not install
+	// the fresh session (Close already swept the map) -- close it here instead
+	// of leaking a live subprocess/socket past shutdown.
+	if r.closed {
+		r.mu.Unlock()
+		if cerr := session.Close(); cerr != nil {
+			r.logger.Debug("closing session after registry shutdown", "mcp_name", cfg.Name, "error", cerr)
+		}
+		return fmt.Errorf("registry is closed")
+	}
 	old := r.connections[cfg.Name]
 	r.connections[cfg.Name] = &mcpConnection{
 		session:   session,
@@ -799,9 +843,11 @@ func (r *Registry) connectLocked(ctx context.Context, cfg config.MCPConfig) erro
 	return nil
 }
 
-// Disconnect disconnects an MCP server.
-func (r *Registry) Disconnect(name string) error {
-	release, err := r.acquireConnectMu(context.Background(), name)
+// Disconnect disconnects an MCP server. The context bounds the wait for the
+// per-MCP lifecycle semaphore, which an in-flight dial (or backoff loop) can
+// hold; callers must not hang uncancellably behind it.
+func (r *Registry) Disconnect(ctx context.Context, name string) error {
+	release, err := r.acquireConnectMu(ctx, name)
 	if err != nil {
 		return err
 	}
@@ -850,10 +896,15 @@ func (r *Registry) disconnectLocked(name string) error {
 
 // Unregister disconnects an MCP server (if connected) and removes it from the
 // registry entirely, unlike Disconnect which keeps the state for reconnection.
-func (r *Registry) Unregister(name string) error {
-	sem := r.getConnectMu(name)
-	sem <- struct{}{}
-	defer func() { <-sem }()
+func (r *Registry) Unregister(ctx context.Context, name string) error {
+	// Acquire the lifecycle semaphore honoring ctx cancellation: an in-flight
+	// dial can hold it for up to the connect timeout (or minutes under backoff
+	// reconnect), and a raw blocking send would hang unregister uncancellably.
+	release, err := r.acquireConnectMu(ctx, name)
+	if err != nil {
+		return err
+	}
+	defer release()
 
 	r.mu.Lock()
 	if _, ok := r.states[name]; !ok {
@@ -873,6 +924,10 @@ func (r *Registry) Unregister(name string) error {
 	}
 	r.rebuildIndex()
 
+	// The per-MCP connectMu entry is intentionally retained: deleting a channel
+	// that a concurrent waiter may already be blocked on would split the lock
+	// across old and new channels and lose mutual exclusion. One idle channel
+	// per distinct MCP name ever seen is negligible.
 	return nil
 }
 
@@ -885,7 +940,14 @@ func (r *Registry) Reconnect(ctx context.Context, name string) error {
 		return err
 	}
 	defer release()
-	return r.reconnectLocked(ctx, name)
+	if err := r.reconnectLocked(ctx, name); err != nil {
+		return err
+	}
+	// Persist the freshly fetched tool list. Reconnect is the OAuth path
+	// (auth_mcp login), where the post-auth tool list can differ from the
+	// stale pre-auth cache; connectLocked alone does not write the cache.
+	r.updateCache(name)
+	return nil
 }
 
 // reconnectLocked disconnects and reconnects an MCP. Callers must hold the
@@ -941,7 +1003,8 @@ func (r *Registry) ReconnectWithBackoff(ctx context.Context, name string, maxRet
 		return fmt.Errorf("MCP not configured: %s", name)
 	}
 
-	// Determine max retries
+	// Determine max retries. maxRetries==0 defers to config; a negative
+	// argument (or config value) means auto-reconnect is disabled.
 	if maxRetries == 0 {
 		if cfg.MaxRetries > 0 {
 			maxRetries = cfg.MaxRetries
@@ -951,6 +1014,8 @@ func (r *Registry) ReconnectWithBackoff(ctx context.Context, name string, maxRet
 			// MaxRetries < 0 means disabled
 			return fmt.Errorf("auto-reconnect disabled for MCP %s", name)
 		}
+	} else if maxRetries < 0 {
+		return fmt.Errorf("auto-reconnect disabled for MCP %s", name)
 	}
 
 	// Update state to reconnecting
@@ -1121,6 +1186,10 @@ func (r *Registry) healthCheckOne(ctx context.Context, name string) HealthCheckR
 		result.Status = HealthStatusUnhealthy
 		result.Error = err.Error()
 		r.updateHealthState(name, HealthStatusUnhealthy, checkTime, err)
+		// A failed ping means the session is unusable: demote to StateError and
+		// drop it so the background loop (or the next lazy call) reconnects,
+		// instead of leaving a dead session parked in StateConnected forever.
+		r.markConnectionFailed(name, fmt.Errorf("health check ping failed: %w", err))
 		// Debug level: health status stored in state for status queries
 		r.logger.Debug("health check failed", "mcp_name", name, "error", err, "response_time", elapsed)
 	} else {
@@ -1210,7 +1279,34 @@ func (r *Registry) backgroundHealthCheckLoop(ctx context.Context, interval time.
 			return
 		case <-ticker.C:
 			r.HealthCheck(ctx, "") // Check all MCPs
+			// A failed health check demotes the MCP to StateError; launch
+			// exponential-backoff auto-reconnect for those that have it enabled.
+			r.autoReconnectErrored(ctx)
 		}
+	}
+}
+
+// autoReconnectErrored launches background reconnect-with-backoff for every MCP
+// currently in StateError that has auto-reconnect enabled (MaxRetries != -1).
+// ReconnectWithBackoff flips the state to StateReconnecting immediately, so a
+// subsequent health tick skips an MCP whose reconnect cycle is still running --
+// no goroutine pile-up.
+func (r *Registry) autoReconnectErrored(ctx context.Context) {
+	r.mu.RLock()
+	var targets []string
+	for name, st := range r.states {
+		if st.state == StateError && st.config.MaxRetries != -1 {
+			targets = append(targets, name)
+		}
+	}
+	r.mu.RUnlock()
+
+	for _, name := range targets {
+		go func(n string) {
+			if err := r.ReconnectWithBackoff(ctx, n, 0); err != nil {
+				r.logger.Debug("auto-reconnect failed", "mcp_name", n, "error", err)
+			}
+		}(name)
 	}
 }
 
@@ -1502,6 +1598,15 @@ func (r *Registry) callRaw(ctx context.Context, mcpName, toolName string, args a
 		Arguments: args,
 	})
 	if err != nil {
+		// Transport death (crashed subprocess, dropped socket): demote the MCP
+		// to StateError and drop the dead session so the next call reconnects
+		// instead of hitting the same corpse. Check this first -- a dead
+		// connection can surface an "unknown"/"closed" message that would
+		// otherwise be misread as tool-not-found.
+		if isConnectionError(err) {
+			r.markConnectionFailed(mcpName, err)
+			return nil, fmt.Errorf("MCP %s connection lost calling tool '%s': %w", mcpName, toolName, err)
+		}
 		// Check for tool not found errors
 		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "unknown") {
 			availableTools := r.loadIndex().ListForMCP(mcpName)
@@ -1522,21 +1627,97 @@ func (r *Registry) callRaw(ctx context.Context, mcpName, toolName string, args a
 	return result, nil
 }
 
+// isConnectionError reports whether err indicates the MCP transport/session is
+// dead (crashed subprocess, dropped socket, closed pipe) as opposed to a
+// tool-level or parameter error. Used to demote a StateConnected MCP so it can
+// be reconnected instead of returning transport errors forever.
+func isConnectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, net.ErrClosed) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrClosedPipe) {
+		return true
+	}
+	s := strings.ToLower(err.Error())
+	for _, sig := range []string{
+		"eof",
+		"broken pipe",
+		"connection reset",
+		"connection refused",
+		"connection closed",
+		"session closed",
+		"transport closed",
+		"use of closed",
+		"closed network connection",
+		"server closed",
+		"process exited",
+		"signal: killed",
+		"file already closed",
+	} {
+		if strings.Contains(s, sig) {
+			return true
+		}
+	}
+	return false
+}
+
+// markConnectionFailed demotes a currently-connected MCP to StateError after a
+// transport failure and tears down the dead session, so EnsureConnected's
+// StateError retry path (and background auto-reconnect) can restore it. It is a
+// no-op unless the MCP is presently StateConnected, so it never clobbers an
+// in-flight reconnect (StateConnecting/StateReconnecting).
+func (r *Registry) markConnectionFailed(name string, cause error) {
+	r.mu.Lock()
+	st, hasState := r.states[name]
+	if !hasState || st.state != StateConnected {
+		r.mu.Unlock()
+		return
+	}
+	conn := r.connections[name]
+	r.states[name] = &mcpState{
+		config:      st.config,
+		state:       StateError,
+		err:         cause,
+		lastFailure: time.Now(),
+	}
+	delete(r.connections, name)
+	delete(r.tools, name)
+	r.mu.Unlock()
+
+	if conn != nil {
+		if cerr := conn.session.Close(); cerr != nil {
+			r.logger.Debug("closing dead MCP session", "mcp_name", name, "error", cerr)
+		}
+	}
+	r.rebuildIndex()
+	r.logger.Warn("MCP connection lost, marked for reconnect", "mcp_name", name, "error", cause)
+}
+
 // isParameterError checks if an error message indicates invalid parameters.
+// It matches parameter-specific phrases rather than bare words like "type",
+// "invalid", or "missing", which also occur in ordinary tool failures (e.g.
+// "file not found: config missing") and would otherwise be reframed as a
+// parameter error, obscuring the real cause.
 func isParameterError(errMsg string) bool {
 	errLower := strings.ToLower(errMsg)
 	paramIndicators := []string{
-		"parameter",
-		"argument",
-		"property",
-		"required",
-		"missing",
-		"invalid",
-		"unknown",
-		"unexpected",
-		"schema",
-		"validation",
-		"type",
+		"invalid parameter",
+		"invalid argument",
+		"missing parameter",
+		"missing required",
+		"required parameter",
+		"required property",
+		"unknown parameter",
+		"unknown property",
+		"unknown field",
+		"unexpected field",
+		"unexpected parameter",
+		"invalid type for",
+		"schema validation",
+		"failed validation",
+		"validation error",
+		"invalid_params",
+		"invalid params",
 	}
 
 	for _, indicator := range paramIndicators {
@@ -1623,12 +1804,21 @@ func (r *Registry) Close() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	// Mark closed so any connect that is dialing outside the lock right now will
+	// refuse to install its session when it reaches the install critical section.
+	r.closed = true
+
 	var lastErr error
 	for name, conn := range r.connections {
 		if err := conn.session.Close(); err != nil {
 			lastErr = err
 			// Debug level: subprocess exit codes during shutdown are expected
 			r.logger.Debug("error closing MCP", "mcp_name", name, "error", err)
+		}
+		// Reflect teardown in state so post-Close Status/List do not report a
+		// healthy, connected registry.
+		if st, ok := r.states[name]; ok {
+			st.state = StateDisconnected
 		}
 	}
 	r.connections = make(map[string]*mcpConnection)

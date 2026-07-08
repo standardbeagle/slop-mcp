@@ -1,3 +1,4 @@
+//go:build integration
 // +build integration
 
 package registry_test
@@ -369,7 +370,7 @@ func TestRegistry_DisconnectMCP(t *testing.T) {
 	require.Len(t, list, 1)
 
 	// Disconnect keeps the state around for reconnection
-	err = reg.Disconnect("everything")
+	err = reg.Disconnect(context.Background(), "everything")
 	require.NoError(t, err)
 
 	list = reg.List()
@@ -382,7 +383,7 @@ func TestRegistry_DisconnectMCP(t *testing.T) {
 	assert.Empty(t, tools)
 
 	// Unregister removes the MCP entirely
-	err = reg.Unregister("everything")
+	err = reg.Unregister(context.Background(), "everything")
 	require.NoError(t, err)
 	assert.Len(t, reg.List(), 0)
 }

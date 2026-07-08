@@ -15,15 +15,15 @@ func TestCalculateBackoff(t *testing.T) {
 		attempt  int
 		expected time.Duration
 	}{
-		{1, 1 * time.Second},          // Initial backoff
-		{2, 2 * time.Second},          // 1s * 2
-		{3, 4 * time.Second},          // 2s * 2
-		{4, 8 * time.Second},          // 4s * 2
-		{5, 16 * time.Second},         // 8s * 2
-		{6, 32 * time.Second},         // 16s * 2
-		{7, 60 * time.Second},         // Capped at MaxBackoff (60s)
-		{8, 60 * time.Second},         // Still capped
-		{100, 60 * time.Second},       // Large attempt still capped
+		{1, 1 * time.Second},    // Initial backoff
+		{2, 2 * time.Second},    // 1s * 2
+		{3, 4 * time.Second},    // 2s * 2
+		{4, 8 * time.Second},    // 4s * 2
+		{5, 16 * time.Second},   // 8s * 2
+		{6, 32 * time.Second},   // 16s * 2
+		{7, 60 * time.Second},   // Capped at MaxBackoff (60s)
+		{8, 60 * time.Second},   // Still capped
+		{100, 60 * time.Second}, // Large attempt still capped
 	}
 
 	for _, tt := range tests {

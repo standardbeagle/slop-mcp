@@ -551,7 +551,7 @@ func (s *Server) handleManageMCPs(
 			return nil, ManageMCPsOutput{}, fmt.Errorf("name is required for unregister action")
 		}
 
-		if err := s.registry.Unregister(input.Name); err != nil {
+		if err := s.registry.Unregister(ctx, input.Name); err != nil {
 			return nil, ManageMCPsOutput{}, err
 		}
 

@@ -85,43 +85,6 @@ type ToolIndex struct {
 	byMCP map[string][]ToolInfo
 }
 
-// mutableIndex is a helper used in tests to build ToolIndex instances
-// incrementally. It is not used in production paths.
-type mutableIndex struct {
-	data map[string][]ToolInfo
-}
-
-// NewToolIndex returns a mutable builder for constructing ToolIndex snapshots.
-// Intended for use in tests only; production code uses buildIndex directly.
-func NewToolIndex() *mutableIndex {
-	return &mutableIndex{data: make(map[string][]ToolInfo)}
-}
-
-// Add adds or replaces tools for the named MCP.
-func (m *mutableIndex) Add(mcpName string, tools []ToolInfo) {
-	m.data[mcpName] = tools
-}
-
-// snapshot returns an immutable ToolIndex from the current state.
-func (m *mutableIndex) snapshot() *ToolIndex {
-	return buildIndex(m.data, nil)
-}
-
-// Search delegates to the current immutable snapshot.
-func (m *mutableIndex) Search(query, mcpName string) []ToolInfo {
-	return m.snapshot().Search(query, mcpName)
-}
-
-// GetTool delegates to the current immutable snapshot.
-func (m *mutableIndex) GetTool(mcpName, toolName string) *ToolInfo {
-	return m.snapshot().GetTool(mcpName, toolName)
-}
-
-// CountForMCP delegates to the current immutable snapshot.
-func (m *mutableIndex) CountForMCP(mcpName string) int {
-	return m.snapshot().CountForMCP(mcpName)
-}
-
 // buildIndex constructs a new immutable ToolIndex from the provided snapshot.
 // If provider is non-nil, description overrides are applied and custom tools
 // are appended under the synthetic "_custom" MCP key.
