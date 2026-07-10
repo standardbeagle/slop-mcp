@@ -48,6 +48,7 @@ type manifest struct {
 	Family    string    `json:"family"`
 	Revision  int64     `json:"revision"`
 	TokenHash string    `json:"token_hash"`
+	ClaimHash string    `json:"claim_hash,omitempty"`
 	ExpiresAt time.Time `json:"expires_at"`
 	Claimed   bool      `json:"claimed,omitempty"`
 }
@@ -140,8 +141,13 @@ func (s *Store) Claim(token string, expected int64) (Session, error) {
 	if err != nil {
 		return Session{}, err
 	}
+	claimSecret, err := randomBytes(32)
+	if err != nil {
+		return Session{}, err
+	}
 	m.Revision++
 	m.Claimed = true
+	m.ClaimHash = hashSecret(claimSecret)
 	m.ExpiresAt = s.cfg.Now().Add(s.cfg.TokenTTL)
 	if err := s.writeRevision(dir, m.Revision, data); err != nil {
 		return Session{}, err
@@ -149,7 +155,8 @@ func (s *Store) Claim(token string, expected int64) (Session, error) {
 	if err := writeJSON(filepath.Join(dir, "manifest.json"), m); err != nil {
 		return Session{}, err
 	}
-	return Session{Token: token, Revision: m.Revision, ExpiresAt: m.ExpiresAt, Data: data}, nil
+	familyBytes, _ := hex.DecodeString(family)
+	return Session{Token: encodeToken(familyBytes, claimSecret), Revision: m.Revision, ExpiresAt: m.ExpiresAt, Data: data}, nil
 }
 
 func (s *Store) Update(token string, expected int64, data []byte) (Session, error) {
@@ -170,8 +177,15 @@ func (s *Store) Update(token string, expected int64, data []byte) (Session, erro
 	if m.Revision != expected {
 		return Session{}, &RevisionConflictError{Expected: expected, Current: m.Revision}
 	}
-	if err := s.authorize(m, secret); err != nil {
-		return Session{}, err
+	if !s.cfg.Now().Before(m.ExpiresAt) {
+		return Session{}, ErrExpiredToken
+	}
+	if m.Claimed {
+		if !secretMatches(m.ClaimHash, secret) {
+			return Session{}, ErrSessionClaimed
+		}
+	} else if !secretMatches(m.TokenHash, secret) {
+		return Session{}, ErrInvalidToken
 	}
 	newSecret, err := randomBytes(32)
 	if err != nil {
@@ -183,6 +197,7 @@ func (s *Store) Update(token string, expected int64, data []byte) (Session, erro
 	}
 	m.Revision, m.TokenHash, m.ExpiresAt = next, hashSecret(newSecret), s.cfg.Now().Add(s.cfg.TokenTTL)
 	m.Claimed = false
+	m.ClaimHash = ""
 	if err := writeJSON(filepath.Join(dir, "manifest.json"), m); err != nil {
 		return Session{}, err
 	}
@@ -239,18 +254,22 @@ func (s *Store) readManifest(dir string) (manifest, error) {
 }
 
 func (s *Store) authorize(m manifest, secret []byte) error {
-	want, err := hex.DecodeString(m.TokenHash)
-	if err != nil {
-		return ErrInvalidToken
-	}
-	got := sha256.Sum256(secret)
-	if len(want) != len(got) || subtle.ConstantTimeCompare(want, got[:]) != 1 {
+	if !secretMatches(m.TokenHash, secret) && !secretMatches(m.ClaimHash, secret) {
 		return ErrInvalidToken
 	}
 	if !s.cfg.Now().Before(m.ExpiresAt) {
 		return ErrExpiredToken
 	}
 	return nil
+}
+
+func secretMatches(encoded string, secret []byte) bool {
+	want, err := hex.DecodeString(encoded)
+	if err != nil {
+		return false
+	}
+	got := sha256.Sum256(secret)
+	return len(want) == len(got) && subtle.ConstantTimeCompare(want, got[:]) == 1
 }
 
 func (s *Store) familyDir(family string) string { return filepath.Join(s.cfg.Dir, family) }

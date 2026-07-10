@@ -119,7 +119,7 @@ func TestClaimRemainsInspectableAfterExecutorFailure(t *testing.T) {
 	require.NoError(t, err)
 	claimed, err := store.Claim(session.Token, session.Revision)
 	require.NoError(t, err)
-	assert.Equal(t, session.Token, claimed.Token)
+	assert.NotEqual(t, session.Token, claimed.Token)
 
 	recovered, err := store.Load(session.Token)
 	require.NoError(t, err)
@@ -131,12 +131,26 @@ func TestClaimRejectsSecondResumeAtClaimedRevision(t *testing.T) {
 	store := NewStore(Config{Dir: t.TempDir(), TokenTTL: time.Hour})
 	session, err := store.Create([]byte(`{"state":"failed"}`))
 	require.NoError(t, err)
-	claimed, err := store.Claim(session.Token, session.Revision)
+	_, err = store.Claim(session.Token, session.Revision)
 	require.NoError(t, err)
-	loaded, err := store.Load(claimed.Token)
+	loaded, err := store.Load(session.Token)
 	require.NoError(t, err)
 	_, err = store.Claim(loaded.Token, loaded.Revision)
 	assert.ErrorIs(t, err, ErrSessionClaimed)
+}
+
+func TestClaimedRevisionOnlyClaimOwnerCanUpdate(t *testing.T) {
+	store := NewStore(Config{Dir: t.TempDir(), TokenTTL: time.Hour})
+	session, err := store.Create([]byte(`{"state":"failed"}`))
+	require.NoError(t, err)
+	claimed, err := store.Claim(session.Token, session.Revision)
+	require.NoError(t, err)
+
+	_, err = store.Update(session.Token, claimed.Revision, []byte(`{"state":"patched"}`))
+	assert.ErrorIs(t, err, ErrSessionClaimed)
+	updated, err := store.Update(claimed.Token, claimed.Revision, []byte(`{"state":"paused"}`))
+	require.NoError(t, err)
+	assert.Greater(t, updated.Revision, claimed.Revision)
 }
 
 func TestStoreFilesAreOwnerOnlyAndTokenIsNotStored(t *testing.T) {
