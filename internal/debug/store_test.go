@@ -113,6 +113,20 @@ func TestStoreConcurrentClaimHasSingleWinner(t *testing.T) {
 	assert.Equal(t, 1, rejected)
 }
 
+func TestClaimRemainsInspectableAfterExecutorFailure(t *testing.T) {
+	store := NewStore(Config{Dir: t.TempDir(), TokenTTL: time.Hour})
+	session, err := store.Create([]byte(`{"state":"failed"}`))
+	require.NoError(t, err)
+	claimed, err := store.Claim(session.Token, session.Revision)
+	require.NoError(t, err)
+	assert.Equal(t, session.Token, claimed.Token)
+
+	recovered, err := store.Load(session.Token)
+	require.NoError(t, err)
+	assert.Equal(t, claimed.Revision, recovered.Revision)
+	assert.JSONEq(t, string(session.Data), string(recovered.Data))
+}
+
 func TestStoreFilesAreOwnerOnlyAndTokenIsNotStored(t *testing.T) {
 	dir := t.TempDir()
 	store := NewStore(Config{Dir: dir, TokenTTL: time.Hour})

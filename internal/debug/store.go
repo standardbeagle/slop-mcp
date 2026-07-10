@@ -135,18 +135,15 @@ func (s *Store) Claim(token string, expected int64) (Session, error) {
 	if err != nil {
 		return Session{}, err
 	}
-	newSecret, err := randomBytes(32)
-	if err != nil {
+	m.Revision++
+	m.ExpiresAt = s.cfg.Now().Add(s.cfg.TokenTTL)
+	if err := s.writeRevision(dir, m.Revision, data); err != nil {
 		return Session{}, err
 	}
-	m.Revision++
-	m.TokenHash = hashSecret(newSecret)
-	m.ExpiresAt = s.cfg.Now().Add(s.cfg.TokenTTL)
 	if err := writeJSON(filepath.Join(dir, "manifest.json"), m); err != nil {
 		return Session{}, err
 	}
-	familyBytes, _ := hex.DecodeString(family)
-	return Session{Token: encodeToken(familyBytes, newSecret), Revision: m.Revision, ExpiresAt: m.ExpiresAt, Data: data}, nil
+	return Session{Token: token, Revision: m.Revision, ExpiresAt: m.ExpiresAt, Data: data}, nil
 }
 
 func (s *Store) Update(token string, expected int64, data []byte) (Session, error) {

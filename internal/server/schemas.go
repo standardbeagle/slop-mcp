@@ -34,11 +34,6 @@ var searchToolsInputSchema = json.RawMessage(`{
 var executeToolInputSchema = json.RawMessage(`{
 	"type": "object",
 	"properties": {
-		"action": {
-			"type": "string",
-			"enum": ["run", "inspect", "patch", "resume", "abort"],
-			"description": "Execution or debug-session action; defaults to run"
-		},
 		"mcp_name": {
 			"type": "string",
 			"description": "Target MCP name"
@@ -61,6 +56,11 @@ var executeToolInputSchema = json.RawMessage(`{
 var runSlopInputSchema = json.RawMessage(`{
 	"type": "object",
 	"properties": {
+		"action": {
+			"type": "string",
+			"enum": ["run", "inspect", "patch", "resume", "abort"],
+			"description": "Execution or debug-session action; defaults to run"
+		},
 		"script": {
 			"type": "string",
 			"description": "Inline SLOP script"
