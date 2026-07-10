@@ -17,6 +17,7 @@ import (
 	"github.com/standardbeagle/slop-mcp/internal/builtins"
 	"github.com/standardbeagle/slop-mcp/internal/cli"
 	"github.com/standardbeagle/slop-mcp/internal/config"
+	debugstore "github.com/standardbeagle/slop-mcp/internal/debug"
 	"github.com/standardbeagle/slop-mcp/internal/overrides"
 	"github.com/standardbeagle/slop-mcp/internal/recipes"
 	"sync"
@@ -302,15 +303,29 @@ func cliToolErrorResult(result *cli.ToolResult) *mcp.CallToolResult {
 
 // RunSlopInput is the input for the run_slop tool.
 type RunSlopInput struct {
-	Script   string `json:"script,omitempty" jsonschema:"Inline SLOP script to execute"`
-	FilePath string `json:"file_path,omitempty" jsonschema:"Path to a .slop file to execute"`
-	Recipe   string `json:"recipe,omitempty" jsonschema:"Load embedded recipe: 'list' for available, or recipe name"`
+	Action            string                `json:"action,omitempty"`
+	Script            string                `json:"script,omitempty" jsonschema:"Inline SLOP script to execute"`
+	FilePath          string                `json:"file_path,omitempty" jsonschema:"Path to a .slop file to execute"`
+	Recipe            string                `json:"recipe,omitempty" jsonschema:"Load embedded recipe: 'list' for available, or recipe name"`
+	Debug             bool                  `json:"debug,omitempty"`
+	DebugToken        string                `json:"debug_token,omitempty"`
+	Revision          int64                 `json:"revision,omitempty"`
+	Breakpoints       []slop.Breakpoint     `json:"breakpoints,omitempty"`
+	Patches           []debugstore.Patch    `json:"patches,omitempty"`
+	Paths             []string              `json:"paths,omitempty"`
+	ResumeMode        slop.ResumeMode       `json:"resume_mode,omitempty"`
+	ReplacementResult *slop.SerializedValue `json:"replacement_result,omitempty"`
 }
 
 // RunSlopOutput is the output for the run_slop tool.
 type RunSlopOutput struct {
-	Result  any   `json:"result,omitempty"`
-	Emitted []any `json:"emitted,omitempty"`
+	Status     slop.ExecutionStatus `json:"status,omitempty"`
+	Result     any                  `json:"result,omitempty"`
+	Emitted    []any                `json:"emitted,omitempty"`
+	DebugToken string               `json:"debug_token,omitempty"`
+	Revision   int64                `json:"revision,omitempty"`
+	ExpiresAt  string               `json:"expires_at,omitempty"`
+	Checkpoint any                  `json:"checkpoint,omitempty"`
 }
 
 func (s *Server) handleRunSlop(
@@ -318,6 +333,16 @@ func (s *Server) handleRunSlop(
 	req *mcp.CallToolRequest,
 	input RunSlopInput,
 ) (*mcp.CallToolResult, RunSlopOutput, error) {
+	action := input.Action
+	if action == "" {
+		action = "run"
+	}
+	if err := validateRunSlopAction(action, input); err != nil {
+		return nil, RunSlopOutput{}, err
+	}
+	if action != "run" {
+		return s.handleRunSlopDebugAction(ctx, input, action)
+	}
 	// recipe and file_path are mutually exclusive: the file read below would
 	// silently replace the loaded recipe content.
 	if input.Recipe != "" && input.FilePath != "" {
@@ -382,7 +407,13 @@ func (s *Server) handleRunSlop(
 	rt := s.newSlopRuntime(execCtx)
 	defer rt.Close()
 
-	// Execute script
+	if input.Debug || rt.SupportsResumable(script) == nil {
+		handedOff = true
+		result, runErr := executeResumableWithContext(execCtx, rt, script, slop.ExecuteOptions{Debug: input.Debug, Breakpoints: input.Breakpoints}, relOnce)
+		return s.finishResumableRun(script, result, runErr)
+	}
+
+	// Execute ordinary scripts through the legacy evaluator for compatibility.
 	handedOff = true
 	result, err := executeSlopWithContext(execCtx, rt, script, relOnce)
 	if err != nil {
@@ -402,6 +433,166 @@ func (s *Server) handleRunSlop(
 		Result:  valueToAny(slop.ValueToGo(result)),
 		Emitted: emitted,
 	}, nil
+}
+
+func validateRunSlopAction(action string, input RunSlopInput) error {
+	programInput := input.Script != "" || input.FilePath != "" || input.Recipe != ""
+	switch action {
+	case "run":
+		if input.DebugToken != "" || input.Revision != 0 || len(input.Patches) > 0 || len(input.Paths) > 0 || input.ResumeMode != "" || input.ReplacementResult != nil {
+			return fmt.Errorf("run action cannot include debug session fields")
+		}
+	case "inspect":
+		if programInput || len(input.Patches) > 0 || input.ResumeMode != "" || input.ReplacementResult != nil || input.Revision != 0 {
+			return fmt.Errorf("inspect action accepts only debug_token and paths")
+		}
+	case "patch":
+		if programInput || len(input.Patches) == 0 || len(input.Paths) > 0 || input.ResumeMode != "" || input.ReplacementResult != nil {
+			return fmt.Errorf("patch action requires patches and cannot include program, inspect, or resume fields")
+		}
+	case "resume":
+		if programInput || len(input.Patches) > 0 || len(input.Paths) > 0 || input.ResumeMode == "" {
+			return fmt.Errorf("resume action requires resume_mode and cannot include program, patch, or inspect fields")
+		}
+	case "abort":
+		if programInput || input.Revision != 0 || len(input.Patches) > 0 || len(input.Paths) > 0 || input.ResumeMode != "" || input.ReplacementResult != nil {
+			return fmt.Errorf("abort action accepts only debug_token")
+		}
+	default:
+		return fmt.Errorf("invalid run_slop action %q", action)
+	}
+	return nil
+}
+
+func (s *Server) finishResumableRun(script string, result slop.ExecutionResult, runErr error) (*mcp.CallToolResult, RunSlopOutput, error) {
+	output := RunSlopOutput{Status: result.Status}
+	if result.Result != nil {
+		output.Result = valueToAny(slop.ValueToGo(result.Result))
+	}
+	for _, emitted := range result.Emitted {
+		output.Emitted = append(output.Emitted, valueToAny(slop.ValueToGo(emitted)))
+	}
+	if result.Checkpoint != nil {
+		data, err := slop.MarshalCheckpoint(result.Checkpoint)
+		if err != nil {
+			if runErr != nil {
+				return nil, output, fmt.Errorf("%w (debug checkpoint serialization failed: %v)", runErr, err)
+			}
+			return nil, output, err
+		}
+		session, err := s.debugStore.Create(data)
+		if err != nil {
+			if runErr != nil {
+				return nil, output, fmt.Errorf("%w (debug checkpoint storage failed: %v)", runErr, err)
+			}
+			return nil, output, err
+		}
+		output.DebugToken, output.Revision, output.ExpiresAt = session.Token, session.Revision, session.ExpiresAt.Format(time.RFC3339)
+	}
+	if runErr != nil {
+		err := parseSlopError(script, runErr)
+		if structured, ok := err.(*slopError); ok {
+			structured.DebugToken, structured.Revision, structured.ExpiresAt = output.DebugToken, output.Revision, output.ExpiresAt
+		}
+		return nil, output, err
+	}
+	return nil, output, nil
+}
+
+func (s *Server) handleRunSlopDebugAction(ctx context.Context, input RunSlopInput, action string) (*mcp.CallToolResult, RunSlopOutput, error) {
+	if input.DebugToken == "" {
+		return nil, RunSlopOutput{}, fmt.Errorf("debug_token is required for %s action", action)
+	}
+	if (action == "patch" || action == "resume") && input.Revision <= 0 {
+		return nil, RunSlopOutput{}, fmt.Errorf("revision is required for %s action", action)
+	}
+	var (
+		session debugstore.Session
+		err     error
+	)
+	if action == "resume" {
+		session, err = s.debugStore.Claim(input.DebugToken, input.Revision)
+	} else {
+		session, err = s.debugStore.Load(input.DebugToken)
+	}
+	if err != nil {
+		return nil, RunSlopOutput{}, err
+	}
+	switch action {
+	case "inspect":
+		checkpoint, err := debugstore.Inspect(session.Data, input.Paths)
+		if err != nil {
+			return nil, RunSlopOutput{}, err
+		}
+		return nil, RunSlopOutput{Status: slop.ExecutionPaused, DebugToken: input.DebugToken, Revision: session.Revision, ExpiresAt: session.ExpiresAt.Format(time.RFC3339), Checkpoint: checkpoint}, nil
+	case "patch":
+		for _, patch := range input.Patches {
+			if !strings.HasPrefix(patch.Path, "/machine_snapshot/") && !strings.HasPrefix(patch.Path, "/continuation/") && !strings.HasPrefix(patch.Path, "/breakpoints") {
+				return nil, RunSlopOutput{}, fmt.Errorf("checkpoint path %q is diagnostic or not executable; patch machine_snapshot, continuation, or breakpoints", patch.Path)
+			}
+		}
+		data, err := debugstore.ApplyPatches(session.Data, input.Patches, func(candidate []byte) error { _, err := slop.UnmarshalCheckpoint(candidate); return err })
+		if err != nil {
+			return nil, RunSlopOutput{}, err
+		}
+		next, err := s.debugStore.Update(input.DebugToken, input.Revision, data)
+		if err != nil {
+			return nil, RunSlopOutput{}, err
+		}
+		return nil, RunSlopOutput{Status: slop.ExecutionPaused, DebugToken: next.Token, Revision: next.Revision, ExpiresAt: next.ExpiresAt.Format(time.RFC3339)}, nil
+	case "abort":
+		if err := s.debugStore.Abort(input.DebugToken); err != nil {
+			return nil, RunSlopOutput{}, err
+		}
+		return nil, RunSlopOutput{Status: "aborted"}, nil
+	case "resume":
+		checkpoint, err := slop.UnmarshalCheckpoint(session.Data)
+		if err != nil {
+			return nil, RunSlopOutput{}, err
+		}
+		execCtx, cancel := context.WithTimeout(ctx, defaultSlopExecutionTimeout)
+		defer cancel()
+		builtins.LockSlopExec()
+		defer builtins.UnlockSlopExec()
+		rt := s.newSlopRuntime(execCtx)
+		defer rt.Close()
+		result, runErr := rt.Resume(execCtx, checkpoint, slop.ResumeOptions{Mode: input.ResumeMode, ReplacementResult: input.ReplacementResult})
+		if result.Checkpoint == nil {
+			if err := s.debugStore.Abort(session.Token); err != nil {
+				return nil, RunSlopOutput{}, fmt.Errorf("execution completed but debug session cleanup failed: %w", err)
+			}
+			if runErr != nil {
+				return nil, RunSlopOutput{}, runErr
+			}
+			output := RunSlopOutput{Status: result.Status, Result: valueToAny(slop.ValueToGo(result.Result))}
+			for _, emitted := range result.Emitted {
+				output.Emitted = append(output.Emitted, valueToAny(slop.ValueToGo(emitted)))
+			}
+			return nil, output, nil
+		}
+		data, marshalErr := slop.MarshalCheckpoint(result.Checkpoint)
+		if marshalErr != nil {
+			return nil, RunSlopOutput{}, marshalErr
+		}
+		next, updateErr := s.debugStore.Update(session.Token, session.Revision, data)
+		if updateErr != nil {
+			return nil, RunSlopOutput{}, updateErr
+		}
+		output := RunSlopOutput{Status: result.Status, DebugToken: next.Token, Revision: next.Revision, ExpiresAt: next.ExpiresAt.Format(time.RFC3339)}
+		for _, emitted := range result.Emitted {
+			output.Emitted = append(output.Emitted, valueToAny(slop.ValueToGo(emitted)))
+		}
+		if runErr != nil {
+			err := parseSlopError(checkpoint.Script, runErr)
+			if structured, ok := err.(*slopError); ok {
+				structured.DebugToken, structured.Revision, structured.ExpiresAt = next.Token, next.Revision, next.ExpiresAt.Format(time.RFC3339)
+			}
+			return nil, output, err
+		}
+		return nil, output, nil
+	default:
+		return nil, RunSlopOutput{}, fmt.Errorf("invalid run_slop action %q", action)
+	}
 }
 
 // recipesToAny converts recipe list to a serializable format.
@@ -464,9 +655,12 @@ func parseSlopError(script string, err error) error {
 
 // slopError provides structured error info for agent self-correction.
 type slopError struct {
-	Type    string            `json:"type"` // "parse" or "runtime"
-	Message string            `json:"message"`
-	Errors  []slopErrorDetail `json:"errors"`
+	Type       string            `json:"type"` // "parse" or "runtime"
+	Message    string            `json:"message"`
+	Errors     []slopErrorDetail `json:"errors"`
+	DebugToken string            `json:"debug_token,omitempty"`
+	Revision   int64             `json:"revision,omitempty"`
+	ExpiresAt  string            `json:"expires_at,omitempty"`
 }
 
 type slopErrorDetail struct {

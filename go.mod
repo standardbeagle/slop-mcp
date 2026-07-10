@@ -11,6 +11,8 @@ require (
 	golang.org/x/sys v0.41.0
 )
 
+replace github.com/standardbeagle/slop => ../slop
+
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect

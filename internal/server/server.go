@@ -16,6 +16,7 @@ import (
 	"github.com/standardbeagle/slop-mcp/internal/builtins"
 	"github.com/standardbeagle/slop-mcp/internal/cli"
 	"github.com/standardbeagle/slop-mcp/internal/config"
+	debugstore "github.com/standardbeagle/slop-mcp/internal/debug"
 	"github.com/standardbeagle/slop-mcp/internal/logging"
 	"github.com/standardbeagle/slop-mcp/internal/overrides"
 	"github.com/standardbeagle/slop-mcp/internal/registry"
@@ -42,6 +43,12 @@ type Server struct {
 	sessionStore  *builtins.SessionStore
 	memoryStore   *builtins.MemoryStore
 	overrideStore *overrides.Store
+	debugStore    *debugstore.Store
+}
+
+func newDebugStore() *debugstore.Store {
+	dir := filepath.Join(config.UserConfigDirPath(), "debug", "checkpoints")
+	return debugstore.NewStore(debugstore.Config{Dir: dir, TokenTTL: 24 * time.Hour})
 }
 
 // openOverrideStore builds and opens the overrides store using standard config paths,
@@ -83,6 +90,7 @@ func New(ctx context.Context, mcps []config.MCPConfig) (*Server, error) {
 		sessionStore:  builtins.NewSessionStore(),
 		memoryStore:   builtins.NewMemoryStore(),
 		overrideStore: store,
+		debugStore:    newDebugStore(),
 	}
 
 	// Create MCP server
@@ -127,6 +135,7 @@ func NewFromConfig(cfg *config.Config) (*Server, error) {
 		sessionStore:  builtins.NewSessionStore(),
 		memoryStore:   builtins.NewMemoryStore(),
 		overrideStore: store,
+		debugStore:    newDebugStore(),
 	}
 
 	// Create MCP server

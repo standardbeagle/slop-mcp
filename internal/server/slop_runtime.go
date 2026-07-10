@@ -119,6 +119,35 @@ func executeSlopWithContext(ctx context.Context, rt *slop.Runtime, script string
 	}
 }
 
+type resumableExecutionResult struct {
+	result slop.ExecutionResult
+	err    error
+}
+
+func executeResumableWithContext(ctx context.Context, rt *slop.Runtime, script string, options slop.ExecuteOptions, onExecDone func()) (slop.ExecutionResult, error) {
+	done := make(chan resumableExecutionResult, 1)
+	go func() {
+		defer func() {
+			if onExecDone != nil {
+				onExecDone()
+			}
+		}()
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				done <- resumableExecutionResult{err: fmt.Errorf("slop execution panicked: %v", recovered)}
+			}
+		}()
+		result, err := rt.ExecuteResumable(ctx, script, options)
+		done <- resumableExecutionResult{result: result, err: err}
+	}()
+	select {
+	case result := <-done:
+		return result.result, result.err
+	case <-ctx.Done():
+		return slop.ExecutionResult{}, fmt.Errorf("SLOP execution canceled or timed out: %w", ctx.Err())
+	}
+}
+
 // registrySlopService adapts a registered MCP to the SLOP Service interface,
 // forwarding tool calls through the server's registry. The registry connects
 // the MCP on first use (EnsureConnected), so merely registering this service
@@ -131,9 +160,14 @@ type registrySlopService struct {
 
 // Call forwards service.method(args, kwargs) to the registry-managed MCP.
 func (m *registrySlopService) Call(method string, args []slop.Value, kwargs map[string]slop.Value) (slop.Value, error) {
+	return m.CallContext(m.ctx, method, args, kwargs)
+}
+
+// CallContext lets resumable SLOP executions cancel an in-flight MCP call.
+func (m *registrySlopService) CallContext(ctx context.Context, method string, args []slop.Value, kwargs map[string]slop.Value) (slop.Value, error) {
 	arguments := buildMCPArguments(args, kwargs)
 
-	result, err := m.server.registry.ExecuteToolRaw(m.ctx, m.name, method, arguments)
+	result, err := m.server.registry.ExecuteToolRaw(ctx, m.name, method, arguments)
 	if err != nil {
 		// Warn (not Debug): a swallowed connect failure previously surfaced
 		// later as a baffling 'unknown service' error inside the script.

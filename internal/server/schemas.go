@@ -34,6 +34,11 @@ var searchToolsInputSchema = json.RawMessage(`{
 var executeToolInputSchema = json.RawMessage(`{
 	"type": "object",
 	"properties": {
+		"action": {
+			"type": "string",
+			"enum": ["run", "inspect", "patch", "resume", "abort"],
+			"description": "Execution or debug-session action; defaults to run"
+		},
 		"mcp_name": {
 			"type": "string",
 			"description": "Target MCP name"
@@ -67,7 +72,21 @@ var runSlopInputSchema = json.RawMessage(`{
 		"recipe": {
 			"type": "string",
 			"description": "Embedded recipe: 'list' to enumerate, or recipe name to load"
-		}
+		},
+		"debug": {"type": "boolean", "description": "Enable breakpoints and resumable pauses"},
+		"debug_token": {"type": "string", "description": "Opaque token returned by a paused or failed run"},
+		"revision": {"type": "integer", "minimum": 1, "description": "Expected checkpoint revision for patch/resume"},
+		"breakpoints": {
+			"type": "array",
+			"items": {"type": "object", "properties": {"line": {"type": "integer", "minimum": 1}, "condition": {"type": "string"}}, "required": ["line"], "additionalProperties": false}
+		},
+		"patches": {
+			"type": "array",
+			"items": {"type": "object", "properties": {"op": {"type": "string", "enum": ["test", "add", "replace", "remove"]}, "path": {"type": "string"}, "value": {}}, "required": ["op", "path"], "additionalProperties": false}
+		},
+		"paths": {"type": "array", "items": {"type": "string"}, "description": "JSON-pointer paths to inspect; omitted returns a compact summary"},
+		"resume_mode": {"type": "string", "enum": ["continue", "accept_result", "retry_call"]},
+		"replacement_result": {"type": "object", "description": "Serialized SLOP value for accept_result"}
 	},
 	"additionalProperties": false
 }`)

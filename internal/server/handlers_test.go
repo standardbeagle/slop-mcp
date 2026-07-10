@@ -15,9 +15,11 @@ import (
 	"github.com/standardbeagle/slop-mcp/internal/builtins"
 	"github.com/standardbeagle/slop-mcp/internal/cli"
 	"github.com/standardbeagle/slop-mcp/internal/config"
+	debugstore "github.com/standardbeagle/slop-mcp/internal/debug"
 	"github.com/standardbeagle/slop-mcp/internal/logging"
 	"github.com/standardbeagle/slop-mcp/internal/overrides"
 	"github.com/standardbeagle/slop-mcp/internal/registry"
+	"github.com/standardbeagle/slop/pkg/slop"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -25,6 +27,7 @@ import (
 // mockServer creates a minimal server for testing handlers.
 func mockServer(tools []registry.ToolInfo) *Server {
 	reg := registry.New()
+	debugDir, _ := os.MkdirTemp("", "slop-mcp-debug-test-*")
 	// Add tools to the registry's index directly for testing
 	reg.AddToolsForTesting("test-mcp", tools)
 
@@ -33,6 +36,7 @@ func mockServer(tools []registry.ToolInfo) *Server {
 		cliRegistry:  cli.NewRegistry(),
 		sessionStore: builtins.NewSessionStore(),
 		memoryStore:  builtins.NewMemoryStore(),
+		debugStore:   debugstore.NewStore(debugstore.Config{Dir: debugDir, TokenTTL: time.Hour}),
 	}
 }
 
@@ -1223,6 +1227,69 @@ func TestHandleRunSlop_InlineScript_Simple(t *testing.T) {
 	assert.Equal(t, int64(3), extractSlopValue(output.Result))
 }
 
+func TestHandleRunSlop_DebugBreakpointInspectResume(t *testing.T) {
+	s := mockServer(nil)
+	s.debugStore = debugstore.NewStore(debugstore.Config{Dir: t.TempDir(), TokenTTL: time.Hour})
+	ctx := context.Background()
+
+	_, paused, err := s.handleRunSlop(ctx, &mcp.CallToolRequest{}, RunSlopInput{
+		Script: "x = 1\nx + 2", Debug: true, Breakpoints: []slop.Breakpoint{{Line: 2}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, slop.ExecutionPaused, paused.Status)
+	assert.NotEmpty(t, paused.DebugToken)
+
+	_, inspected, err := s.handleRunSlop(ctx, &mcp.CallToolRequest{}, RunSlopInput{Action: "inspect", DebugToken: paused.DebugToken})
+	require.NoError(t, err)
+	assert.Equal(t, paused.Revision, inspected.Revision)
+	assert.NotNil(t, inspected.Checkpoint)
+
+	_, completed, err := s.handleRunSlop(ctx, &mcp.CallToolRequest{}, RunSlopInput{
+		Action: "resume", DebugToken: paused.DebugToken, Revision: paused.Revision, ResumeMode: slop.ResumeContinue,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, slop.ExecutionCompleted, completed.Status)
+	assert.Equal(t, int64(3), extractSlopValue(completed.Result))
+}
+
+func TestHandleRunSlop_OrdinaryErrorReturnsDebugToken(t *testing.T) {
+	s := mockServer(nil)
+	s.debugStore = debugstore.NewStore(debugstore.Config{Dir: t.TempDir(), TokenTTL: time.Hour})
+	_, output, err := s.handleRunSlop(context.Background(), &mcp.CallToolRequest{}, RunSlopInput{Script: "missing + 1"})
+	require.Error(t, err)
+	assert.Equal(t, slop.ExecutionFailed, output.Status)
+	assert.NotEmpty(t, output.DebugToken)
+
+	_, inspected, inspectErr := s.handleRunSlop(context.Background(), &mcp.CallToolRequest{}, RunSlopInput{Action: "inspect", DebugToken: output.DebugToken, Paths: []string{"/machine_snapshot"}})
+	require.NoError(t, inspectErr)
+	assert.NotNil(t, inspected.Checkpoint)
+
+	checkpoint := inspected.Checkpoint.(map[string]any)
+	machine := checkpoint["/machine_snapshot"].(map[string]any)
+	contextState := machine["context"].(map[string]any)
+	scopes := contextState["scopes"].([]any)
+	scopeIndex := -1
+	for i, raw := range scopes {
+		scope := raw.(map[string]any)
+		if global, _ := scope["is_global"].(bool); !global {
+			scopeIndex = i
+			break
+		}
+	}
+	require.NotEqual(t, -1, scopeIndex)
+	_, patched, patchErr := s.handleRunSlop(context.Background(), &mcp.CallToolRequest{}, RunSlopInput{
+		Action: "patch", DebugToken: output.DebugToken, Revision: output.Revision,
+		Patches: []debugstore.Patch{{Op: "add", Path: fmt.Sprintf("/machine_snapshot/context/scopes/%d/variables/missing", scopeIndex), Value: json.RawMessage(`{"type":"int","data":"2"}`)}},
+	})
+	require.NoError(t, patchErr)
+
+	_, resumed, resumeErr := s.handleRunSlop(context.Background(), &mcp.CallToolRequest{}, RunSlopInput{
+		Action: "resume", DebugToken: patched.DebugToken, Revision: patched.Revision, ResumeMode: slop.ResumeContinue,
+	})
+	require.NoError(t, resumeErr)
+	assert.Equal(t, int64(3), extractSlopValue(resumed.Result))
+}
+
 // TestHandleRunSlop_InlineScript_StringConcat tests run_slop with string operations.
 func TestHandleRunSlop_InlineScript_StringConcat(t *testing.T) {
 	s := mockServer([]registry.ToolInfo{})
@@ -1349,7 +1416,9 @@ func TestHandleRunSlop_InlineScript_UndefinedVariable(t *testing.T) {
 	var slopErr map[string]any
 	assert.NoError(t, json.Unmarshal([]byte(err.Error()), &slopErr), "error should be valid JSON")
 	assert.Nil(t, result)
-	assert.Equal(t, RunSlopOutput{}, output)
+	assert.Equal(t, slop.ExecutionFailed, output.Status)
+	assert.NotEmpty(t, output.DebugToken)
+	assert.Equal(t, output.DebugToken, slopErr["debug_token"])
 }
 
 // TestHandleRunSlop_FilePath_Simple tests run_slop with a script file.
