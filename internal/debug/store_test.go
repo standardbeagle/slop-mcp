@@ -127,6 +127,18 @@ func TestClaimRemainsInspectableAfterExecutorFailure(t *testing.T) {
 	assert.JSONEq(t, string(session.Data), string(recovered.Data))
 }
 
+func TestClaimRejectsSecondResumeAtClaimedRevision(t *testing.T) {
+	store := NewStore(Config{Dir: t.TempDir(), TokenTTL: time.Hour})
+	session, err := store.Create([]byte(`{"state":"failed"}`))
+	require.NoError(t, err)
+	claimed, err := store.Claim(session.Token, session.Revision)
+	require.NoError(t, err)
+	loaded, err := store.Load(claimed.Token)
+	require.NoError(t, err)
+	_, err = store.Claim(loaded.Token, loaded.Revision)
+	assert.ErrorIs(t, err, ErrSessionClaimed)
+}
+
 func TestStoreFilesAreOwnerOnlyAndTokenIsNotStored(t *testing.T) {
 	dir := t.TempDir()
 	store := NewStore(Config{Dir: dir, TokenTTL: time.Hour})

@@ -18,8 +18,9 @@ import (
 )
 
 var (
-	ErrInvalidToken = errors.New("invalid debug token")
-	ErrExpiredToken = errors.New("debug token expired")
+	ErrInvalidToken   = errors.New("invalid debug token")
+	ErrExpiredToken   = errors.New("debug token expired")
+	ErrSessionClaimed = errors.New("debug session is already being resumed")
 )
 
 type RevisionConflictError struct{ Expected, Current int64 }
@@ -48,6 +49,7 @@ type manifest struct {
 	Revision  int64     `json:"revision"`
 	TokenHash string    `json:"token_hash"`
 	ExpiresAt time.Time `json:"expires_at"`
+	Claimed   bool      `json:"claimed,omitempty"`
 }
 
 func NewStore(cfg Config) *Store {
@@ -131,11 +133,15 @@ func (s *Store) Claim(token string, expected int64) (Session, error) {
 	if m.Revision != expected {
 		return Session{}, &RevisionConflictError{Expected: expected, Current: m.Revision}
 	}
+	if m.Claimed {
+		return Session{}, ErrSessionClaimed
+	}
 	data, err := os.ReadFile(revisionPath(dir, m.Revision))
 	if err != nil {
 		return Session{}, err
 	}
 	m.Revision++
+	m.Claimed = true
 	m.ExpiresAt = s.cfg.Now().Add(s.cfg.TokenTTL)
 	if err := s.writeRevision(dir, m.Revision, data); err != nil {
 		return Session{}, err
@@ -176,6 +182,7 @@ func (s *Store) Update(token string, expected int64, data []byte) (Session, erro
 		return Session{}, err
 	}
 	m.Revision, m.TokenHash, m.ExpiresAt = next, hashSecret(newSecret), s.cfg.Now().Add(s.cfg.TokenTTL)
+	m.Claimed = false
 	if err := writeJSON(filepath.Join(dir, "manifest.json"), m); err != nil {
 		return Session{}, err
 	}
