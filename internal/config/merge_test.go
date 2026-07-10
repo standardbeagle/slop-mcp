@@ -971,6 +971,66 @@ func TestRemoveMCPFromFileReturnsErrorWhenMissing(t *testing.T) {
 	assert.Contains(t, loaded.MCPs, "keep")
 }
 
+func TestConfigMutationsPreserveCommentsAndUnknownNodes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.kdl")
+	original := "// operator note\n\nmcp \"old\" {\n    command \"old-cmd\" // keep nearby syntax\n}\n"
+	require.NoError(t, os.WriteFile(path, []byte(original), 0o600))
+
+	require.NoError(t, AddMCPToFile(path, "new", "new-cmd", nil))
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "// operator note")
+
+	require.NoError(t, RemoveMCPFromFile(path, "old"))
+	data, err = os.ReadFile(path)
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "mcp \"old\"")
+	assert.Contains(t, string(data), "// operator note")
+}
+
+func TestAddMCPRefusesDestructiveOverwrite(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.kdl")
+	original := "mcp \"existing\" {\n    // setting rationale\n    command \"old\"\n}\n"
+	require.NoError(t, os.WriteFile(path, []byte(original), 0o600))
+
+	err := AddMCPToFile(path, "existing", "new", nil)
+	require.ErrorContains(t, err, "refusing to overwrite")
+	data, readErr := os.ReadFile(path)
+	require.NoError(t, readErr)
+	assert.Equal(t, original, string(data))
+}
+
+func TestRemoveMCPScannerIgnoresBracesInRawStringsAndNestedComments(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.kdl")
+	original := "mcp \"remove\" {\n    command r#\"} // not syntax\"#\n    /* outer { /* inner } */ still outer } */\n}\n\nmcp \"keep\" {\n    command \"keep\"\n}\n"
+	require.NoError(t, os.WriteFile(path, []byte(original), 0o600))
+
+	require.NoError(t, RemoveMCPFromFile(path, "remove"))
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, "\nmcp \"keep\" {\n    command \"keep\"\n}\n", string(data))
+}
+
+func TestRemoveMCPWithRawStringName(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.kdl")
+	require.NoError(t, os.WriteFile(path, []byte("mcp r#\"raw-name\"# {\n    command \"cmd\"\n}\n"), 0o600))
+	require.NoError(t, RemoveMCPFromFile(path, "raw-name"))
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Empty(t, data)
+}
+
+func TestAddMCPDoesNotMatchTextInsideBlockComment(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.kdl")
+	original := "/*\nmcp \"new\" {\n}\n*/\n"
+	require.NoError(t, os.WriteFile(path, []byte(original), 0o600))
+	require.NoError(t, AddMCPToFile(path, "new", "cmd", nil))
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), original)
+	assert.Contains(t, string(data), "command \"cmd\"")
+}
+
 // TestWriteConfigFile tests writing config to file.
 func TestWriteConfigFile(t *testing.T) {
 	tmpDir := t.TempDir()

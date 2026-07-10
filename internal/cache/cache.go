@@ -13,6 +13,7 @@ import (
 
 	"github.com/standardbeagle/slop-mcp/internal/atomicfile"
 	"github.com/standardbeagle/slop-mcp/internal/config"
+	"github.com/standardbeagle/slop-mcp/internal/filelock"
 )
 
 // CacheSchemaVersion is the current cache file schema version.
@@ -214,6 +215,18 @@ func (s *Store) GetEntry(name string) (*CacheEntry, error) {
 
 // SetEntry loads the cache, sets the entry, and saves.
 func (s *Store) SetEntry(name string, entry *CacheEntry) error {
+	if s.path == "" {
+		return fmt.Errorf("cache path not configured")
+	}
+	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
+		return fmt.Errorf("create cache dir: %w", err)
+	}
+	unlock, err := filelock.Lock(s.path)
+	if err != nil {
+		return fmt.Errorf("lock cache file: %w", err)
+	}
+	defer func() { _ = unlock() }()
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

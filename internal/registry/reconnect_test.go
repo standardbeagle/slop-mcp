@@ -149,6 +149,7 @@ func TestReconnectWithBackoff_ContextCancellation(t *testing.T) {
 	err := r.ReconnectWithBackoff(ctx, "test-mcp", 5)
 	assert.Error(t, err)
 	assert.Equal(t, context.DeadlineExceeded, err)
+	assert.Equal(t, StateError, r.Status()[0].State)
 }
 
 func TestReconnectWithBackoff_UsesConfigMaxRetries(t *testing.T) {

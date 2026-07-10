@@ -143,29 +143,45 @@ func (s *TokenStore) GetToken(serverName string) (*MCPToken, error) {
 // SetToken stores a token for an MCP server. The lock is held across the
 // load-modify-save cycle so concurrent updates cannot lose writes.
 func (s *TokenStore) SetToken(token *MCPToken) error {
+	_, err := s.UpdateToken(token.ServerName, func(*MCPToken) (*MCPToken, error) { return token, nil })
+	return err
+}
+
+// UpdateToken runs a read-modify-write transaction under both the process and
+// cross-process locks. Returning nil from update deletes the token.
+func (s *TokenStore) UpdateToken(serverName string, update func(*MCPToken) (*MCPToken, error)) (*MCPToken, error) {
+	unlock, err := s.Lock()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = unlock() }()
 	storeMu.Lock()
 	defer storeMu.Unlock()
 
 	tf, err := s.loadUnlocked()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	tf.Tokens[token.ServerName] = token
-	return s.saveUnlocked(tf)
+	next, err := update(tf.Tokens[serverName])
+	if err != nil {
+		return nil, err
+	}
+	if next == nil {
+		delete(tf.Tokens, serverName)
+	} else {
+		tf.Tokens[serverName] = next
+	}
+	if err := s.saveUnlocked(tf); err != nil {
+		return nil, err
+	}
+	return next, nil
 }
 
 // DeleteToken removes a token for an MCP server. The lock is held across the
 // load-modify-save cycle so concurrent updates cannot lose writes.
 func (s *TokenStore) DeleteToken(serverName string) error {
-	storeMu.Lock()
-	defer storeMu.Unlock()
-
-	tf, err := s.loadUnlocked()
-	if err != nil {
-		return err
-	}
-	delete(tf.Tokens, serverName)
-	return s.saveUnlocked(tf)
+	_, err := s.UpdateToken(serverName, func(*MCPToken) (*MCPToken, error) { return nil, nil })
+	return err
 }
 
 // ListTokens returns all stored tokens.

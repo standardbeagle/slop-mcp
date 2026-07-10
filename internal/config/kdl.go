@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -457,36 +458,21 @@ func AddMCPToFile(path, name, command string, args []string) error {
 
 // AddMCPConfigToFile adds a full MCP configuration to a KDL file.
 func AddMCPConfigToFile(path string, mcp MCPConfig) error {
-	// Load existing config or create new
-	cfg, err := loadConfigFile(path, SourceProject)
-	if err != nil {
-		return err
-	}
-
 	mcp.Type = inferMCPType(mcp.Type, mcp.Command, mcp.URL)
-
-	// Add the new MCP
-	cfg.MCPs[mcp.Name] = mcp
-
-	// Write back to file
-	return WriteConfigFile(path, cfg)
+	return mutateMCPBlocks(path, map[string]*MCPConfig{mcp.Name: &mcp})
 }
 
 // AddMCPConfigsToFile adds multiple MCP configurations to a KDL file with one
 // atomic write. Each MCP name is taken from the map key.
 func AddMCPConfigsToFile(path string, mcps map[string]MCPConfig) error {
-	cfg, err := loadConfigFile(path, SourceProject)
-	if err != nil {
-		return err
-	}
-
+	changes := make(map[string]*MCPConfig, len(mcps))
 	for name, mcp := range mcps {
 		mcp.Name = name
 		mcp.Type = inferMCPType(mcp.Type, mcp.Command, mcp.URL)
-		cfg.MCPs[name] = mcp
+		copy := mcp
+		changes[name] = &copy
 	}
-
-	return WriteConfigFile(path, cfg)
+	return mutateMCPBlocks(path, changes)
 }
 
 // RemoveMCPFromFile removes an MCP configuration from a KDL file.
@@ -500,8 +486,288 @@ func RemoveMCPFromFile(path, name string) error {
 		return fmt.Errorf("MCP %q not found in %s", name, path)
 	}
 
-	delete(cfg.MCPs, name)
-	return WriteConfigFile(path, cfg)
+	return mutateMCPBlocks(path, map[string]*MCPConfig{name: nil})
+}
+
+type byteSpan struct{ start, end int }
+
+// mutateMCPBlocks edits only named top-level MCP blocks. It deliberately works
+// on original bytes so comments and formatting outside replaced blocks survive.
+func mutateMCPBlocks(path string, changes map[string]*MCPConfig) error {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		data = nil
+	} else if err != nil {
+		return err
+	}
+	parsed := NewConfig()
+	if len(data) > 0 {
+		if parsed, err = ParseKDLConfig(string(data), SourceProject); err != nil {
+			return err
+		}
+	}
+
+	type edit struct {
+		byteSpan
+		name        string
+		replacement string
+	}
+	edits := make([]edit, 0, len(changes))
+	names := make([]string, 0, len(changes))
+	for name := range changes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		replacement := changes[name]
+		span, found, err := findMCPBlock(data, name)
+		if err != nil {
+			return err
+		}
+		if replacement == nil && !found {
+			return fmt.Errorf("MCP %q not found in %s", name, path)
+		}
+		if _, exists := parsed.MCPs[name]; exists && !found {
+			return fmt.Errorf("MCP %q uses unsupported source formatting; refusing unsafe mutation", name)
+		}
+		text := ""
+		if replacement != nil {
+			text = formatMCPBlock(*replacement)
+		}
+		if found && replacement != nil {
+			return fmt.Errorf("MCP %q already exists; refusing to overwrite its comments or unknown settings", name)
+		}
+		if found {
+			edits = append(edits, edit{byteSpan: span, name: name, replacement: text})
+		} else {
+			if len(data) > 0 && data[len(data)-1] != '\n' {
+				text = "\n" + text
+			}
+			edits = append(edits, edit{byteSpan: byteSpan{len(data), len(data)}, name: name, replacement: text})
+		}
+	}
+	sort.Slice(edits, func(i, j int) bool {
+		if edits[i].start != edits[j].start {
+			return edits[i].start > edits[j].start
+		}
+		return edits[i].name > edits[j].name
+	})
+	for _, e := range edits {
+		data = append(append(append([]byte(nil), data[:e.start]...), e.replacement...), data[e.end:]...)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return atomicfile.WriteFile(path, data, 0o600)
+}
+
+func findMCPBlock(data []byte, name string) (byteSpan, bool, error) {
+	pattern := regexp.MustCompile(`(?m)^[\t ]*mcp(?:[\t ]|$)`)
+	var matches []byteSpan
+	for _, loc := range pattern.FindAllIndex(data, -1) {
+		if !isTopLevelCodeAt(data, loc[0]) {
+			continue
+		}
+		open := -1
+		for i := loc[1]; i < len(data); i++ {
+			if data[i] == '{' && isTopLevelCodeAt(data, i) {
+				open = i
+				break
+			}
+		}
+		if open < 0 {
+			return byteSpan{}, false, fmt.Errorf("unterminated MCP header at byte %d", loc[0])
+		}
+		span, err := scanMCPBlock(data, loc[0], open)
+		if err != nil {
+			return byteSpan{}, false, err
+		}
+		cfg, err := ParseKDLConfig(string(data[span.start:span.end]), SourceProject)
+		if err != nil {
+			return byteSpan{}, false, fmt.Errorf("parse MCP block at byte %d: %w", span.start, err)
+		}
+		if _, ok := cfg.MCPs[name]; ok {
+			matches = append(matches, span)
+		}
+	}
+	if len(matches) == 0 {
+		return byteSpan{}, false, nil
+	}
+	if len(matches) > 1 {
+		return byteSpan{}, false, fmt.Errorf("multiple MCP blocks named %q", name)
+	}
+	return matches[0], true, nil
+}
+
+func scanMCPBlock(data []byte, start, open int) (byteSpan, error) {
+	depth, blockComment, rawHashes := 0, 0, -1
+	inString, escaped, lineComment := false, false, false
+	for i := open; i < len(data); i++ {
+		c := data[i]
+		if lineComment {
+			if c == '\n' {
+				lineComment = false
+			}
+			continue
+		}
+		if blockComment > 0 {
+			if i+1 < len(data) && c == '/' && data[i+1] == '*' {
+				blockComment++
+				i++
+			} else if i+1 < len(data) && c == '*' && data[i+1] == '/' {
+				blockComment--
+				i++
+			}
+			continue
+		}
+		if rawHashes >= 0 {
+			if c == '"' {
+				matched := true
+				for h := 0; h < rawHashes; h++ {
+					if i+1+h >= len(data) || data[i+1+h] != '#' {
+						matched = false
+						break
+					}
+				}
+				if matched {
+					i += rawHashes
+					rawHashes = -1
+				}
+			}
+			continue
+		}
+		if inString {
+			if escaped {
+				escaped = false
+			} else if c == '\\' {
+				escaped = true
+			} else if c == '"' {
+				inString = false
+			}
+			continue
+		}
+		if i+1 < len(data) && c == '/' && data[i+1] == '/' {
+			lineComment = true
+			i++
+			continue
+		}
+		if i+1 < len(data) && c == '/' && data[i+1] == '*' {
+			blockComment = 1
+			i++
+			continue
+		}
+		if c == 'r' {
+			h := 0
+			for i+1+h < len(data) && data[i+1+h] == '#' {
+				h++
+			}
+			if i+1+h < len(data) && data[i+1+h] == '"' {
+				rawHashes = h
+				i += h + 1
+				continue
+			}
+		}
+		if c == '"' {
+			inString = true
+			continue
+		}
+		if c == '{' {
+			depth++
+		}
+		if c == '}' {
+			depth--
+			if depth == 0 {
+				end := i + 1
+				if end < len(data) && data[end] == '\r' {
+					end++
+				}
+				if end < len(data) && data[end] == '\n' {
+					end++
+				}
+				return byteSpan{start, end}, nil
+			}
+		}
+	}
+	return byteSpan{}, fmt.Errorf("unterminated MCP block at byte %d", start)
+}
+
+func isTopLevelCodeAt(data []byte, pos int) bool {
+	depth, blockComment, rawHashes := 0, 0, -1
+	inString, escaped, lineComment := false, false, false
+	for i := 0; i < pos; i++ {
+		c := data[i]
+		if lineComment {
+			if c == '\n' {
+				lineComment = false
+			}
+			continue
+		}
+		if blockComment > 0 {
+			if i+1 < pos && c == '/' && data[i+1] == '*' {
+				blockComment++
+				i++
+			} else if i+1 < pos && c == '*' && data[i+1] == '/' {
+				blockComment--
+				i++
+			}
+			continue
+		}
+		if rawHashes >= 0 {
+			if c == '"' {
+				matched := true
+				for h := 0; h < rawHashes; h++ {
+					if i+1+h >= pos || data[i+1+h] != '#' {
+						matched = false
+						break
+					}
+				}
+				if matched {
+					i += rawHashes
+					rawHashes = -1
+				}
+			}
+			continue
+		}
+		if inString {
+			if escaped {
+				escaped = false
+			} else if c == '\\' {
+				escaped = true
+			} else if c == '"' {
+				inString = false
+			}
+			continue
+		}
+		if i+1 < pos && c == '/' && data[i+1] == '/' {
+			lineComment = true
+			i++
+			continue
+		}
+		if i+1 < pos && c == '/' && data[i+1] == '*' {
+			blockComment = 1
+			i++
+			continue
+		}
+		if c == 'r' {
+			h := 0
+			for i+1+h < pos && data[i+1+h] == '#' {
+				h++
+			}
+			if i+1+h < pos && data[i+1+h] == '"' {
+				rawHashes = h
+				i += h + 1
+				continue
+			}
+		}
+		if c == '"' {
+			inString = true
+		} else if c == '{' {
+			depth++
+		} else if c == '}' {
+			depth--
+		}
+	}
+	return depth == 0 && blockComment == 0 && rawHashes < 0 && !inString && !lineComment
 }
 
 // WriteConfigFile writes a config to a KDL file atomically, with MCP blocks

@@ -386,6 +386,15 @@ func TestRegistryCloseStopsBackgroundHealthCheck(t *testing.T) {
 	assert.False(t, hasCancel)
 }
 
+func TestRegistryCloseClearsSearchIndex(t *testing.T) {
+	r := New()
+	r.AddToolsForTesting("test", []ToolInfo{{Name: "stale", MCPName: "test"}})
+	require.NotEmpty(t, r.SearchTools("stale", ""))
+
+	require.NoError(t, r.Close())
+	assert.Empty(t, r.SearchTools("stale", ""))
+}
+
 func TestConfigHealthCheckInterval(t *testing.T) {
 	cfg := config.MCPConfig{
 		Name:                "test",

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"sort"
@@ -695,6 +696,10 @@ func (r *Registry) connectLocked(ctx context.Context, cfg config.MCPConfig) erro
 	// reconnect attempt counter across the state replacement -- it counts
 	// attempts since the last successful connect and is reset on success.
 	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		return fmt.Errorf("registry is closed")
+	}
 	prevAttempts := 0
 	if s, ok := r.states[cfg.Name]; ok {
 		prevAttempts = s.reconnectAttempts
@@ -709,12 +714,14 @@ func (r *Registry) connectLocked(ctx context.Context, cfg config.MCPConfig) erro
 	// Helper to set error state
 	setError := func(err error, state MCPState) error {
 		r.mu.Lock()
-		r.states[cfg.Name] = &mcpState{
-			config:            cfg,
-			state:             state,
-			err:               err,
-			reconnectAttempts: prevAttempts,
-			lastFailure:       time.Now(),
+		if !r.closed {
+			r.states[cfg.Name] = &mcpState{
+				config:            cfg,
+				state:             state,
+				err:               err,
+				reconnectAttempts: prevAttempts,
+				lastFailure:       time.Now(),
+			}
 		}
 		r.mu.Unlock()
 		return err
@@ -1021,6 +1028,10 @@ func (r *Registry) ReconnectWithBackoff(ctx context.Context, name string, maxRet
 
 	// Update state to reconnecting
 	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		return fmt.Errorf("registry is closed")
+	}
 	if s, ok := r.states[name]; ok {
 		s.state = StateReconnecting
 	}
@@ -1042,8 +1053,21 @@ func (r *Registry) ReconnectWithBackoff(ctx context.Context, name string, maxRet
 		// Wait for backoff (respecting context cancellation)
 		select {
 		case <-ctx.Done():
+			r.mu.Lock()
+			if s, ok := r.states[name]; ok && !r.closed {
+				s.state = StateError
+				s.err = ctx.Err()
+				s.lastFailure = time.Now()
+			}
+			r.mu.Unlock()
 			return ctx.Err()
 		case <-time.After(backoff):
+		}
+		r.mu.RLock()
+		closed := r.closed
+		r.mu.RUnlock()
+		if closed {
+			return fmt.Errorf("registry is closed")
 		}
 
 		// Attempt reconnection (we already hold the per-MCP connect mutex)
@@ -1069,7 +1093,7 @@ func (r *Registry) ReconnectWithBackoff(ctx context.Context, name string, maxRet
 
 	// All retries exhausted - update state to error
 	r.mu.Lock()
-	if s, ok := r.states[name]; ok {
+	if s, ok := r.states[name]; ok && !r.closed {
 		s.state = StateError
 		s.err = fmt.Errorf("reconnection failed after %d attempts: %w", maxRetries, lastErr)
 		s.lastFailure = time.Now()
@@ -1187,10 +1211,11 @@ func (r *Registry) healthCheckOne(ctx context.Context, name string) HealthCheckR
 		result.Status = HealthStatusUnhealthy
 		result.Error = err.Error()
 		r.updateHealthState(name, HealthStatusUnhealthy, checkTime, err)
-		// A failed ping means the session is unusable: demote to StateError and
-		// drop it so the background loop (or the next lazy call) reconnects,
-		// instead of leaving a dead session parked in StateConnected forever.
-		r.markConnectionFailed(name, fmt.Errorf("health check ping failed: %w", err))
+		// Only transport failures prove that the session is unusable. Caller
+		// cancellation and probe timeouts describe the probe, not the connection.
+		if isConnectionError(err) {
+			r.markConnectionFailed(name, fmt.Errorf("health check ping failed: %w", err))
+		}
 		// Debug level: health status stored in state for status queries
 		r.logger.Debug("health check failed", "mcp_name", name, "error", err, "response_time", elapsed)
 	} else {
@@ -1845,27 +1870,28 @@ func (r *Registry) Close() error {
 	// Stop background health check first (uses its own lock)
 	r.StopBackgroundHealthCheck()
 
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
 	// Mark closed so any connect that is dialing outside the lock right now will
 	// refuse to install its session when it reaches the install critical section.
+	r.mu.Lock()
 	r.closed = true
-
-	var lastErr error
-	for name, conn := range r.connections {
-		if err := conn.session.Close(); err != nil {
-			lastErr = err
-			// Debug level: subprocess exit codes during shutdown are expected
-			r.logger.Debug("error closing MCP", "mcp_name", name, "error", err)
-		}
-		// Reflect teardown in state so post-Close Status/List do not report a
-		// healthy, connected registry.
+	connections := r.connections
+	for name := range connections {
 		if st, ok := r.states[name]; ok {
 			st.state = StateDisconnected
 		}
 	}
 	r.connections = make(map[string]*mcpConnection)
+	r.tools = make(map[string][]ToolInfo)
+	r.mu.Unlock()
+	r.rebuildIndex()
+
+	var lastErr error
+	for name, conn := range connections {
+		if err := conn.session.Close(); err != nil {
+			lastErr = err
+			r.logger.Debug("error closing MCP", "mcp_name", name, "error", err)
+		}
+	}
 	return lastErr
 }
 
@@ -2495,54 +2521,38 @@ func (r *Registry) getValidToken(ctx context.Context, serverName string) *auth.M
 		return nil
 	}
 
-	// Take a cross-process lock around the re-check + refresh + save so two
-	// slop-mcp processes cannot both spend the same rotating refresh token.
-	if unlock, lerr := store.Lock(); lerr == nil {
-		defer func() { _ = unlock() }()
-		// Re-read under the lock: another process may have just refreshed.
-		if fresh, ferr := store.GetToken(serverName); ferr == nil && fresh != nil {
-			if !fresh.IsExpired() {
-				return fresh
-			}
-			token = fresh // refresh from the newest stored token
+	newToken, err := store.UpdateToken(serverName, func(fresh *auth.MCPToken) (*auth.MCPToken, error) {
+		if fresh == nil {
+			return nil, fmt.Errorf("token disappeared during refresh")
 		}
-	} else {
-		r.logger.Debug("token file lock unavailable, refreshing without cross-process lock", "mcp_name", serverName, "error", lerr)
-	}
-
-	// Attempt refresh with a timeout
-	refreshCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	newToken, err := auth.RefreshToken(refreshCtx, token, token.TokenEndpoint)
+		if !fresh.IsExpired() {
+			return fresh, nil
+		}
+		refreshCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		return auth.RefreshToken(refreshCtx, fresh, fresh.TokenEndpoint)
+	})
 	if err != nil {
-		// Refresh failed - token is unusable. Warn (not silent) so a revoked or
-		// expired refresh token surfaces as a diagnosable cause rather than a
-		// bare downstream 401.
 		r.logger.Warn("OAuth token refresh failed", "mcp_name", serverName, "error", err)
 		return nil
 	}
-
-	// Save the refreshed token
-	if err := store.SetToken(newToken); err != nil {
-		// Failed to save but token is still valid for this request
-		return newToken
-	}
-
 	return newToken
 }
 
 // headersTransport is an http.RoundTripper that adds custom headers to requests.
 type headersTransport struct {
-	base    http.RoundTripper
-	headers map[string]string
+	base          http.RoundTripper
+	headers       map[string]string
+	allowedOrigin string
 }
 
 func (t *headersTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Clone request to avoid modifying original
 	r := req.Clone(req.Context())
-	for k, v := range t.headers {
-		r.Header.Set(k, v)
+	if requestOrigin(r) == t.allowedOrigin {
+		for k, v := range t.headers {
+			r.Header.Set(k, v)
+		}
 	}
 	return t.base.RoundTrip(r)
 }
@@ -2556,15 +2566,18 @@ type oauthTransport struct {
 	staticHeaders map[string]string
 	reg           *Registry
 	serverName    string
+	allowedOrigin string
 }
 
 func (t *oauthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	r := req.Clone(req.Context())
-	for k, v := range t.staticHeaders {
-		r.Header.Set(k, v)
-	}
-	if token := t.reg.getValidToken(r.Context(), t.serverName); token != nil {
-		r.Header.Set("Authorization", "Bearer "+token.AccessToken)
+	if requestOrigin(r) == t.allowedOrigin {
+		for k, v := range t.staticHeaders {
+			r.Header.Set(k, v)
+		}
+		if token := t.reg.getValidToken(r.Context(), t.serverName); token != nil {
+			r.Header.Set("Authorization", "Bearer "+token.AccessToken)
+		}
 	}
 	return t.base.RoundTrip(r)
 }
@@ -2574,6 +2587,10 @@ func (t *oauthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 // per request (see oauthTransport); otherwise it just applies static config
 // headers.
 func (r *Registry) buildHTTPClient(_ context.Context, cfg config.MCPConfig) *http.Client {
+	allowedOrigin := ""
+	if u, err := url.Parse(cfg.URL); err == nil {
+		allowedOrigin = u.Scheme + "://" + u.Host
+	}
 	staticHeaders := make(map[string]string, len(cfg.Headers))
 	for k, v := range cfg.Headers {
 		staticHeaders[k] = v
@@ -2589,6 +2606,7 @@ func (r *Registry) buildHTTPClient(_ context.Context, cfg config.MCPConfig) *htt
 					staticHeaders: staticHeaders,
 					reg:           r,
 					serverName:    cfg.Name,
+					allowedOrigin: allowedOrigin,
 				},
 			}
 		}
@@ -2600,8 +2618,13 @@ func (r *Registry) buildHTTPClient(_ context.Context, cfg config.MCPConfig) *htt
 	}
 	return &http.Client{
 		Transport: &headersTransport{
-			base:    http.DefaultTransport,
-			headers: staticHeaders,
+			base:          http.DefaultTransport,
+			headers:       staticHeaders,
+			allowedOrigin: allowedOrigin,
 		},
 	}
+}
+
+func requestOrigin(req *http.Request) string {
+	return req.URL.Scheme + "://" + req.URL.Host
 }
