@@ -152,7 +152,11 @@ log_info "Creating GitHub release..."
 
 # Extract release notes from CHANGELOG
 # Find the section for this version and extract until the next version header
-RELEASE_NOTES=$(awk "/^## \[$VERSION\]/,/^## \[/{if(/^## \[/ && !/^## \[$VERSION\]/)exit; print}" "$CHANGELOG" | tail -n +2)
+RELEASE_NOTES=$(awk -v ver="## [$VERSION]" '
+    index($0, ver) == 1 { flag = 1; next }   # start of this version section (literal match)
+    flag && /^## \[/    { exit }              # stop at the next version header
+    flag                { print }
+' "$CHANGELOG")
 
 if [ -z "$RELEASE_NOTES" ]; then
     log_warn "Could not extract release notes from CHANGELOG, using default"
