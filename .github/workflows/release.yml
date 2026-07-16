@@ -118,6 +118,14 @@ jobs:
           path: npm/binaries
           merge-multiple: true
 
+      # download-artifact does not preserve unix permissions, so the Go
+      # binaries arrive as 0644. Restore the exec bit before publishing so the
+      # published tarball ships them executable (npm preserves file modes) —
+      # otherwise consumers with `ignore-scripts=true` (postinstall skipped)
+      # hit EACCES on spawn.
+      - name: Make binaries executable
+        run: chmod +x npm/binaries/slop-mcp-linux-* npm/binaries/slop-mcp-darwin-*
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:

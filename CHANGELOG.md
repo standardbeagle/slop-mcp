@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.5] - 2026-07-16
+
+### Fixed
+
+- **`EACCES` on spawn when the consumer sets npm `ignore-scripts=true`**: the platform binary was made executable only by the `postinstall` chmod (`install.js`), which npm skips under `ignore-scripts`, leaving it `0644`. The binary is now chmod'd to `0755` at resolve time on every run (`getBinaryPath`), so the spawn works regardless of install-script policy. The release workflow also restores the exec bit after `download-artifact` (which strips unix permissions) so the published tarball ships the binaries executable.
+
 ## [0.14.4] - 2026-07-08
 
 ### Fixed

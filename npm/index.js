@@ -39,6 +39,19 @@ function getBinaryPath() {
   // Check for bundled binary first
   const bundledPath = path.join(__dirname, "binaries", binaryName);
   if (fs.existsSync(bundledPath)) {
+    // Ensure the binary is executable before we hand it to spawn. The
+    // postinstall chmod (install.js) is skipped whenever the consumer sets
+    // npm `ignore-scripts=true`, which leaves the binary at 0644 and makes the
+    // spawn fail with EACCES. Doing it here (at resolve time, every run) is
+    // immune to that. Best-effort: a genuinely unwritable/already-exec binary
+    // still spawns, and spawn surfaces a clear error if it truly cannot run.
+    if (goos !== "windows") {
+      try {
+        fs.chmodSync(bundledPath, 0o755);
+      } catch (err) {
+        // ignore — spawn will report the real problem if there is one
+      }
+    }
     return bundledPath;
   }
 
