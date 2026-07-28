@@ -291,6 +291,14 @@ func (s *Server) wrapExecuteTool(ctx context.Context, req *mcp.CallToolRequest) 
 		return toCallToolResult(output)
 	}
 
+	// Schema preflight: catch the parameter mistakes the target server would
+	// reject anyway, before spending the round-trip, and answer with the valid
+	// names plus a did-you-mean rather than the server's prose. Conservative by
+	// construction — see Registry.PreflightParameters.
+	if err := s.registry.PreflightParameters(input.MCPName, input.ToolName, input.Parameters); err != nil {
+		return errorResult(err), nil
+	}
+
 	// For MCP tools, forward the raw parameters byte-for-byte so large integers
 	// keep their precision, and pass through the underlying MCP's raw response.
 	result, err := s.registry.ExecuteToolRawJSON(ctx, input.MCPName, input.ToolName, input.Parameters)
@@ -298,7 +306,38 @@ func (s *Server) wrapExecuteTool(ctx context.Context, req *mcp.CallToolRequest) 
 		return errorResult(err), nil
 	}
 
+	// A parameter complaint that survived preflight (a constraint the schema
+	// does not express — a value enum, an OCC version, mutually exclusive
+	// fields) still gets the schema attached. Without this the raw path was the
+	// one route where the enriched diagnostics never fired, because they live
+	// in ExecuteTool and execute_tool does not go through it.
+	if result != nil && result.IsError {
+		if enriched := s.enrichParameterError(input, result); enriched != nil {
+			return enriched, nil
+		}
+	}
+
 	return result, nil
+}
+
+// enrichParameterError re-frames a target server's parameter rejection with the
+// tool's own schema. Returns nil when the failure is not about parameters, so
+// ordinary tool errors pass through verbatim.
+func (s *Server) enrichParameterError(input execToolArgs, result *mcp.CallToolResult) *mcp.CallToolResult {
+	var msg string
+	for _, content := range result.Content {
+		if text, ok := content.(*mcp.TextContent); ok {
+			msg += text.Text
+		}
+	}
+	if msg == "" {
+		return nil
+	}
+	enriched := s.registry.EnrichParameterError(input.MCPName, input.ToolName, msg, input.Parameters)
+	if enriched == nil {
+		return nil
+	}
+	return errorResult(enriched)
 }
 
 // decodeParamsPreservingInts unmarshals a JSON object into map[string]any while

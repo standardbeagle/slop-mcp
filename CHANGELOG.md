@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`execute_tool` preflights parameters against the target tool's schema.** A call that cannot succeed as written is now answered from the cached schema before dispatch, with the valid parameter names and a did-you-mean mapping, instead of costing a round-trip and returning whatever prose the target server chose. It is conservative on purpose: missing *required* parameters always block; an unknown name blocks only when a fix can be named for it (a near match, or a required name it contains — `taskId` → `id`); an unrecognized-but-unrelated name is forwarded, since JSON Schema allows additional properties and the target server is the authority. No schema, no properties, or unparseable input means no opinion. Parameters are never rewritten — a mistyped call is corrected by the caller, not silently reshaped.
+
+### Fixed
+
+- **Enriched parameter diagnostics never fired for `execute_tool`.** The did-you-mean machinery lived in `ExecuteTool`, but `execute_tool` dispatches through `ExecuteToolRawJSON` (raw JSON, to preserve integers above 2^53), so the one path agents actually use returned unenriched server errors. Parameter rejections on the raw path now get the schema attached too. Neither path decodes parameter *values*, so integer precision is unaffected.
+
 ## [0.14.5] - 2026-07-16
 
 ### Fixed
