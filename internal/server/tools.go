@@ -295,8 +295,10 @@ func (s *Server) wrapExecuteTool(ctx context.Context, req *mcp.CallToolRequest) 
 	// reject anyway, before spending the round-trip, and answer with the valid
 	// names plus a did-you-mean rather than the server's prose. Conservative by
 	// construction — see Registry.PreflightParameters.
-	if err := s.registry.PreflightParameters(input.MCPName, input.ToolName, input.Parameters); err != nil {
-		return errorResult(err), nil
+	if preflightEnabled() {
+		if err := s.registry.PreflightParameters(input.MCPName, input.ToolName, input.Parameters); err != nil {
+			return errorResult(err), nil
+		}
 	}
 
 	// For MCP tools, forward the raw parameters byte-for-byte so large integers

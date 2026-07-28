@@ -67,3 +67,15 @@ func TestWrapExecuteTool_PreflightPassesAValidCallThrough(t *testing.T) {
 	assert.NotContains(t, text, "Expected parameters",
 		"a schema-valid call must not be rejected by preflight. got: %s", text)
 }
+
+func TestWrapExecuteTool_PreflightCanBeDisabled(t *testing.T) {
+	t.Setenv("SLOP_MCP_PREFLIGHT", "off")
+
+	// A stale cached schema must never be able to permanently block a call the
+	// running server would accept.
+	result := callExecuteTool(t, preflightServer(), `{"id":"01A"}`)
+
+	text := extractErrorText(t, result)
+	assert.NotContains(t, text, "Expected parameters",
+		"preflight must be off. got: %s", text)
+}

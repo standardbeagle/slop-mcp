@@ -54,6 +54,23 @@ func executeToolTimeout() time.Duration {
 	return defaultExecuteToolTimeout
 }
 
+// preflightEnabled reports whether execute_tool checks parameters against the
+// cached schema before dispatch.
+//
+// The escape hatch exists for one failure mode the check cannot detect: a
+// cached schema that no longer matches the running server. If a server relaxes
+// a required field and the index still says required, preflight would block a
+// call that would now succeed. Reconnecting refreshes the index and is the real
+// fix; SLOP_MCP_PREFLIGHT=off unblocks the caller meanwhile.
+func preflightEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("SLOP_MCP_PREFLIGHT"))) {
+	case "off", "0", "false", "no":
+		return false
+	default:
+		return true
+	}
+}
+
 // SearchToolsInput is the input for the search_tools tool.
 type SearchToolsInput struct {
 	Query   string `json:"query,omitempty" jsonschema:"Search query for tool names and descriptions"`
