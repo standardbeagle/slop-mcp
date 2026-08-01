@@ -7,7 +7,7 @@ const config = {
   tagline: 'Connect unlimited MCP servers through 8 meta-tools. Progressive tool discovery keeps your AI agent\'s context window small.',
   favicon: 'img/favicon.ico',
 
-  url: 'https://standardbeagle.github.io',
+  url: 'https://dev.standardbeagle.com',
   baseUrl: '/slop-mcp/',
 
   organizationName: 'standardbeagle',

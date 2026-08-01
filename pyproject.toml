@@ -32,8 +32,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://standardbeagle.github.io/slop-mcp/"
-Documentation = "https://standardbeagle.github.io/slop-mcp/"
+Homepage = "https://dev.standardbeagle.com/slop-mcp/"
+Documentation = "https://dev.standardbeagle.com/slop-mcp/"
 Repository = "https://github.com/standardbeagle/slop-mcp"
 Issues = "https://github.com/standardbeagle/slop-mcp/issues"
 

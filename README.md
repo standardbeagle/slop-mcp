@@ -11,10 +11,10 @@ With slop-mcp:     50 MCPs × 20 tools = 8 tool definitions in context
 
 ## Documentation
 
-- **[Quick Start Guide](https://standardbeagle.github.io/slop-mcp/docs/getting-started/quick-start)** - Get running in 5 minutes
-- **[Full Documentation](https://standardbeagle.github.io/slop-mcp/)** - Complete guides and reference
-- **[KDL Configuration](https://standardbeagle.github.io/slop-mcp/docs/reference/kdl-config)** - Configuration reference
-- **[CLI Reference](https://standardbeagle.github.io/slop-mcp/docs/reference/cli)** - Command-line options
+- **[Quick Start Guide](https://dev.standardbeagle.com/slop-mcp/docs/getting-started/quick-start)** - Get running in 5 minutes
+- **[Full Documentation](https://dev.standardbeagle.com/slop-mcp/)** - Complete guides and reference
+- **[KDL Configuration](https://dev.standardbeagle.com/slop-mcp/docs/reference/kdl-config)** - Configuration reference
+- **[CLI Reference](https://dev.standardbeagle.com/slop-mcp/docs/reference/cli)** - Command-line options
 
 ## Event Monitoring
 
@@ -45,7 +45,7 @@ Monitor({
 })
 ```
 
-See the [Monitoring Guide](https://standardbeagle.github.io/slop-mcp/docs/concepts/monitoring) for git hook templates, build wrappers, and SLOP polling scripts.
+See the [Monitoring Guide](https://dev.standardbeagle.com/slop-mcp/docs/concepts/monitoring) for git hook templates, build wrappers, and SLOP polling scripts.
 
 ## Caveman Your MCPs
 
@@ -67,7 +67,7 @@ Three progression levels:
 
 Customizations live at user, project, or local scope and can be exported as portable JSON packs and committed to git — your team gets the same compressed interface on clone.
 
-See the [Customization Guide](https://standardbeagle.github.io/slop-mcp/docs/concepts/customization) for the full image-MCP walkthrough and the `customize_tools` reference.
+See the [Customization Guide](https://dev.standardbeagle.com/slop-mcp/docs/concepts/customization) for the full image-MCP walkthrough and the `customize_tools` reference.
 
 ## The Problem
 

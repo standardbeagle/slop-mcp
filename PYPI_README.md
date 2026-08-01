@@ -147,7 +147,7 @@ banana.create_chart(type: "bar", title: "Structs by Package", data: chart_data)
 
 ## Documentation
 
-**[standardbeagle.github.io/slop-mcp](https://standardbeagle.github.io/slop-mcp/)**
+**[dev.standardbeagle.com/slop-mcp](https://dev.standardbeagle.com/slop-mcp/)**
 
 ## License
 

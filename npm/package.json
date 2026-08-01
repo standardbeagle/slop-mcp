@@ -37,7 +37,7 @@
   "bugs": {
     "url": "https://github.com/standardbeagle/slop-mcp/issues"
   },
-  "homepage": "https://standardbeagle.github.io/slop-mcp/",
+  "homepage": "https://dev.standardbeagle.com/slop-mcp/",
   "engines": {
     "node": ">=16"
   },
