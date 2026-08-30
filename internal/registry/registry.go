@@ -730,7 +730,22 @@ func (r *Registry) connectLocked(ctx context.Context, cfg config.MCPConfig) erro
 	var transport mcp.Transport
 	switch cfg.Type {
 	case "command", "stdio", "":
-		cmd := exec.Command(cfg.Command, cfg.Args...)
+		// A server that declares `devkey` is launched THROUGH the broker rather
+		// than handed a literal: `devkey run <keys> -- <command> <args...>`.
+		// devkey puts the values in the child's environment itself, so the
+		// secret never enters this process, the config file, or anything
+		// slop-mcp logs. cfg.Env keeps carrying the non-secret vars.
+		command, args := cfg.Command, cfg.Args
+		if cfg.DevKey != "" {
+			broker, err := devkeyBinary()
+			if err != nil {
+				return setError(err, StateError)
+			}
+			// Fresh backing array: cfg.Args belongs to the caller's config.
+			args = append([]string{"run", cfg.DevKey, "--", command}, args...)
+			command = broker
+		}
+		cmd := exec.Command(command, args...)
 		if len(cfg.Env) > 0 {
 			// Start with current environment, then add custom vars
 			cmd.Env = os.Environ()
@@ -2604,4 +2619,25 @@ func (r *Registry) buildHTTPClient(_ context.Context, cfg config.MCPConfig) *htt
 			headers: staticHeaders,
 		},
 	}
+}
+
+// devkeyBinary resolves the devkey broker used to launch servers that declare a
+// `devkey` key name. SLOP_DEVKEY_BINARY overrides the lookup, mirroring
+// AGNT_BINARY: agents are frequently launched from non-login shells whose PATH
+// omits ~/.local/bin, and a bare "executable file not found" surfaces to the
+// caller as an unexplained MCP connection failure rather than a fixable
+// configuration problem.
+func devkeyBinary() (string, error) {
+	if override := strings.TrimSpace(os.Getenv("SLOP_DEVKEY_BINARY")); override != "" {
+		if _, err := os.Stat(override); err != nil {
+			return "", fmt.Errorf("SLOP_DEVKEY_BINARY=%q is not usable: %w", override, err)
+		}
+		return override, nil
+	}
+	path, err := exec.LookPath("devkey")
+	if err != nil {
+		return "", fmt.Errorf("this MCP declares devkey but the devkey broker is not on PATH: %w "+
+			"(install it with deploy-devkey.sh, or set SLOP_DEVKEY_BINARY to its full path)", err)
+	}
+	return path, nil
 }
