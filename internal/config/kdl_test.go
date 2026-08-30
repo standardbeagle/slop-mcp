@@ -1106,3 +1106,86 @@ func TestFormatMCPBlock_EscapedNameRoundTrip(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, name, parsed.Name)
 }
+
+func TestParseKDLConfig_DevKey(t *testing.T) {
+	input := `
+mcp "figma-query" {
+    type "command"
+    command "/home/beagle/.local/bin/figma-query"
+    devkey "figma"
+}
+`
+	cfg, err := ParseKDLConfig(input, SourceProject)
+	require.NoError(t, err)
+
+	mcp, ok := cfg.MCPs["figma-query"]
+	require.True(t, ok)
+	assert.Equal(t, "figma", mcp.DevKey)
+}
+
+func TestParseKDLConfig_DevKeyAcceptsMultipleNames(t *testing.T) {
+	// devkey run takes comma-separated names, so a server needing two keys
+	// declares both in one property rather than nesting brokers.
+	input := `
+mcp "two-keys" {
+    command "server"
+    devkey "figma,openrouter"
+}
+`
+	cfg, err := ParseKDLConfig(input, SourceProject)
+	require.NoError(t, err)
+
+	mcp, ok := cfg.MCPs["two-keys"]
+	require.True(t, ok)
+	assert.Equal(t, "figma,openrouter", mcp.DevKey)
+}
+
+func TestParseKDLConfig_DevKeyAbsentIsEmpty(t *testing.T) {
+	input := `
+mcp "plain" {
+    command "server"
+    env {
+        NOT_A_SECRET "value"
+    }
+}
+`
+	cfg, err := ParseKDLConfig(input, SourceProject)
+	require.NoError(t, err)
+
+	mcp, ok := cfg.MCPs["plain"]
+	require.True(t, ok)
+	assert.Empty(t, mcp.DevKey)
+}
+
+func TestFormatMCPBlock_RoundTripWithDevKey(t *testing.T) {
+	// A registry rewrite must not silently drop the broker reference and leave
+	// the server unable to authenticate.
+	original := MCPConfig{
+		Name:    "roundtrip-devkey",
+		Type:    "stdio",
+		Command: "figma-query",
+		DevKey:  "figma",
+		Env:     map[string]string{"LOG_LEVEL": "debug"},
+	}
+
+	formatted := formatMCPBlock(original)
+	assert.Contains(t, formatted, `devkey "figma"`)
+
+	cfg, err := ParseKDLConfig(formatted, SourceProject)
+	require.NoError(t, err)
+
+	parsed, ok := cfg.MCPs["roundtrip-devkey"]
+	require.True(t, ok)
+	assert.Equal(t, "figma", parsed.DevKey)
+	assert.Equal(t, "debug", parsed.Env["LOG_LEVEL"])
+}
+
+func TestFormatMCPBlock_WithoutDevKey(t *testing.T) {
+	mcp := MCPConfig{
+		Name:    "plain-server",
+		Type:    "stdio",
+		Command: "server",
+	}
+
+	assert.NotContains(t, formatMCPBlock(mcp), "devkey")
+}

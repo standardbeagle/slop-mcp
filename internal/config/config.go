@@ -14,6 +14,7 @@ type MCPConfig struct {
 	Command             string            `json:"command,omitempty"`
 	Args                []string          `json:"args,omitempty"`
 	Env                 map[string]string `json:"env,omitempty"`
+	DevKey              string            `json:"devkey,omitempty"` // devkey key name(s), comma-separated; server is launched via `devkey run`
 	URL                 string            `json:"url,omitempty"`
 	Headers             map[string]string `json:"headers,omitempty"`
 	Timeout             string            `json:"timeout,omitempty"`               // Connection timeout (e.g., "30s", "1m")

@@ -33,6 +33,7 @@ type KDLMCPConfig struct {
 	Command             string            `kdl:"command"`
 	Args                []string          `kdl:"args"`
 	Env                 map[string]string `kdl:"env"`
+	DevKey              string            `kdl:"devkey"`
 	URL                 string            `kdl:"url"`
 	Headers             map[string]string `kdl:"headers"`
 	Timeout             string            `kdl:"timeout"`
@@ -432,6 +433,7 @@ func ParseKDLConfig(data string, source Source) (*Config, error) {
 			Command:             m.Command,
 			Args:                m.Args,
 			Env:                 m.Env,
+			DevKey:              m.DevKey,
 			URL:                 m.URL,
 			Headers:             m.Headers,
 			Timeout:             m.Timeout,
@@ -587,6 +589,10 @@ func formatMCPBlock(mcp MCPConfig) string {
 
 	if mcp.Dynamic {
 		result += "    dynamic true\n"
+	}
+
+	if mcp.DevKey != "" {
+		result += "    devkey " + kdlQuote(mcp.DevKey) + "\n"
 	}
 
 	if len(mcp.Env) > 0 {
