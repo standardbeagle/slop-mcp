@@ -47,7 +47,8 @@ mcp "my-mcp" {
 | `transport` | string | No | "stdio" (default) |
 | `command` | string | Yes | Executable command |
 | `args` | strings | No | Command arguments |
-| `env` | block | No | Environment variables (merged with system env) |
+| `env` | block | No | Environment variables (merged with system env), passed literally |
+| `devkey` | string | No | devkey key name(s), comma-separated. Launches the server via `devkey run` so secrets stay out of this file — see [Secrets](#secrets-use-devkey-not-env) |
 
 Example:
 
@@ -62,8 +63,8 @@ mcp "custom" {
     command "python"
     args "-m" "my_server"
     env {
-        API_KEY "${MY_API_KEY}"
         DEBUG "true"
+        LOG_LEVEL "info"
     }
 }
 ```
@@ -100,7 +101,7 @@ mcp "custom-api" {
     transport "http"
     url "https://api.example.com/mcp"
     headers {
-        X-API-Key "${API_KEY}"
+        X-API-Key "literal-value-or-see-devkey"
     }
 }
 ```
@@ -127,24 +128,18 @@ mcp "my-mcp" {
 
 ## Environment Variables
 
-### Inline Expansion
+### Values are literal
 
-Environment variables are expanded in values:
+`env` and `headers` values are passed to the server exactly as written. There is
+no `${VAR}` expansion. Writing `API_KEY "${MY_API_KEY}"` sends the server the
+thirteen characters `${MY_API_KEY}`, not the value of that variable.
 
-```kdl
-mcp "my-mcp" {
-    command "node"
-    args "server.js"
-    env {
-        API_KEY "${MY_API_KEY}"
-        HOME_DIR "${HOME}/app"
-    }
-}
-```
+Expansion does exist for CLI tools declared with `tool`, where it is opt-in per
+tool via `expand_env true`. It has never applied to `mcp` blocks.
 
 ### Shell Expansion
 
-For complex expansions:
+To compute a value, run the server under a shell and let the shell do it:
 
 ```kdl
 mcp "my-mcp" {
@@ -152,6 +147,42 @@ mcp "my-mcp" {
     args "-c" "MY_VAR=$(cat /path/to/file) exec node server.js"
 }
 ```
+
+### Secrets: use `devkey`, not `env`
+
+A token written into `env` is a plaintext secret in a config file. It survives
+in backups, in anything that syncs the file, and in the output of any command
+that prints the config while debugging.
+
+Instead, name the key and let the [devkey](https://github.com/standardbeagle/dev-setup)
+broker inject it:
+
+```kdl
+mcp "figma-query" {
+    command "figma-query"
+    devkey "figma"
+}
+```
+
+slop-mcp launches the server as `devkey run figma -- figma-query`. devkey puts
+the values in the child's environment itself, so the secret never enters
+slop-mcp's memory, its config, or its logs. Keep using `env` alongside it for
+everything that is not a secret.
+
+A server needing more than one key names them comma-separated, matching
+`devkey run`:
+
+```kdl
+    devkey "figma,openrouter"
+```
+
+The key must be declared in devkey's registry and granted on this machine
+(`devkey approve <key> --ttl 30m`). Grants are per-machine and time-boxed, so a
+server spawned after its grant expires fails to connect until it is re-approved.
+
+If `devkey` is not on `PATH` — common when an agent runs from a non-login shell
+— set `SLOP_DEVKEY_BINARY` to its full path. Without it the connection fails
+with an error naming the missing broker rather than a generic transport error.
 
 ## Comments
 
@@ -234,7 +265,7 @@ mcp "my-analyzer" {
     command "python"
     args "-m" "analyzer.server"
     env {
-        PYTHONPATH "${HOME}/projects/analyzer"
+        PYTHONPATH "/home/me/projects/analyzer"
         LOG_LEVEL "info"
     }
 }
@@ -243,7 +274,7 @@ mcp "internal-api" {
     transport "http"
     url "https://internal.company.com/mcp"
     headers {
-        Authorization "Bearer ${INTERNAL_TOKEN}"
+        Authorization "Bearer <token>"
         X-Team "engineering"
     }
 }
@@ -301,14 +332,16 @@ mcp "my-mcp" {
 
 Group related MCPs with comment headers for clarity.
 
-### 5. Keep Secrets in Local Config
+### 5. Keep Secrets Out of Config Entirely
+
+Prefer `devkey` over a literal in any file, local or not. Gitignoring a config
+keeps it off the remote; it does not keep it out of backups, out of a synced
+home directory, or out of a terminal that printed the file while debugging.
 
 ```kdl
-// .slop-mcp.local.kdl (gitignored)
 mcp "secret-mcp" {
-    env {
-        API_KEY "actual-secret-key"
-    }
+    command "secret-server"
+    devkey "my-service"
 }
 ```
 
