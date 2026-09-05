@@ -7,12 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-09-05
+
 ### Added
 
+- **A server can name a devkey key instead of carrying its token.** A registry entry may reference a key by NAME and have the value brokered at launch, so a server definition no longer stores the secret it needs. The token never enters the config file, the repo, or a transcript.
+- **A devkey-backed server is launched through the broker.** The value is handed to the process at spawn rather than written into its environment ahead of time, keeping it out of anything that reads config or `/proc`.
 - **`execute_tool` preflights parameters against the target tool's schema.** A call that cannot succeed as written is now answered from the cached schema before dispatch, with the valid parameter names and a did-you-mean mapping, instead of costing a round-trip and returning whatever prose the target server chose. It is conservative on purpose: missing *required* parameters always block; an unknown name blocks only when a fix can be named for it (a near match, or a required name it contains — `taskId` → `id`); an unrecognized-but-unrelated name is forwarded, since JSON Schema allows additional properties and the target server is the authority. No schema, no properties, or unparseable input means no opinion. Parameters are never rewritten — a mistyped call is corrected by the caller, not silently reshaped. `SLOP_MCP_PREFLIGHT=off` disables the check for the one case it cannot detect: a cached schema that has drifted from the running server.
 
 ### Fixed
 
+- **The npm install now fails when the shipped binary cannot run.** postinstall only chmod'ed the binaries, so a present-but-unrunnable binary still reported a successful install and surfaced later as an MCP server that silently did nothing. It is cold-started once and the install fails with the real path and exit status. Complements the v0.14.5 executable-bit fix: that made the bit get set, this proves the result executes.
 - **Enriched parameter diagnostics never fired for `execute_tool`.** The did-you-mean machinery lived in `ExecuteTool`, but `execute_tool` dispatches through `ExecuteToolRawJSON` (raw JSON, to preserve integers above 2^53), so the one path agents actually use returned unenriched server errors. Parameter rejections on the raw path now get the schema attached too. Neither path decodes parameter *values*, so integer precision is unaffected.
 
 ## [0.14.5] - 2026-07-16
